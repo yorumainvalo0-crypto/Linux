@@ -12,3 +12,4 @@ extern void simGpioConfig(uint64_t mask, int pu, int pd);
 extern int  simGpioLevel(int pin);
 inline esp_err_t gpio_config(const gpio_config_t* c){ simGpioConfig(c->pin_bit_mask, c->pull_up_en, c->pull_down_en); return 0; }
 inline int gpio_get_level(gpio_num_t p){ return simGpioLevel(p); }
+inline esp_err_t gpio_set_level(gpio_num_t, int){ return 0; }

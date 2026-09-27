@@ -1,0 +1,613 @@
+// WLAN, setup hotspot, local update page and GitHub updates - see net.h
+#include "net.h"
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "sdkconfig.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "esp_mac.h"
+#include "esp_timer.h"
+#include "esp_system.h"
+#include "esp_http_server.h"
+#include "esp_http_client.h"
+#include "esp_https_ota.h"
+#include "esp_ota_ops.h"
+#include "esp_app_format.h"
+#include "esp_crt_bundle.h"
+#include "nvs.h"
+#include "lwip/sockets.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#define GITHUB_BASE "https://github.com/" CONFIG_ARCADE_GITHUB_REPO "/releases/latest/download/"
+#define AP_IP       "192.168.4.1"         // default address of the ESP hotspot
+
+static volatile NetState state = NET_OFF;
+static volatile NetJob   job = JOB_IDLE;
+static volatile uint8_t  progress = 0;
+static volatile bool     wantConnect = false;   // setup page stored a new network
+static volatile int64_t  restartAt = 0;         // esp_timer time in us, 0 = none
+
+static char ssid[33], pass[65];
+static bool cfgLoaded = false;
+static char addr[16], apName[20], remoteVer[24], errMsg[48];
+
+static bool baseUp = false, wifiUp = false;
+static uint8_t retries = 0;
+static httpd_handle_t server = NULL;
+
+static void fail(const char *why) {
+  strlcpy(errMsg, why, sizeof(errMsg));
+  job = JOB_ERROR;
+}
+
+// ---------------- stored network ----------------
+static void loadCfg() {
+  if (cfgLoaded) return;
+  cfgLoaded = true;
+  ssid[0] = pass[0] = 0;
+  nvs_handle_t h;
+  if (nvs_open("net", NVS_READONLY, &h) != ESP_OK) return;
+  size_t n = sizeof(ssid);
+  if (nvs_get_str(h, "ssid", ssid, &n) != ESP_OK) ssid[0] = 0;
+  n = sizeof(pass);
+  if (nvs_get_str(h, "pass", pass, &n) != ESP_OK) pass[0] = 0;
+  nvs_close(h);
+}
+
+static void saveCfg(const char *s, const char *p) {
+  strlcpy(ssid, s, sizeof(ssid));
+  strlcpy(pass, p, sizeof(pass));
+  cfgLoaded = true;
+  nvs_handle_t h;
+  if (nvs_open("net", NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_str(h, "ssid", ssid);
+  nvs_set_str(h, "pass", pass);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+bool        netHasConfig() { loadCfg(); return ssid[0] != 0; }
+const char *netSsid()      { loadCfg(); return ssid; }
+
+void netForget() {
+  netStop();
+  saveCfg("", "");
+}
+
+// ---------------- radio ----------------
+static void onEvent(void *, esp_event_base_t base, int32_t id, void *data) {
+  if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+    if (state == NET_CONNECTING) esp_wifi_connect();
+  } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    if (state != NET_CONNECTING && state != NET_ONLINE) return;   // setup scan etc.
+    addr[0] = 0;
+    if (retries++ < 5) { state = NET_CONNECTING; esp_wifi_connect(); }
+    else state = NET_FAILED;
+  } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+    const ip_event_got_ip_t *e = (const ip_event_got_ip_t *)data;
+    snprintf(addr, sizeof(addr), IPSTR, IP2STR(&e->ip_info.ip));
+    retries = 0;
+    state = NET_ONLINE;
+  }
+}
+
+static void radioOn(wifi_mode_t mode) {
+  if (!baseUp) {
+    esp_netif_init();
+    esp_event_loop_create_default();
+    esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_ap();
+    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, onEvent, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, onEvent, NULL);
+    baseUp = true;
+  }
+  if (wifiUp) {
+    esp_wifi_stop();
+  } else {
+    wifi_init_config_t c = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&c);
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);     // the network lives in our own NVS keys
+    wifiUp = true;
+  }
+  esp_wifi_set_mode(mode);
+}
+
+// ---------------- captive portal DNS ----------------
+/* While the setup hotspot is open every name resolves to the ESP itself,
+   so phones notice the "login page" and open the setup page on their own. */
+static volatile bool dnsRun = false;
+static TaskHandle_t  dnsTaskH = NULL;
+
+static void dnsTask(void *) {
+  int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  struct sockaddr_in a = {};
+  a.sin_family = AF_INET;
+  a.sin_port = htons(53);
+  a.sin_addr.s_addr = htonl(INADDR_ANY);
+  struct timeval tv = { 1, 0 };                  // wake up once a second to see dnsRun
+  if (s >= 0) {
+    bind(s, (struct sockaddr *)&a, sizeof(a));
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  }
+  static uint8_t b[272];
+  while (s >= 0 && dnsRun) {
+    struct sockaddr_in from;
+    socklen_t fl = sizeof(from);
+    int n = recvfrom(s, b, 256, 0, (struct sockaddr *)&from, &fl);
+    if (n < 12 || (b[2] & 0x80) || b[4] || b[5] != 1) continue;   // one question, no answers
+    int p = 12;
+    while (p < n && b[p]) p += b[p] + 1;          // skip the name labels
+    if (p + 5 > n) continue;
+    bool isA = b[p + 1] == 0 && b[p + 2] == 1;
+    n = p + 5;                                    // end of the question
+    b[2] = 0x81; b[3] = 0x80;                     // answer, no error
+    b[6] = 0; b[7] = isA ? 1 : 0;
+    b[8] = b[9] = b[10] = b[11] = 0;
+    if (isA) {
+      static const uint8_t ans[16] = { 0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 168, 4, 1 };
+      memcpy(b + n, ans, sizeof(ans));
+      n += sizeof(ans);
+    }
+    sendto(s, b, n, 0, (struct sockaddr *)&from, fl);
+  }
+  if (s >= 0) close(s);
+  dnsTaskH = NULL;
+  vTaskDelete(NULL);
+}
+
+static void dnsStart() {
+  for (uint8_t i = 0; i < 30 && dnsTaskH; i++) vTaskDelay(pdMS_TO_TICKS(50));  // old one still leaving
+  if (dnsTaskH) return;
+  dnsRun = true;
+  xTaskCreate(dnsTask, "dns", 3072, NULL, 4, &dnsTaskH);
+}
+
+static void dnsStop() { dnsRun = false; }
+
+// ---------------- update helpers ----------------
+/* The upload must be the app image (miniarcade.bin). The full image starts
+   with the bootloader and would not boot from an app slot.               */
+static const char *checkImage(const uint8_t *b, size_t n) {
+  const size_t at = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t);
+  if (n < at + sizeof(esp_app_desc_t) || b[0] != ESP_IMAGE_HEADER_MAGIC)
+    return "not an ESP32 firmware file";
+  const esp_image_header_t *h = (const esp_image_header_t *)b;
+  if (h->chip_id != CONFIG_IDF_FIRMWARE_CHIP_ID) return "firmware for another chip";
+  esp_app_desc_t d;
+  memcpy(&d, b + at, sizeof(d));
+  if (d.magic_word != ESP_APP_DESC_MAGIC_WORD) return "full image - use miniarcade.bin";
+  if (strncmp(d.project_name, esp_app_get_description()->project_name, sizeof(d.project_name)))
+    return "not a MiniArcade firmware";
+  return NULL;
+}
+
+static bool busy() {
+  return job == JOB_CHECKING || job == JOB_UPDATING || job == JOB_DONE;
+}
+
+static void restartSoon() { restartAt = esp_timer_get_time() + 1500000; }
+
+static void clientCfg(esp_http_client_config_t *c, const char *url) {
+  memset(c, 0, sizeof(*c));
+  c->url = url;
+  c->crt_bundle_attach = esp_crt_bundle_attach;
+  c->timeout_ms = 15000;
+  c->buffer_size = 4096;        // GitHub answers with long headers ...
+  c->buffer_size_tx = 2048;     // ... and redirects to a very long signed URL
+  c->user_agent = "MiniArcade";
+}
+
+// reads version.txt of the latest release into remoteVer
+static bool fetchVersion() {
+  esp_http_client_config_t cfg;
+  clientCfg(&cfg, GITHUB_BASE "version.txt");
+  esp_http_client_handle_t c = esp_http_client_init(&cfg);
+  if (!c) { fail("out of memory"); return false; }
+  bool ok = false;
+  int status = 0;
+  for (uint8_t hop = 0; hop < 5; hop++) {        // follow the redirect to the file
+    if (esp_http_client_open(c, 0) != ESP_OK) { fail("no connection to GitHub"); break; }
+    esp_http_client_fetch_headers(c);
+    status = esp_http_client_get_status_code(c);
+    if (status < 300 || status > 308) break;
+    esp_http_client_set_redirection(c);
+    int dummy;
+    esp_http_client_flush_response(c, &dummy);
+    esp_http_client_close(c);
+  }
+  if (status == 200) {
+    char b[sizeof(remoteVer)];
+    int n = esp_http_client_read(c, b, sizeof(b) - 1);
+    uint8_t k = 0;
+    for (int i = 0; i < n && k < sizeof(remoteVer) - 1; i++) {   // keep a plain version string
+      char ch = b[i];
+      if ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+          ch == '.' || ch == '-' || ch == '_' || ch == '+')
+        remoteVer[k++] = ch;
+      else if (ch == '\n' || ch == '\r') break;
+    }
+    remoteVer[k] = 0;
+    ok = k > 0;
+    if (!ok) fail("empty version.txt");
+  } else if (status == 404) {
+    fail("no release on GitHub yet");
+  } else if (status) {
+    char m[32]; snprintf(m, sizeof(m), "GitHub error %d", status);
+    fail(m);
+  }
+  esp_http_client_cleanup(c);
+  return ok;
+}
+
+static void installFromGithub() {
+  esp_http_client_config_t cfg;
+  clientCfg(&cfg, GITHUB_BASE "miniarcade.bin");
+  cfg.timeout_ms = 30000;
+  esp_https_ota_config_t oc = {};
+  oc.http_config = &cfg;
+  esp_https_ota_handle_t h = NULL;
+  progress = 0;
+  job = JOB_UPDATING;
+  if (esp_https_ota_begin(&oc, &h) != ESP_OK) { fail("download failed"); return; }
+
+  esp_app_desc_t d;
+  if (esp_https_ota_get_img_desc(h, &d) != ESP_OK ||
+      strncmp(d.project_name, esp_app_get_description()->project_name, sizeof(d.project_name))) {
+    esp_https_ota_abort(h);
+    fail("not a MiniArcade firmware");
+    return;
+  }
+  esp_err_t e;
+  while ((e = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+    int size = esp_https_ota_get_image_size(h);
+    if (size > 0) progress = (uint8_t)((int64_t)esp_https_ota_get_image_len_read(h) * 100 / size);
+  }
+  if (e != ESP_OK || !esp_https_ota_is_complete_data_received(h)) {
+    esp_https_ota_abort(h);
+    fail("download broken off");
+    return;
+  }
+  if (esp_https_ota_finish(h) != ESP_OK) { fail("image is damaged"); return; }  // also sets the boot slot
+  progress = 100;
+  job = JOB_DONE;
+  restartSoon();
+}
+
+static void githubTask(void *arg) {
+  bool install = arg != NULL;
+  if (install) installFromGithub();
+  else if (fetchVersion())
+    job = strcmp(remoteVer, netVersion()) ? JOB_NEWER : JOB_UPTODATE;
+  vTaskDelete(NULL);
+}
+
+static void startGithub(bool install) {
+  if (busy()) return;
+  if (state != NET_ONLINE) { fail("not connected"); return; }
+  job = install ? JOB_UPDATING : JOB_CHECKING;
+  progress = 0;
+  // TLS needs a fair amount of stack
+  if (xTaskCreate(githubTask, "github", 8192, install ? (void *)1 : NULL, 5, NULL) != pdPASS)
+    fail("out of memory");
+}
+
+void netCheckUpdate()   { startGithub(false); }
+void netInstallUpdate() { startGithub(true); }
+
+// ---------------- web page ----------------
+static const char PAGE_HEAD[] =
+  "<!doctype html><html><head><meta charset=utf-8>"
+  "<meta name=viewport content='width=device-width,initial-scale=1'><title>MiniArcade</title><style>"
+  "body{font-family:sans-serif;max-width:440px;margin:0 auto;padding:16px;background:#111;color:#eee}"
+  "h1{font-size:24px;margin:8px 0}h2{font-size:17px;margin:28px 0 6px}"
+  "input,button{width:100%;box-sizing:border-box;padding:11px;margin:5px 0;font-size:16px;"
+  "border-radius:8px;border:1px solid #555;background:#222;color:#eee}"
+  "button{background:#1f7a4d;border:0;color:#fff}button:disabled{background:#444}"
+  "progress{width:100%;height:16px}.m{color:#9a9a9a;font-size:14px}"
+  "</style></head><body><h1>MiniArcade</h1>";
+
+static const char PAGE_UPDATE[] =
+  "<h2>Update from GitHub</h2>"
+  "<button id=c onclick=gh('check')>check for update</button>"
+  "<button id=i onclick=gh('install') hidden>install</button><p id=g class=m></p>"
+  "<h2>Update from a file</h2><p class=m>miniarcade.bin from a release or from build/</p>"
+  "<input type=file id=f accept=.bin><button onclick=up()>flash</button>"
+  "<progress id=p max=100 value=0></progress><p id=u class=m></p>";
+
+static const char PAGE_WIFI[] =
+  "<h2>WLAN</h2><form method=post action=/save>"
+  "<input name=s list=nets placeholder='network name' maxlength=32 required>"
+  "<datalist id=nets>";
+
+static const char PAGE_TAIL[] =
+  "</datalist><input name=p type=password placeholder=password maxlength=64>"
+  "<button>save and connect</button></form>"
+  "<script>"
+  "function $(i){return document.getElementById(i)}"
+  "var T=['','checking GitHub...','up to date','','installing','done - MiniArcade restarts','error: '];"
+  "function show(s){var g=$('g');if(!g)return;var t=T[s.job];"
+  "if(s.job==2)t+=' ('+s.ver+')';if(s.job==3)t='online: '+s.remote+'  (this: '+s.ver+')';"
+  "if(s.job==4)t+=' '+s.pct+'%';if(s.job==6)t+=s.err;g.textContent=t;"
+  "$('i').hidden=s.job!=3;$('i').textContent='install '+s.remote;"
+  "if(s.job==1||s.job==4)setTimeout(poll,1000);if(s.job==5)setTimeout(function(){location.reload()},9000)}"
+  "function poll(){fetch('/status').then(function(r){return r.json()}).then(show)}"
+  "function gh(a){fetch('/gh?do='+a,{method:'POST'}).then(poll)}"
+  "function up(){var f=$('f').files[0];if(!f)return;var x=new XMLHttpRequest();"
+  "x.open('POST','/update');x.upload.onprogress=function(e){if(e.lengthComputable)$('p').value=e.loaded*100/e.total};"
+  "x.onload=function(){$('u').textContent=x.responseText;if(x.status==200)setTimeout(function(){location.reload()},9000)};"
+  "x.onerror=function(){$('u').textContent='connection lost'};$('u').textContent='uploading...';x.send(f)}"
+  "if($('g'))poll();"
+  "</script></body></html>";
+
+static void chunk(httpd_req_t *r, const char *s) { httpd_resp_send_chunk(r, s, HTTPD_RESP_USE_STRLEN); }
+
+// appends s to the page with the HTML special characters escaped
+static void chunkEsc(httpd_req_t *r, const char *s) {
+  char b[80];
+  size_t k = 0;
+  for (; *s; s++) {
+    const char *e = NULL;
+    if (*s == '&') e = "&amp;"; else if (*s == '<') e = "&lt;";
+    else if (*s == '>') e = "&gt;"; else if (*s == '"' || *s == '\'') e = "&quot;";
+    if (k > sizeof(b) - 8) { b[k] = 0; chunk(r, b); k = 0; }
+    if (e) { strcpy(b + k, e); k += strlen(e); } else b[k++] = *s;
+  }
+  b[k] = 0;
+  chunk(r, b);
+}
+
+// networks around, only offered while the setup hotspot is open
+static void chunkNetworks(httpd_req_t *r) {
+  static wifi_ap_record_t rec[12];
+  wifi_scan_config_t sc = {};
+  if (esp_wifi_scan_start(&sc, true) != ESP_OK) return;
+  uint16_t n = sizeof(rec) / sizeof(rec[0]);
+  if (esp_wifi_scan_get_ap_records(&n, rec) != ESP_OK) return;
+  for (uint16_t i = 0; i < n; i++) {
+    const char *s = (const char *)rec[i].ssid;
+    if (!s[0]) continue;
+    bool dup = false;
+    for (uint16_t j = 0; j < i; j++) if (!strcmp(s, (const char *)rec[j].ssid)) dup = true;
+    if (dup) continue;
+    chunk(r, "<option value=\"");
+    chunkEsc(r, s);
+    chunk(r, "\">");
+  }
+}
+
+static esp_err_t pageGet(httpd_req_t *r) {
+  httpd_resp_set_type(r, "text/html");
+  chunk(r, PAGE_HEAD);
+  char b[96];
+  if (state == NET_SETUP)
+    snprintf(b, sizeof(b), "<p class=m>firmware %s &middot; setup hotspot</p>", netVersion());
+  else
+    snprintf(b, sizeof(b), "<p class=m>firmware %s &middot; WLAN ", netVersion());
+  chunk(r, b);
+  if (state != NET_SETUP) { chunkEsc(r, netSsid()); chunk(r, "</p>"); }
+  if (state == NET_ONLINE) chunk(r, PAGE_UPDATE);
+  chunk(r, PAGE_WIFI);
+  if (state == NET_SETUP) chunkNetworks(r);
+  chunk(r, PAGE_TAIL);
+  httpd_resp_send_chunk(r, NULL, 0);
+  return ESP_OK;
+}
+
+static esp_err_t statusGet(httpd_req_t *r) {
+  char b[160];
+  snprintf(b, sizeof(b), "{\"job\":%u,\"pct\":%u,\"ver\":\"%s\",\"remote\":\"%s\",\"err\":\"%s\"}",
+           (unsigned)job, (unsigned)progress, netVersion(), remoteVer, errMsg);
+  httpd_resp_set_type(r, "application/json");
+  httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+  return httpd_resp_sendstr(r, b);
+}
+
+static esp_err_t githubPost(httpd_req_t *r) {
+  char q[24], v[12];
+  bool install = httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK &&
+                 httpd_query_key_value(q, "do", v, sizeof(v)) == ESP_OK && !strcmp(v, "install");
+  startGithub(install);
+  return httpd_resp_sendstr(r, "ok");
+}
+
+static void urlDecode(char *s) {
+  char *o = s;
+  for (; *s; s++) {
+    if (*s == '+') *o++ = ' ';
+    else if (*s == '%' && s[1] && s[2]) {
+      char h[3] = { s[1], s[2], 0 };
+      *o++ = (char)strtol(h, NULL, 16);
+      s += 2;
+    } else *o++ = *s;
+  }
+  *o = 0;
+}
+
+static esp_err_t savePost(httpd_req_t *r) {
+  char body[300], s[100], p[200];
+  int n = 0;
+  if (r->content_len >= sizeof(body)) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "too long");
+  while (n < (int)r->content_len) {
+    int k = httpd_req_recv(r, body + n, r->content_len - n);
+    if (k == HTTPD_SOCK_ERR_TIMEOUT) continue;
+    if (k <= 0) return ESP_FAIL;
+    n += k;
+  }
+  body[n] = 0;
+  if (httpd_query_key_value(body, "s", s, sizeof(s)) != ESP_OK) s[0] = 0;
+  if (httpd_query_key_value(body, "p", p, sizeof(p)) != ESP_OK) p[0] = 0;
+  urlDecode(s);
+  urlDecode(p);
+  size_t ls = strlen(s), lp = strlen(p);
+  if (!ls || ls > 32 || lp > 64 || (lp && lp < 8))
+    return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "network name or password has a wrong length");
+  saveCfg(s, p);
+  httpd_resp_set_type(r, "text/html");
+  chunk(r, PAGE_HEAD);
+  chunk(r, "<p>Saved. MiniArcade now connects to <b>");
+  chunkEsc(r, s);
+  chunk(r, "</b>.</p><p class=m>The display shows the new address of this page.</p></body></html>");
+  httpd_resp_send_chunk(r, NULL, 0);
+  wantConnect = true;                 // switched over from the UI loop
+  return ESP_OK;
+}
+
+static esp_err_t sendText(httpd_req_t *r, const char *status, const char *text) {
+  httpd_resp_set_status(r, status);
+  httpd_resp_set_type(r, "text/plain");
+  return httpd_resp_sendstr(r, text);
+}
+
+static esp_err_t uploadFail(httpd_req_t *r, char *buf, const char *why) {
+  free(buf);
+  fail(why);
+  return sendText(r, "400 Bad Request", why);
+}
+
+// receives the raw file body and writes it into the free app slot
+static esp_err_t updatePost(httpd_req_t *r) {
+  if (busy()) return sendText(r, "409 Conflict", "another update is running");
+  const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+  size_t total = r->content_len;
+  if (!part) return sendText(r, "500 Internal Server Error", "no update slot - flash once by cable");
+  if (total < 1024 || total > part->size) return sendText(r, "400 Bad Request", "file size does not fit");
+  char *buf = (char *)malloc(4096);
+  if (!buf) return sendText(r, "500 Internal Server Error", "out of memory");
+
+  const size_t head = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t);
+  size_t got = 0;
+  uint8_t stalls = 0;
+  while (got < head) {                            // first the header, to check the file
+    int n = httpd_req_recv(r, buf + got, head - got);
+    if (n == HTTPD_SOCK_ERR_TIMEOUT && ++stalls < 5) continue;
+    if (n <= 0) return uploadFail(r, buf, "upload broken off");
+    got += n;
+  }
+  const char *why = checkImage((const uint8_t *)buf, got);
+  if (why) return uploadFail(r, buf, why);
+
+  esp_ota_handle_t h;
+  if (esp_ota_begin(part, total, &h) != ESP_OK) return uploadFail(r, buf, "cannot erase the update slot");
+  job = JOB_UPDATING;
+  progress = 0;
+  esp_err_t e = esp_ota_write(h, buf, got);
+  size_t done = got;
+  stalls = 0;
+  while (e == ESP_OK && done < total) {
+    size_t want = total - done;
+    int n = httpd_req_recv(r, buf, want < 4096 ? want : 4096);
+    if (n == HTTPD_SOCK_ERR_TIMEOUT && ++stalls < 5) continue;
+    if (n <= 0) { e = ESP_FAIL; break; }
+    stalls = 0;
+    e = esp_ota_write(h, buf, n);
+    done += n;
+    progress = (uint8_t)(done * 100 / total);
+  }
+  if (e != ESP_OK) { esp_ota_abort(h); return uploadFail(r, buf, "upload broken off"); }
+  if (esp_ota_end(h) != ESP_OK) return uploadFail(r, buf, "image is damaged");
+  if (esp_ota_set_boot_partition(part) != ESP_OK) return uploadFail(r, buf, "cannot switch to the new image");
+  free(buf);
+  progress = 100;
+  job = JOB_DONE;
+  sendText(r, "200 OK", "update ok - MiniArcade restarts");
+  restartSoon();
+  return ESP_OK;
+}
+
+// anything else (captive portal checks of phones) lands on the main page
+static esp_err_t redirectGet(httpd_req_t *r) {
+  httpd_resp_set_status(r, "302 Found");
+  httpd_resp_set_hdr(r, "Location", state == NET_SETUP ? "http://" AP_IP "/" : "/");
+  return httpd_resp_send(r, NULL, 0);
+}
+
+static void startServer() {
+  if (server) return;
+  httpd_config_t c = HTTPD_DEFAULT_CONFIG();
+  c.uri_match_fn = httpd_uri_match_wildcard;
+  c.stack_size = 6144;
+  c.lru_purge_enable = true;
+  if (httpd_start(&server, &c) != ESP_OK) { server = NULL; return; }
+  static const httpd_uri_t uris[] = {             // order matters: "/*" catches the rest
+    { "/",       HTTP_GET,  pageGet,     NULL },
+    { "/status", HTTP_GET,  statusGet,   NULL },
+    { "/gh",     HTTP_POST, githubPost,  NULL },
+    { "/save",   HTTP_POST, savePost,    NULL },
+    { "/update", HTTP_POST, updatePost,  NULL },
+    { "/*",      HTTP_GET,  redirectGet, NULL },
+  };
+  for (const httpd_uri_t &u : uris) httpd_register_uri_handler(server, &u);
+}
+
+static void stopServer() {
+  if (server) httpd_stop(server);
+  server = NULL;
+}
+
+// ---------------- public ----------------
+void netConnect() {
+  loadCfg();
+  if (!ssid[0]) { state = NET_FAILED; return; }
+  dnsStop();
+  radioOn(WIFI_MODE_STA);
+  wifi_config_t wc = {};
+  memcpy(wc.sta.ssid, ssid, strlen(ssid));
+  memcpy(wc.sta.password, pass, strlen(pass));
+  wc.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+  esp_wifi_set_config(WIFI_IF_STA, &wc);
+  retries = 0;
+  addr[0] = 0;
+  state = NET_CONNECTING;
+  esp_wifi_start();                               // STA_START then joins the network
+  startServer();
+}
+
+void netSetup() {
+  state = NET_SETUP;                              // first, so the disconnect is not retried
+  dnsStop();
+  radioOn(WIFI_MODE_APSTA);                       // STA part only scans for networks
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+  snprintf(apName, sizeof(apName), "MiniArcade-%02X%02X", mac[4], mac[5]);
+  wifi_config_t ac = {};
+  memcpy(ac.ap.ssid, apName, strlen(apName));
+  ac.ap.ssid_len = strlen(apName);
+  ac.ap.channel = 1;
+  ac.ap.authmode = WIFI_AUTH_OPEN;
+  ac.ap.max_connection = 2;
+  esp_wifi_set_config(WIFI_IF_AP, &ac);
+  state = NET_SETUP;
+  esp_wifi_start();
+  strlcpy(addr, AP_IP, sizeof(addr));
+  dnsStart();
+  startServer();
+}
+
+void netStop() {
+  if (busy()) return;                             // never cut an update short
+  dnsStop();
+  stopServer();
+  state = NET_OFF;                                // first, so the disconnect is not retried
+  if (wifiUp) esp_wifi_stop();                    // radio off; the driver stays set up
+  addr[0] = 0;
+  job = JOB_IDLE;
+}
+
+void netTick() {
+  if (wantConnect) { wantConnect = false; netConnect(); }
+  if (restartAt && esp_timer_get_time() >= restartAt) esp_restart();
+}
+
+void netRestart() { esp_restart(); }
+
+NetState    netState()         { return state; }
+const char *netAddress()       { return addr; }
+const char *netApName()        { return apName; }
+const char *netVersion()       { return esp_app_get_description()->version; }
+NetJob      netJob()           { return job; }
+const char *netRemoteVersion() { return remoteVer; }
+uint8_t     netProgress()      { return progress; }
+const char *netError()         { return errMsg; }
