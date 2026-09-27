@@ -1,6 +1,7 @@
 # MiniArcade firmware
 
-One zip per version: `MiniArcade-<version>.zip`. Each holds
+One zip per version: `MiniArcade-<version>.zip` - the highest number is the newest
+(**MiniArcade-9.5.zip** right now). Click the file, then "Download raw file". Each holds
 
 | file | for |
 |---|---|
