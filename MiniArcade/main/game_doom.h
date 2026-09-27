@@ -118,7 +118,7 @@ void doomRun() {
     btnClear();
 
     while (poll()) {
-      uint32_t now = millis();
+      uint32_t now = gameMillis();
       if (now >= nextStep) {
         nextStep = now + 50;
 

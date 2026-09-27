@@ -281,13 +281,28 @@ void saveSound() {
    the player holds OK to get back to the library.                        */
 static void (*pollHook)() = NULL;          // extra work on every frame (multiplayer radio)
 
+/* Pause: inside a game a long OK opens a small menu instead of leaving at
+   once. The games time everything with gameMillis(), a clock that stands
+   still while the menu is open - so nothing jumps ahead on "continue".  */
+static bool     pauseOk = false;           // a game is running (set by the library)
+static uint8_t  pauseBlock = 0;            // >0 on screens inside a game (game over, ...)
+static bool     wantRestart = false;       // "restart" chosen: the library starts the game again
+static uint32_t pausedMs = 0;              // time spent in the pause menu so far
+
+uint32_t gameMillis() { return millis() - pausedMs; }
+
+static bool pauseMenu();
+
 bool poll() {
   delay(5);
   btnUpdate();
   sfxUpdate();
   if (pollHook) pollHook();
   sleepCheck();
-  if (wantExit) { wantExit = false; return false; }
+  if (wantExit) {
+    wantExit = false;
+    if (!pauseOk || pauseBlock || pauseMenu()) return false;
+  }
   oled.clearBuffer();
   oled.setFont(FONT);
   return true;
@@ -295,6 +310,49 @@ bool poll() {
 
 void centerStr(uint8_t y, const char *s) {
   oled.drawStr((SCR_W - oled.getStrWidth(s)) / 2, y, s);
+}
+
+/* Drawn over the frozen game picture. Returns true when the game should
+   end (quit or restart), false to go on playing.                        */
+static bool pauseMenu() {
+  static const char *const OPT[3] = { "continue", "restart", "quit to menu" };
+  uint32_t t0 = millis();
+  uint8_t sel = 0;
+  bool end = false;
+  sfx(600, 40);
+  btnClear();                                // the long OK is still held
+  for (;;) {
+    delay(5);
+    btnUpdate();
+    sfxUpdate();
+    sleepCheck();
+    if (wantExit) { wantExit = false; end = true; break; }   // hold OK again = quit
+    if (btn(B_UP)   && sel)     { sel--; sfx(700, 15); }
+    if (btn(B_DOWN) && sel < 2) { sel++; sfx(700, 15); }
+    if (btn(B_OK)) {
+      sfx(1200, 50);
+      if (sel == 1) wantRestart = true;
+      end = sel != 0;
+      break;
+    }
+    oled.setDrawColor(0);
+    oled.drawBox(24, 13, 80, 47);
+    oled.setDrawColor(1);
+    oled.drawFrame(24, 13, 80, 47);
+    oled.setFont(FONT_B);
+    centerStr(26, "PAUSE");
+    oled.setFont(FONT);
+    for (uint8_t i = 0; i < 3; i++) {
+      uint8_t y = 29 + i * 10;
+      if (i == sel) { oled.drawBox(26, y, 76, 9); oled.setDrawColor(0); }
+      centerStr(y + 7, OPT[i]);
+      oled.setDrawColor(1);
+    }
+    oled.sendBuffer();
+  }
+  pausedMs += millis() - t0;
+  btnClear();
+  return end;
 }
 
 void rightStr(uint8_t y, const char *s) {
@@ -320,7 +378,10 @@ void statusBar(const char *title, uint16_t score, uint16_t best) {
 // ---------------- choice screen ----------------
 /* Small vertical menu used for difficulty and player count.
    Returns the chosen index, or 255 when the player leaves with a long OK. */
+struct NoPause { NoPause() { pauseBlock++; } ~NoPause() { pauseBlock--; } };   // hold OK leaves at once
+
 uint8_t chooseMode(const char *title, const char *const *opts, uint8_t n) {
+  NoPause np;
   uint8_t sel = 0;
   btnClear();
   while (poll()) {
@@ -343,10 +404,14 @@ uint8_t chooseMode(const char *title, const char *const *opts, uint8_t n) {
 }
 
 // ---------------- game over screen ----------------
+void awardCheck(bool record);                      // stats.h
+
 // true -> play another round, false -> back to the library
 bool gameOver(uint16_t score) {
+  NoPause np;
   bool record = score > curHigh;
   if (record) { curHigh = score; saveHigh(curGame, curHigh); }
+  awardCheck(record);
   sfx(180, 350);
   btnClear();
   while (poll()) {
@@ -382,13 +447,14 @@ bool gameOver(uint16_t score) {
 #include "game_frogger.h"
 #include "game_connect4.h"
 #include "game_tictactoe.h"
+#include "stats.h"
 #include "multiplayer.h"
 
 // =========================================================
 //  GAME LIBRARY
 // =========================================================
 typedef void (*GameFn)();
-struct Game { const char *name; GameFn run; };
+struct Game { const char *name; GameFn run; const char *tag; };   // tag: no high score
 
 static const Game GAMES[] = {
   { "Tetris",     tetrisRun },
@@ -406,18 +472,20 @@ static const Game GAMES[] = {
   { "Frogger",    froggerRun  },
   { "4 wins",     connect4Run },
   { "Tic Tac Toe", tictactoeRun },
-  // add new games here:  { "Breakout", breakoutRun },
+  // add new games here (before the entries with a tag), e.g. { "Chess", chessRun },
 #ifdef HAVE_LINK
-  { "Multiplayer", multiplayerRun },  // no high score either
+  { "Multiplayer", multiplayerRun, "2P" },
 #endif
-  { "Settings",   settingsRun }      // must stay last: no high score
+  { "Stats",      statsRun,    "info" },
+  { "Settings",   settingsRun, "setup" }
 };
 static const uint8_t GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
-#ifdef HAVE_LINK
-#define REAL_GAMES (GAME_COUNT - 2)
-#else
-#define REAL_GAMES (GAME_COUNT - 1)
-#endif
+static uint8_t countReal() { uint8_t n = 0; while (!GAMES[n].tag) n++; return n; }
+static const uint8_t REAL_GAMES = countReal();     // the ones with a high score
+
+const char *gameName(uint8_t i) { return GAMES[i].name; }
+uint8_t     realGames()         { return REAL_GAMES; }
+
 #define ROWS 4                       // visible menu rows
 
 void menu() {
@@ -437,8 +505,16 @@ void menu() {
     if (btn(B_OK)) {
       sfx(1200, 50);
       curGame = sel;
-      curHigh = (sel < REAL_GAMES) ? loadHigh(sel) : 0;
-      GAMES[sel].run();
+      bool real = sel < REAL_GAMES;
+      do {                                    // "restart" in the pause menu comes back here
+        wantRestart = false;
+        curHigh = real ? loadHigh(sel) : 0;
+        if (real) statGameStart(sel);
+        pauseOk = real;
+        GAMES[sel].run();
+        pauseOk = false;
+        if (real) statGameEnd(sel);
+      } while (wantRestart);
       btnClear();
       continue;
     }
@@ -462,8 +538,7 @@ void menu() {
         snprintf(b, sizeof(b), "BEST %u", loadHigh(idx));
         oled.drawStr(SCR_W - oled.getStrWidth(b) - 3, y + 8, b);
       } else {
-        const char *tag = (GAMES[idx].run == settingsRun) ? "setup" : "2P";
-        oled.drawStr(SCR_W - oled.getStrWidth(tag) - 3, y + 8, tag);
+        oled.drawStr(SCR_W - oled.getStrWidth(GAMES[idx].tag) - 3, y + 8, GAMES[idx].tag);
       }
 
       oled.setDrawColor(1);

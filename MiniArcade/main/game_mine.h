@@ -76,7 +76,7 @@ void mineRun() {
   btnClear();
 
   while (poll()) {
-    uint32_t now = millis();
+    uint32_t now = gameMillis();
     if (now >= next) {
       next = now + 30;
 

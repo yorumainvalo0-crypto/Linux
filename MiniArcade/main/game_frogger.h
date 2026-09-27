@@ -116,7 +116,7 @@ void froggerRun() {
     btnClear();
 
     while (poll()) {
-      uint32_t now = millis();
+      uint32_t now = gameMillis();
       int16_t fx = fq / FR_Q;
       if (now >= step) {                              // hopping
         step = now + 90;

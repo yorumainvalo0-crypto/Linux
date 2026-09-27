@@ -26,7 +26,7 @@ void snakeRun() {
       if (btn(B_UP)    && dy == 0) { ndx =  0; ndy = -1; }
       if (btn(B_DOWN)  && dy == 0) { ndx =  0; ndy =  1; }
 
-      uint32_t now = millis();
+      uint32_t now = gameMillis();
       if (now >= nextStep) {
         // boost: keep holding the key of the current direction (holding OK
         // would mean "back to the menu")

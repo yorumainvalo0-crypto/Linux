@@ -207,12 +207,13 @@ int main(int argc,char**argv){
     for(int i=0;i<5;i++){ simNvsU16["p"+std::to_string(i)]=3+i; simNvsU16["a"+std::to_string(i)]=1; }
   }
 
-  if(scenario=="menu"){        simEnd=10000; downs(16,1300,300); captureAt={30,300,700};
+  if(scenario=="menu"){        simEnd=10000; downs(17,1300,300); captureAt={30,300,700};
   } else if(scenario=="tetris"){ simEnd=60000; script={{1300,16},{1360,0}}; autoplay=true; captureAt={200,900};
   } else if(scenario=="snake"){  simEnd=20000; downs(1);
       script.push_back({1500,16}); script.push_back({1560,0});
       script.push_back({9000,16}); script.push_back({9060,0});     // restart after death
-      script.push_back({15000,16}); script.push_back({16200,0});   // hold OK -> library
+      script.push_back({15000,16}); script.push_back({16200,0});   // hold OK -> pause menu
+      script.push_back({17000,16}); script.push_back({18200,0});   // hold again -> library
       captureAt={200,1000};
   } else if(scenario=="pong"){   simEnd=40000; downs(2);
       script.push_back({1700,16}); script.push_back({1760,0}); captureAt={300,900};
@@ -231,7 +232,10 @@ int main(int argc,char**argv){
         script.push_back({t,8}); script.push_back({t+400,0});
         script.push_back({t+500,16}); script.push_back({t+560,0});
         script.push_back({t+700,1}); script.push_back({t+780,0}); }
-      script.push_back({26000,16}); script.push_back({27500,0});   // hold OK -> save & exit
+      script.push_back({26000,16}); script.push_back({27500,0});   // hold OK -> pause menu
+      script.push_back({27800,2});  script.push_back({27860,0});   // "quit to menu"
+      script.push_back({28100,2});  script.push_back({28160,0});
+      script.push_back({28400,16}); script.push_back({28460,0});   // -> save & exit
       captureAt={900,3000};
   } else if(scenario=="tunnel"){ simEnd=30000; downs(5,1300,200);
       script.push_back({2400,16}); script.push_back({2460,0}); captureAt={620,700,820,950};
@@ -285,10 +289,30 @@ int main(int argc,char**argv){
         script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
         script.push_back({t+130,16}); script.push_back({t+190,0}); }
       captureAt={};
+  } else if(scenario=="pause"){   simEnd=36000;
+      script.push_back({1300,16});  script.push_back({1360,0});    // open tetris
+      script.push_back({3000,16});  script.push_back({4000,0});    // hold OK -> pause
+      script.push_back({24000,16}); script.push_back({24060,0});   // 20 s later: continue
+      script.push_back({26000,16}); script.push_back({27000,0});   // pause again ...
+      script.push_back({27300,2});  script.push_back({27360,0});
+      script.push_back({27600,16}); script.push_back({27660,0});   // ... restart
+      script.push_back({30000,16}); script.push_back({31000,0});   // pause again ...
+      script.push_back({31300,2});  script.push_back({31360,0});
+      script.push_back({31600,2});  script.push_back({31660,0});
+      script.push_back({31900,16}); script.push_back({31960,0});   // ... quit to menu
+      captureAt={900};
+  } else if(scenario=="stats"){   simEnd=9000; downs(16,1300,200);
+      StatBlob b; memset(&b,0,sizeof(b)); b.ver=1;
+      b.plays[0]=3; b.secs[0]=3725; b.plays[1]=1; b.secs[1]=61; b.awards=1;
+      simNvsBlob["stats"]=std::string((const char*)&b,sizeof(b));
+      script.push_back({5000,16}); script.push_back({5060,0});     // open stats
+      script.push_back({6500,8});  script.push_back({6560,0});     // awards page
+      script.push_back({7000,2});  script.push_back({7060,0});     // second award
+      captureAt={1000,1300};
   } else if(scenario=="sleep"){   simEnd=90000;
       simNvsU16["slp"]=1;                       // one minute, then nothing happens
       captureAt={200};
-  } else if(scenario=="settings"){ simEnd=26000; downs(16,1300,250);
+  } else if(scenario=="settings"){ simEnd=26000; downs(17,1300,220);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
       script.push_back({5900,4});  script.push_back({5960,0});
@@ -307,7 +331,7 @@ int main(int argc,char**argv){
       script.push_back({10800,1}); script.push_back({10860,0});
       script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
       captureAt={1000,1700};
-  } else if(scenario=="wlan"){ simEnd=12000; downs(16,1300,250);
+  } else if(scenario=="wlan"){ simEnd=12000; downs(17,1300,220);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
       script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
@@ -327,7 +351,7 @@ int main(int argc,char**argv){
       captureAt={250};
   } else if(scenario=="versions3"){ simEnd=90000;
       simTwoSlots=true; simNvsU16["slp"]=1;                        // fresh update, sleep after 1 min
-  } else if(scenario=="upload"){ simEnd=9000; downs(16,1300,250); simUpload=true;
+  } else if(scenario=="upload"){ simEnd=9000; downs(17,1300,220); simUpload=true;
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
       script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
@@ -551,6 +575,7 @@ int main(int argc,char**argv){
     check("HUD drawn", saw("TETRIS")&&saw("LINES")&&saw("LEVEL")&&saw("NEXT"));
     check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
     check("high score consistent", simNvsU16["hs0"]==maxScore("SCORE "));
+    check("award for the first game", saw("AWARD!")&&saw("FIRST STEPS"));
   } else if(scenario=="snake"){
     check("snake drawn", saw("SNAKE"));
     check("died at the wall", saw("GAME OVER")||saw("NEW RECORD!"));
@@ -562,6 +587,7 @@ int main(int argc,char**argv){
     check("game over after missing", saw("GAME OVER")||saw("NEW RECORD!"));
     printf("      score %u, stored hs2 %u\n", maxScore("SCORE "), simNvsU16["hs2"]);
     check("high score consistent", simNvsU16["hs2"]==maxScore("SCORE "));
+    check("award for the record", saw("RECORD BREAKER"));
   } else if(scenario=="doom"){
     check("doom drawn", saw("DOOM"));
     check("3D view renders", maxInk>400);
@@ -644,7 +670,7 @@ int main(int argc,char**argv){
   } else if(scenario=="sleep"){   simEnd=90000;
       simNvsU16["slp"]=1;                       // one minute, then nothing happens
       captureAt={200};
-  } else if(scenario=="settings"){ simEnd=26000; downs(16,1300,250);
+  } else if(scenario=="settings"){ simEnd=26000; downs(17,1300,220);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
       script.push_back({5900,4});  script.push_back({5960,0});
@@ -663,6 +689,18 @@ int main(int argc,char**argv){
       script.push_back({10800,1}); script.push_back({10860,0});
       script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
       captureAt={1000,1700};
+  } else if(scenario=="pause"){
+    StatBlob b; memset(&b,0,sizeof(b));
+    if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));
+    printf("      tetris started %u times, %u s counted\n", b.plays[0], (unsigned)b.secs[0]);
+    check("pause menu shown", saw("PAUSE")&&saw("continue")&&saw("restart")&&saw("quit to menu"));
+    check("restart counted as a new start", b.plays[0]==2);
+    check("both rounds counted, the pause menu not", b.secs[0]>=5 && b.secs[0]<=14);
+  } else if(scenario=="stats"){
+    check("stats page drawn with the total time", saw("STATS")&&saw("1h03  AWARDS>"));
+    check("per game line", saw("Tetris        3x   1h02"));
+    check("awards page drawn", saw("AWARDS")&&saw("1/22  <STATS")&&saw("* FIRST STEPS")&&saw("- EXPLORER"));
+    check("what an award needs is shown", saw("try every game"));
   } else if(scenario=="wlan"){
     check("settings list the wlan page", saw("wlan and update..."));
     check("address of the update page shown", saw("http://192.168.1.50"));

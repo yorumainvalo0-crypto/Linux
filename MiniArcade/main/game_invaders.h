@@ -27,7 +27,7 @@ void invadersRun() {
     btnClear();
 
     while (poll()) {
-      uint32_t now = millis();
+      uint32_t now = gameMillis();
       if (btnTap(B_OK) && shotX < 0) { shotX = ship + 4; shotY = SCR_H - 8; sfx(280, 30); }
 
       if (now >= nextFrame) {                       // bullets run smoothly

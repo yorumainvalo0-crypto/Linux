@@ -53,7 +53,7 @@ void dinoRun() {
       if ((btnTap(B_UP) || btnTap(B_OK)) && y == 0) { vy = -52; sfx(700, 35); }
       if (btnHeld(B_DOWN) && y < 0) vy += 6;             // dive back down
 
-      uint32_t now = millis();
+      uint32_t now = gameMillis();
       if (now >= next) {
         next = now + 30;
         vy += 5;

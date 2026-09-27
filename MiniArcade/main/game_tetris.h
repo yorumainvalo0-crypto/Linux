@@ -71,7 +71,7 @@ void tetrisRun() {
     uint8_t  p = random(7), nextP = random(7), r = 0, level = 0;
     int8_t   px = 3, py = -1;
     uint16_t score = 0, lines = 0;
-    uint32_t nextFall = millis() + 500;
+    uint32_t nextFall = gameMillis() + 500;
     memset(tFld, 0, sizeof(tFld));
     btnClear();
 
@@ -90,10 +90,10 @@ void tetrisRun() {
         while (!tHit(p, r, px, py + 1)) py++;
         drop = true;
       }
-      if (btnHeld(B_DOWN) && nextFall > millis() + 40) nextFall = millis() + 40;   // soft drop
+      if (btnHeld(B_DOWN) && nextFall > gameMillis() + 40) nextFall = gameMillis() + 40;   // soft drop
 
       // ---- gravity ----
-      uint32_t now = millis();
+      uint32_t now = gameMillis();
       if (drop || now >= nextFall) {
         int16_t step = 500 - (int16_t)level * 40;       // signed: level 13+ went negative
         if (step < 100) step = 100;

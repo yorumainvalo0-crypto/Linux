@@ -126,7 +126,7 @@ void racerRun() {
     btnClear();
 
     while (poll()) {
-      uint32_t now = millis();
+      uint32_t now = gameMillis();
       if (now >= next) {
         next = now + 30;
         if (btnHeld(B_LEFT)  && carx > 2)          carx -= RC_STEP;

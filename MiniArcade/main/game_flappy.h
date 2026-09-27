@@ -35,7 +35,7 @@ void flappyRun() {
     while (poll()) {
       if (btnTap(B_OK) || btn(B_UP)) { vy = -26; sfx(620, 25); }   // flap
 
-      uint32_t now = millis();
+      uint32_t now = gameMillis();
       if (now >= next) {
         next = now + 30;
         vy += 2;
