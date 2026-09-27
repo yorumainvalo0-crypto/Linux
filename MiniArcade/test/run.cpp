@@ -314,6 +314,17 @@ int main(int argc,char**argv){
         static const uint8_t keys[4]={1,2,4,8};
         script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0}); }
       captureAt={1100,1600,2600};
+  } else if(scenario=="shooter"){ simEnd=60000; downs(18,1300,180);
+      script.push_back({4800,16}); script.push_back({4860,0});
+      for(uint32_t t=5200;t<58000;t+=500){                        // weave up and down
+        script.push_back({t,(uint8_t)(rand()%2?1:2)}); script.push_back({t+300,0});
+        if(rand()%12==0){ script.push_back({t+350,16}); script.push_back({t+400,0}); } }   // a bomb now and then
+      captureAt={1500,2500};
+  } else if(scenario=="jump"){    simEnd=60000; downs(19,1300,180);
+      script.push_back({5000,16}); script.push_back({5060,0});
+      for(uint32_t t=5400;t<58000;t+=600){                        // run right, jump now and then
+        script.push_back({t,8}); script.push_back({t+250,9}); script.push_back({t+400,8}); script.push_back({t+580,0}); }
+      captureAt={1500,2500};
   } else if(scenario=="pause"){   simEnd=36000;
       script.push_back({1300,16});  script.push_back({1360,0});    // open tetris
       script.push_back({3000,16});  script.push_back({4000,0});    // hold OK -> pause
@@ -577,6 +588,33 @@ int main(int argc,char**argv){
     printf("%s\n", fails?"### FAILURES ###":"all checks passed");
     return fails?1:0;
   }
+  if(scenario=="jrfair"){
+    /* the jump itself: how high and how far, straight from the constants */
+    int vy=-JR_JUMP, y=0, top=0, t=0; do { y+=vy; vy+=JR_G; if(y<top) top=y; t++; } while(y<0);
+    int high=-top/JR_Q, far=t*JR_RUN/JR_Q;
+    printf("      jump: %d px high, %d px far at full speed\n", high, far);
+    check("steps up are within the jump", high >= JR_UP*JR_T + 4);
+    check("gaps are within the jump", far >= JR_GAP*JR_T + 8);
+    /* and the level: never a wider gap or a higher step than that */
+    int bad=0; long cols=0;
+    for(int g=0; g<200; g++){
+      randomSeed(300+g); jrMade=0; jrCur=1; jrLeft=0; jrMode=0; jrDiff=g%6;
+      memset(jrE,0,sizeof(jrE));
+      int gap=0, lastLand=1;
+      for(int c=0;c<3000;c++,cols++){
+        jrMake(); uint8_t i=c%JR_RING, land = jrH[i] ? jrH[i] : jrP[i];
+        for(uint8_t k=0;k<JR_EN;k++) jrE[k].on=false;
+        if(!land){ gap++; continue; }
+        if(gap>JR_GAP){ bad++; if(bad<5) printf("      gap of %d at %d\n",gap,c); }
+        if(land>lastLand+JR_UP || (gap>=2 && land>lastLand+1)){ bad++; if(bad<5) printf("      step %d->%d after gap %d\n",lastLand,land,gap); }
+        gap=0; lastLand=land;
+      }
+    }
+    printf("      %ld columns made\n", cols);
+    check("level never asks for an impossible jump", bad==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
   if(scenario=="frogroll"){
     /* Rolls lanes for every difficulty and level and checks them: objects
        never overlap, every gap has the promised size, the road always
@@ -827,6 +865,17 @@ int main(int argc,char**argv){
     check("game over reached", saw("GAME OVER")&&(saw("NEW RECORD!")||saw("BEST ")));
     printf("      score %u, stored hs17 %u\n", maxScore("SCORE "), simNvsU16["hs17"]);
     check("high score consistent", simNvsU16["hs17"]==maxScore("SCORE "));
+  } else if(scenario=="shooter"){
+    check("shooter drawn", saw("SHOOTER"));
+    check("something shot down", maxScore("SCORE ")>0);
+    check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      score %u, stored hs18 %u\n", maxScore("SCORE "), simNvsU16["hs18"]);
+    check("high score consistent", simNvsU16["hs18"]==maxScore("SCORE "));
+  } else if(scenario=="jump"){
+    check("jump & run drawn", saw("JUMP"));
+    check("ran some way", maxScore("SCORE ")>0||simNvsU16["hs19"]>0);
+    printf("      score %u, stored hs19 %u\n", maxScore("SCORE "), simNvsU16["hs19"]);
+    check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
   } else if(scenario=="pause"){
     StatBlob b; memset(&b,0,sizeof(b));
     if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));
