@@ -449,6 +449,8 @@ bool gameOver(uint16_t score) {
 #include "game_frogger.h"
 #include "game_connect4.h"
 #include "game_tictactoe.h"
+#include "game_2048.h"
+#include "game_mines.h"
 #include "stats.h"
 #include "multiplayer.h"
 
@@ -474,6 +476,8 @@ static const Game GAMES[] = {
   { "Frogger",    froggerRun  },
   { "4 wins",     connect4Run },
   { "Tic Tac Toe", tictactoeRun },
+  { "2048",       g2048Run    },
+  { "Minesweeper", minesRun   },
   // add new games here (before the entries with a tag), e.g. { "Chess", chessRun },
 #ifdef HAVE_LINK
   { "Multiplayer", multiplayerRun, "2P" },
@@ -500,8 +504,8 @@ void menu() {
       for (uint8_t i = 0; i < B_COUNT; i++)
         if (bDown[i]) { fwConfirm(); fwUnconfirmed = false; break; }
 #endif
-    if (btn(B_UP)   && sel > 0)               { sel--; sfx(700, 15); }
-    if (btn(B_DOWN) && sel < GAME_COUNT - 1)  { sel++; sfx(700, 15); }
+    if (btn(B_UP))   { sel = sel ? sel - 1 : GAME_COUNT - 1; sfx(700, 15); }   // the list wraps:
+    if (btn(B_DOWN)) { sel = (sel + 1) % GAME_COUNT;         sfx(700, 15); }   // UP from the top = Settings
     if (sel < top) top = sel;
     if (sel >= top + ROWS) top = sel - ROWS + 1;
     if (btn(B_OK)) {

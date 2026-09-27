@@ -86,6 +86,11 @@ jobs:
         run: |
           mkdir out
           cp MiniArcade/build/miniarcade.bin MiniArcade/build/miniarcade-full.bin MiniArcade/version.txt out/
+          # everything in one zip named after the version, with the German how-to
+          V="${{ steps.ver.outputs.version }}"
+          [ -n "$V" ] || V=$(tr -d ' \r\n' < MiniArcade/version.txt)
+          cp MiniArcade-Firmware/ANLEITUNG.txt out/
+          (cd out && zip -q -9 "MiniArcade-$V.zip" miniarcade-full.bin miniarcade.bin version.txt ANLEITUNG.txt && rm ANLEITUNG.txt)
           ls -l out
 
       - uses: actions/upload-artifact@v4
