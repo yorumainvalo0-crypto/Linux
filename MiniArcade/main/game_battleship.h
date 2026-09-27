@@ -5,8 +5,11 @@
 //  BATTLESHIP   (8 x 8, ships 4 3 3 2 2 that do not touch)
 // =========================================================
 /* Left: the sea you shoot at (cursor with the arrows, OK fires).
-   Right: your own fleet and where the other side has hit it.
-   Before the start UP shuffles your fleet and OK is ready.            */
+   Right: your own fleet and where the other side has shot.
+   Marks: small square = shot, missed; X = hit; solid = ship sunk;
+   single dot = water next to a sunk ship (no need to shoot there).
+   Before the start UP mixes a new fleet, DOWN places the ships by hand
+   (arrows move, OK sets it down, a quick double OK turns it).         */
 #define BS_N     8
 #define BS_CELLS 64
 #define BS_SHIPS 5
@@ -16,7 +19,7 @@
 #define BS_Y    (TOP_H + 5)
 
 static const uint8_t BS_LEN[BS_SHIPS] = { 4, 3, 3, 2, 2 };
-enum { BS_UNKNOWN, BS_MISS, BS_HIT, BS_SUNK };
+enum { BS_UNKNOWN, BS_MISS, BS_HIT, BS_SUNK, BS_NEAR };   // BS_NEAR: water known without a shot
 #define BS_HITBIT 0x80
 
 // fleet: 0 = water, 1..5 = ship number; BS_HITBIT = shot at (water or ship)
@@ -25,6 +28,22 @@ static uint8_t bsShot[BS_CELLS];                        // what we know of their
 static uint8_t bsAiShot[BS_CELLS];                      // what the CPU knows of ours
 
 static bool bsInside(int x, int y) { return x >= 0 && y >= 0 && x < BS_N && y < BS_N; }
+
+// does a ship of length len fit at (x0, y0) without touching another one?
+bool bsFits(const uint8_t *f, uint8_t len, int x0, int y0, bool hor) {
+  if (x0 < 0 || y0 < 0 || (hor ? x0 + len : x0 + 1) > BS_N || (hor ? y0 + 1 : y0 + len) > BS_N) return false;
+  for (uint8_t k = 0; k < len; k++) {
+    int x = x0 + (hor ? k : 0), y = y0 + (hor ? 0 : k);
+    for (int dy = -1; dy <= 1; dy++)
+      for (int dx = -1; dx <= 1; dx++)
+        if (bsInside(x + dx, y + dy) && f[(y + dy) * BS_N + x + dx]) return false;
+  }
+  return true;
+}
+
+static void bsPut(uint8_t *f, uint8_t s, int x0, int y0, bool hor) {
+  for (uint8_t k = 0; k < BS_LEN[s]; k++) f[(y0 + (hor ? 0 : k)) * BS_N + x0 + (hor ? k : 0)] = s + 1;
+}
 
 // random fleet, ships never touch (not even at a corner)
 void bsPlace(uint8_t *f) {
@@ -36,15 +55,8 @@ void bsPlace(uint8_t *f) {
       for (uint8_t tries = 0; tries < 100 && !ok; tries++) {
         bool hor = random(2);
         int x0 = random(hor ? BS_N - BS_LEN[s] + 1 : BS_N), y0 = random(hor ? BS_N : BS_N - BS_LEN[s] + 1);
-        bool free_ = true;
-        for (uint8_t k = 0; k < BS_LEN[s] && free_; k++) {
-          int x = x0 + (hor ? k : 0), y = y0 + (hor ? 0 : k);
-          for (int dy = -1; dy <= 1; dy++)
-            for (int dx = -1; dx <= 1; dx++)
-              if (bsInside(x + dx, y + dy) && f[(y + dy) * BS_N + x + dx]) free_ = false;
-        }
-        if (!free_) continue;
-        for (uint8_t k = 0; k < BS_LEN[s]; k++) f[(y0 + (hor ? 0 : k)) * BS_N + x0 + (hor ? k : 0)] = s + 1;
+        if (!bsFits(f, BS_LEN[s], x0, y0, hor)) continue;
+        bsPut(f, s, x0, y0, hor);
         ok = true;
       }
     }
@@ -81,7 +93,7 @@ void bsMark(uint8_t *sea, uint8_t cell, uint8_t res) {
         if (!bsInside(x + dx, y + dy)) continue;
         uint8_t o = (y + dy) * BS_N + x + dx;
         if (sea[o] == BS_HIT && (!dx || !dy)) { sea[o] = BS_SUNK; stack[n++] = o; }
-        else if (sea[o] == BS_UNKNOWN) sea[o] = BS_MISS;
+        else if (sea[o] == BS_UNKNOWN) sea[o] = BS_NEAR;
       }
   }
 }
@@ -113,14 +125,15 @@ uint8_t bsAiPick(const uint8_t *sea) {
 static void bsCell(int16_t px, int16_t py, uint8_t what, bool ship) {
   if (ship) oled.drawFrame(px, py, 4, 4);
   switch (what) {
-  case BS_MISS: oled.drawPixel(px + 1, py + 1); break;
+  case BS_MISS: oled.drawBox(px + 1, py + 1, 2, 2); break;     // shot here, water
+  case BS_NEAR: oled.drawPixel(px + 1, py + 1); break;          // water for sure, not shot
   case BS_HIT:  oled.drawLine(px, py, px + 3, py + 3); oled.drawLine(px + 3, py, px, py + 3); break;
   case BS_SUNK: oled.drawBox(px, py, 4, 4); break;
   }
 }
 
 /* sea: our shots (left), fleet: ours with their hits (right)          */
-void bsDraw(const uint8_t *sea, const uint8_t *fleet, int16_t cursor, const char *l1, const char *l2) {
+void bsDraw(const uint8_t *sea, const uint8_t *fleet, int16_t cursor, const char *l1, const char *l2, const char *l3 = NULL) {
   oled.drawFrame(BS_LX - 1, BS_Y - 1, BS_N * BS_C + 1, BS_N * BS_C + 1);
   oled.drawFrame(BS_RX - 1, BS_Y - 1, BS_N * BS_C + 1, BS_N * BS_C + 1);
   for (uint8_t i = 0; i < BS_CELLS; i++) {
@@ -140,6 +153,7 @@ void bsDraw(const uint8_t *sea, const uint8_t *fleet, int16_t cursor, const char
   int16_t mx = BS_LX + BS_N * BS_C + 3, mw = BS_RX - mx - 2;
   if (l1) oled.drawStr(mx + (mw - oled.getStrWidth(l1)) / 2 + 1, BS_Y + 15, l1);
   if (l2) oled.drawStr(mx + (mw - oled.getStrWidth(l2)) / 2 + 1, BS_Y + 25, l2);
+  if (l3) oled.drawStr(mx + (mw - oled.getStrWidth(l3)) / 2 + 1, BS_Y + 35, l3);
   oled.sendBuffer();
 }
 
@@ -151,15 +165,65 @@ static void bsBar(const char *right) {
   oled.drawHLine(0, TOP_H - 1, SCR_W);
 }
 
-// fleet set-up: UP shuffles, OK is ready. false = left with a long OK
+/* placing the ships by hand, the biggest first: arrows move it, OK sets
+   it down (if it fits), a quick double OK turns it. false = left.      */
+bool bsManual() {
+  memset(bsMine, 0, BS_CELLS);
+  int x = 0, y = 0;
+  bool hor = true, tapWait = false;
+  uint32_t tapAt = 0;
+  uint8_t s = 0;
+  btnClear();
+  while (s < BS_SHIPS) {
+    if (!poll()) return false;
+    uint8_t len = BS_LEN[s];
+    if (btn(B_LEFT))  x--;
+    if (btn(B_RIGHT)) x++;
+    if (btn(B_UP))    y--;
+    if (btn(B_DOWN))  y++;
+    bool place = false;
+    if (btn(B_OK)) {
+      if (tapWait) { tapWait = false; hor = !hor; sfx(900, 20); }          // second tap: turn
+      else { tapWait = true; tapAt = millis(); }
+    }
+    if (tapWait && millis() - tapAt > 280) { tapWait = false; place = true; }
+    int w = hor ? len : 1, h = hor ? 1 : len;                               // stay on the board
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x > BS_N - w) x = BS_N - w;
+    if (y > BS_N - h) y = BS_N - h;
+    bool fits = bsFits(bsMine, len, x, y, hor);
+    if (place) {
+      if (fits) { bsPut(bsMine, s, x, y, hor); s++; sfx(1000, 40); }
+      else sfx(200, 120);                                                   // touches another ship
+      continue;
+    }
+    uint8_t show[BS_CELLS];                                                 // the fleet plus this ship
+    memcpy(show, bsMine, BS_CELLS);
+    if (fits || (millis() / 150) % 2) bsPut(show, s, x, y, hor);
+    char b[10];
+    snprintf(b, sizeof(b), "ship %u", len);
+    bsBar("2xOK=turn");                                                     // too wide for the middle
+    bsDraw(NULL, show, -1, b, fits ? "OK=set" : "no room");
+  }
+  sfx(1400, 80);
+  return true;
+}
+
+// fleet set-up: UP mixes a new one, DOWN places by hand, OK is ready. false = left
 bool bsSetup(const char *right) {
   bsPlace(bsMine);
   btnClear();
   while (poll()) {
     if (btn(B_UP)) { bsPlace(bsMine); sfx(700, 15); }
+    if (btn(B_DOWN)) {
+      sfx(700, 15);
+      if (!bsManual()) return false;
+      btnClear();
+    }
     if (btn(B_OK)) { sfx(1200, 50); return true; }
     bsBar(right);
-    bsDraw(NULL, bsMine, -1, "UP=new", "OK=go");
+    bsDraw(NULL, bsMine, -1, "UP=mix", "DOWN=own", "OK=go");
   }
   return false;
 }

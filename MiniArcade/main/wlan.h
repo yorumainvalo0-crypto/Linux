@@ -117,7 +117,8 @@ void wlanRun() {
     else if (st == NET_FAILED)      snprintf(info, sizeof(info), "can't join %s", netSsid());
     else if (netHasConfig())        snprintf(info, sizeof(info), "network %s", netSsid());
     else                            snprintf(info, sizeof(info), "no network saved");
-    snprintf(item[0], 26, on ? "disconnect" : "connect");
+    // the first line says what OK does now: only "disconnect" when really online
+    snprintf(item[0], 26, st == NET_ONLINE ? "disconnect" : (st == NET_CONNECTING ? "stop joining" : "connect"));
     snprintf(item[1], 26, "set up with phone");
     if (jb == JOB_CHECKING)         snprintf(item[2], 26, "asking GitHub...");
     else if (jb == JOB_NEWER)       snprintf(item[2], 26, "install %s", netRemoteVersion());
@@ -131,6 +132,13 @@ void wlanRun() {
       char v[16];
       snprintf(v, sizeof(v), "v%s", netVersion());
       rightStr(12, v);
+      // connection state next to the title: a filled dot when online, a
+      // blinking one while joining, an empty ring when off
+      const char *s = st == NET_ONLINE ? "online" : (st == NET_CONNECTING ? "joining" :
+                      (st == NET_FAILED ? "failed" : "offline"));
+      bool dot = st == NET_ONLINE || (st == NET_CONNECTING && (millis() / 300) % 2);
+      if (dot) oled.drawBox(38, 6, 5, 5); else oled.drawFrame(38, 6, 5, 5);
+      oled.drawStr(46, 12, s);
     }
     oled.drawStr(2, 23, info);
     for (uint8_t i = 0; i < 5; i++) {

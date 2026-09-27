@@ -342,6 +342,19 @@ int main(int argc,char**argv){
         script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
         script.push_back({t+200,16}); script.push_back({t+260,0}); }
       captureAt={1100,3000};
+  } else if(scenario=="bsplace"){ simEnd=13000; downs(21,1300,150);
+      auto tap=[&](uint32_t t,uint8_t k){ script.push_back({t,k}); script.push_back({t+60,0}); };
+      tap(4600,16);                                                // open battleship
+      tap(5000,2);                                                 // place the ships myself
+      tap(5400,16);                                                // ship 4 at the top left
+      tap(6000,2); tap(6200,2); tap(6400,16);                      // ship 3 two rows lower
+      tap(7000,2); tap(7200,2); tap(7400,16);                      // ship 3
+      tap(8000,2); tap(8200,2); tap(8400,16);                      // ship 2
+      for(int i=0;i<5;i++) tap(9000+i*160,8);                      // last ship 2 further right ...
+      tap(10000,16); tap(10150,16);                                // ... turned (double OK) ...
+      tap(10600,16);                                               // ... and set down
+      tap(11200,16);                                               // go
+      captureAt={1100,1600};
   } else if(scenario=="pause"){   simEnd=36000;
       script.push_back({1300,16});  script.push_back({1360,0});    // open tetris
       script.push_back({3000,16});  script.push_back({4000,0});    // hold OK -> pause
@@ -393,6 +406,11 @@ int main(int argc,char**argv){
       script.push_back({9000,16}); script.push_back({9060,0});     // check for update
       script.push_back({9500,16}); script.push_back({9560,0});     // install it
       captureAt={1000,1100};
+  } else if(scenario=="wlanfail"){ simEnd=16000; ups(1,1300,220); simNoNet=true;
+      script.push_back({5000,16}); script.push_back({5060,0});     // open settings
+      for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
+      script.push_back({7500,16}); script.push_back({7560,0});     // wlan page: joins, but in vain
+      captureAt={1600,2800};
   } else if(scenario=="versions"){ simEnd=8000;
       simTwoSlots=true;                                             // fresh update, nothing pressed
       script.push_back({6000,2}); script.push_back({6060,0});      // first key press in the menu
@@ -948,8 +966,17 @@ int main(int argc,char**argv){
     check("level list shown", saw("SOKOBAN 1")&&saw("<1/")&&saw(" OK"));
     check("moves counted", saw("7 moves")||saw("8 moves")||saw("9 moves"));
     check("undo counts back", saw("5 moves")||saw("6 moves"));
+  } else if(scenario=="bsplace"){
+    static const char *want[8]={"1111....","........","222.....","........","333.....","........","44...5..",".....5.."};
+    bool same=true;
+    for(int y=0;y<8;y++) for(int x=0;x<8;x++){ uint8_t c=bsMine[y*8+x]&0x7F; char w=want[y][x];
+      if((w=='.'&&c)||(w!='.'&&c!=w-'0')) same=false; }
+    if(!same) for(int y=0;y<8;y++){ printf("      "); for(int x=0;x<8;x++){ uint8_t c=bsMine[y*8+x]&0x7F; putchar(c?'0'+c:'.'); } printf("\n"); }
+    check("placing by hand offered and shown", saw("UP=mix")&&saw("DOWN=own")&&saw("ship 4")&&saw("2xOK=turn"));
+    check("ships where they were put, the last one turned", same);
+    check("game started with this fleet", saw("your go"));
   } else if(scenario=="battleship"){
-    check("battleship drawn", saw("BATTLESHIP")&&saw("UP=new")&&saw("your go"));
+    check("battleship drawn", saw("BATTLESHIP")&&saw("UP=mix")&&saw("your go"));
     check("shots fired", saw("miss")||saw("hit!"));
     check("a game ended", saw("GAME OVER")||saw("NEW RECORD!"));
   } else if(scenario=="pause"){
@@ -967,8 +994,13 @@ int main(int argc,char**argv){
   } else if(scenario=="wlan"){
     check("settings list the wlan page", saw("wlan and update..."));
     check("address of the update page shown", saw("http://192.168.1.50"));
+    check("online state shown, disconnect offered", saw("online")&&saw("disconnect"));
     check("newer release offered", saw("install 9.3"));
     check("update written, restart announced", saw("done - restarting"));
+  } else if(scenario=="wlanfail"){
+    check("while joining: state shown, no disconnect offered", saw("joining")&&saw("stop joining"));
+    check("after failing: failed, connect offered", saw("failed")&&saw("can't join HomeNet")&&saw("connect"));
+    check("never claims to be connected", !saw("disconnect")&&!saw("online"));
   } else if(scenario=="versions"){
     check("version choice shown at start", saw("VERSION")&&saw("previous")&&saw("new"));
     check("countdown shown", saw("3s")&&saw("1s"));
@@ -1001,7 +1033,7 @@ int main(int argc,char**argv){
   } else if(scenario=="mppong"||scenario=="mpsnake"||scenario=="mppac"||scenario=="mpship"){
     bool pong = scenario=="mppong"; (void)pong;
     check("challenge offers the real-time games", saw("Pong")&&saw("Snake")&&(scenario!="mppac"||saw("Pac-Man")));
-    check("game against ANNA shown", scenario=="mpship" ? saw("vs ANNA")&&saw("UP=new") : saw("YOU ")&&saw(" ANNA"));
+    check("game against ANNA shown", scenario=="mpship" ? saw("vs ANNA")&&saw("UP=mix") : saw("YOU ")&&saw(" ANNA"));
     check("a game was decided", saw("YOU WIN")||saw("LOST")||saw("DRAW"));
     bool same = (simBotResult==1&&saw("LOST"))||(simBotResult==2&&saw("YOU WIN"))||(simBotResult==3&&saw("DRAW"));
     printf("      bot games %d, bot result %d (%s)\n", simBotGames, simBotResult, scenario.c_str());
