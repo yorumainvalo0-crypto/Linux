@@ -394,14 +394,15 @@ int main(int argc,char**argv){
       if(scenario!="mpwait") for(uint32_t t=10000;t<36000;t+=450){   // play: move and drop
         script.push_back({t,(uint8_t)((rand()%2)?4:8)}); script.push_back({t+60,0});
         script.push_back({t+200,16}); script.push_back({t+260,0}); }
-  } else if(scenario=="mppong"||scenario=="mpsnake"){ simEnd=90000;
+  } else if(scenario=="mppong"||scenario=="mpsnake"||scenario=="mppac"){ simEnd=90000;
       bool pong = scenario=="mppong";
+      int downsTo = pong ? 2 : (scenario=="mpsnake" ? 3 : 4);
       ups(3,1300,180);
       script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
       script.push_back({6500,2});  script.push_back({6560,0});     // ANNA's row
       script.push_back({6900,16}); script.push_back({6960,0});     // challenge ...
-      for(int i=0;i<(pong?2:3);i++){ script.push_back({7200+i*250,2}); script.push_back({7260+i*250,0}); }
-      script.push_back({8200,16}); script.push_back({8260,0});     // ... to pong / snake
+      for(int i=0;i<downsTo;i++){ script.push_back({7200+i*230,2}); script.push_back({7260+i*230,0}); }
+      script.push_back({8200,16}); script.push_back({8260,0});     // ... to pong / snake / pac-man
       for(uint32_t t=10000;t<80000;t+=300){                       // wander
         static const uint8_t keys[4]={1,2,4,8};
         script.push_back({t,keys[rand()%4]}); script.push_back({t+(pong?250:60),0}); }
@@ -872,13 +873,13 @@ int main(int argc,char**argv){
     check("no answer after 30 s", saw("no answer from ANNA"));
   } else if(scenario=="mpleft"){
     check("opponent leaving reported", saw("ANNA left the game"));
-  } else if(scenario=="mppong"||scenario=="mpsnake"){
+  } else if(scenario=="mppong"||scenario=="mpsnake"||scenario=="mppac"){
     bool pong = scenario=="mppong";
-    check("challenge offers the real-time games", saw("Pong")&&saw("Snake"));
+    check("challenge offers the real-time games", saw("Pong")&&saw("Snake")&&(scenario!="mppac"||saw("Pac-Man")));
     check("game against ANNA shown", saw("YOU ")&&saw(" ANNA"));
     check("a game was decided", saw("YOU WIN")||saw("LOST")||saw("DRAW"));
     bool same = (simBotResult==1&&saw("LOST"))||(simBotResult==2&&saw("YOU WIN"))||(simBotResult==3&&saw("DRAW"));
-    printf("      bot games %d, bot result %d (%s)\n", simBotGames, simBotResult, pong?"pong":"snake");
+    printf("      bot games %d, bot result %d (%s)\n", simBotGames, simBotResult, scenario.c_str());
     check("both consoles saw the same end", simBotGames>=1 && same);
     StatBlob b; memset(&b,0,sizeof(b));
     if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));

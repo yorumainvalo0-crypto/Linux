@@ -13,8 +13,8 @@
 #include "rtgames.h"
 #define HAVE_LINK 1
 
-static const char *const MP_GAMES[4] = { "4 wins", "Tic Tac Toe", "Pong", "Snake" };   // LKG_C4 ..
-static const char *mpGameName(uint8_t g) { return g >= LKG_C4 && g <= LKG_SNAKE ? MP_GAMES[g - 1] : "?"; }
+static const char *const MP_GAMES[5] = { "4 wins", "Tic Tac Toe", "Pong", "Snake", "Pac-Man" };   // LKG_C4 ..
+static const char *mpGameName(uint8_t g) { return g >= LKG_C4 && g <= LKG_PAC ? MP_GAMES[g - 1] : "?"; }
 
 static void mpHook() { linkTick(); lastInput = millis(); }  // radio on: no deep sleep
 
@@ -266,13 +266,21 @@ static void mpSnakeDraw(const char *msg) {
   oled.sendBuffer();
 }
 
+static void mpPacDraw(const char *msg) {                // pm: the game of game_pacman.h
+  mpRtBar(pm.score[mpMe], pm.score[1 - mpMe]);
+  if (mpStalled && !msg) msg = "waiting...";
+  if (!msg && !pm.alive(mpMe)) msg = "no lives left";
+  if (!msg && pm.freeze && pm.t < RM_FREEZE) msg = "READY!";
+  pmDraw(mpMe, msg);
+}
+
 /* 0 = decided or the other one left, 1 = we gave up */
 static uint8_t mpRealtime() {
   LinkCore &L = linkCore();
-  bool pong = L.game == LKG_PONG;
+  bool pong = L.game == LKG_PONG, pac = L.game == LKG_PAC;
   mpMe = L.iStart ? 0 : 1;
   uint32_t seed = L.session() * 2654435761u;             // the same on both consoles
-  if (pong) mpPg.begin(seed); else mpSn.begin(seed);
+  if (pong) mpPg.begin(seed); else if (pac) pm.begin(seed, 2); else mpSn.begin(seed);
   uint8_t  latch = 0;                                     // snake: last direction pressed
   uint32_t next = millis(), lastStep = millis();
   const char *end = NULL;
@@ -289,25 +297,25 @@ static uint8_t mpRealtime() {
     for (uint8_t k = 0; k < 3 && lkDue(now, next); k++) {
       uint8_t in[2];
       if (!L.syncStep(&in[mpMe], &in[1 - mpMe])) break;
-      uint8_t ev = pong ? mpPg.step(in) : mpSn.step(in);
+      uint8_t ev = pong ? mpPg.step(in) : (pac ? pm.step(in) : mpSn.step(in));
       uint8_t mine = pong ? (uint8_t)((btnHeld(B_UP) ? 1 : 0) | (btnHeld(B_DOWN) ? 2 : 0)) : latch;
       L.syncPut(mine, linkNow());
       next += RT_TICK_MS;
       lastStep = now;
       if (ev & RT_EV_HIT)   sfx(750, 30);
-      if (ev & RT_EV_EAT)   sfx(1100, 45);
+      if (ev & RT_EV_EAT)   sfx(pac ? (pm.t % 2 ? 880 : 660) : 1100, pac ? 12 : 45);
       if (ev & RT_EV_POINT) sfx(300, 120);
     }
     if ((int32_t)(now - next) > 100) next = now;          // do not race to catch up
     mpStalled = now - lastStep > 400;
-    uint8_t w = pong ? mpPg.winner : mpSn.winner;
+    uint8_t w = pong ? mpPg.winner : (pac ? pm.winner : mpSn.winner);
     if (w) end = w == 3 ? "DRAW" : (w == mpMe + 1 ? "YOU WIN" : "LOST");
-    if (pong) mpPongDraw(NULL); else mpSnakeDraw(NULL);
+    if (pong) mpPongDraw(NULL); else if (pac) mpPacDraw(NULL); else mpSnakeDraw(NULL);
   }
   if (end) {
     sfx(strcmp(end, "LOST") ? 1400 : 200, 250);
     mpStalled = false;
-    mpFinish(pong ? mpPongDraw : mpSnakeDraw, end);
+    mpFinish(pong ? mpPongDraw : (pac ? mpPacDraw : mpSnakeDraw), end);
     statOnline(!strcmp(end, "YOU WIN"));
   }
   return ret;
@@ -378,7 +386,7 @@ void multiplayerRun() {
     }
 
     if (st == LK_INVITED) {                             // somebody challenges us
-      if (L.game < LKG_C4 || L.game > LKG_SNAKE) { L.answer(false, linkNow()); continue; }
+      if (L.game < LKG_C4 || L.game > LKG_PAC) { L.answer(false, linkNow()); continue; }
       if (millis() >= nextBeep) { nextBeep = millis() + 2000; sfx(1500, 90); }
       if (btn(B_OK))                      { L.answer(true, linkNow()); sfx(1200, 60); btnClear(); continue; }
       if (btn(B_LEFT) || btn(B_RIGHT) || !alive) { L.answer(false, linkNow()); sfx(300, 80); btnClear(); continue; }
@@ -425,14 +433,16 @@ void multiplayerRun() {
       if (!sel) mpName();
       else if (L.peer(idx[sel - 1]).busy) sfx(300, 120);
       else {
-        uint8_t g = chooseMode("CHALLENGE", MP_GAMES, 4);
+        uint8_t g = chooseMode("CHALLENGE", MP_GAMES, 5);
         if (g != 255) {
           for (uint8_t i = 0; i < L.peerCount(); i++)   // the list may have changed meanwhile
             if (!strcmp(L.peer(i).code, selCode)) {
-              if (LinkCore::realtime(g + 1) && !L.peer(i).rt) {
-                char b[26];
+              uint8_t need = LinkCore::capOf(g + 1);
+              if (need && !(L.peer(i).caps & need)) {
+                char b[26], c[26];
                 snprintf(b, sizeof(b), "%.6s needs an update", L.peer(i).name);
-                mpNote(b, "for Pong and Snake");
+                snprintf(c, sizeof(c), "for %s", MP_GAMES[g]);
+                mpNote(b, c);
               } else L.invite(i, g + 1, linkNow());
               break;
             }

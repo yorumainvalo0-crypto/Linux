@@ -31,7 +31,7 @@ static void simSendMe(void *, const uint8_t *, const uint8_t *d, uint8_t n)  { s
 static bool     simBotOld      = false;  // bot plays an older firmware: no real-time games
 static void simSendBot(void *, const uint8_t *, const uint8_t *d, uint8_t n) {
   std::vector<uint8_t> v(d, d + n);
-  if (simBotOld && n >= sizeof(LkPacket) && v[3] == LK_BEACON) v[offsetof(LkPacket, flags)] &= ~2;
+  if (simBotOld && n >= sizeof(LkPacket) && v[3] == LK_BEACON) v[offsetof(LkPacket, flags)] &= ~LK_CAPS;
   simAir.push_back({ false, v });
 }
 
@@ -110,24 +110,34 @@ static bool botDone() {
 // real-time games: the bot runs its own copy, like a second console would
 static RtPong   botPg;
 static RtSnake  botSn;
+static RtPac    botPm;
 static uint32_t botRtNext = 0, botRnd = 5;
 static bool     botRt = false;
 
 static void simBotRealtime(uint32_t now) {
   LinkCore &B = simBot;
-  bool pong = B.game == LKG_PONG;
+  bool pong = B.game == LKG_PONG, pac = B.game == LKG_PAC;
   uint8_t me = B.iStart ? 0 : 1;
   if (!botRt) {                                        // a new game begins
     botRt = true;
-    if (pong) botPg.begin(B.session() * 2654435761u); else botSn.begin(B.session() * 2654435761u);
+    uint32_t seed = B.session() * 2654435761u;
+    if (pong) botPg.begin(seed); else if (pac) botPm.begin(seed, 2); else botSn.begin(seed);
     botRtNext = now;
   }
   for (int k = 0; k < 3 && lkDue(now, botRtNext); k++) {
     uint8_t in[2];
     if (!B.syncStep(&in[me], &in[1 - me])) break;
-    if (pong) botPg.step(in); else botSn.step(in);
+    if (pong) botPg.step(in); else if (pac) botPm.step(in); else botSn.step(in);
     uint8_t mine;
-    if (pong) {                                        // follow the ball, not too well
+    if (pac) {                                         // wander: a new open way now and then
+      const RmEnt &e = botPm.pac[me];
+      mine = botPm.want[me];
+      if (!mine || rtRand(botRnd) % 40 == 0 || RtPac::wallAt(e.x + RtPac::dx(mine), e.y + RtPac::dy(mine)))
+        for (int t = 0; t < 8; t++) {
+          uint8_t d = 1 + rtRand(botRnd) % 4;
+          if (!RtPac::wallAt(e.x + RtPac::dx(d), e.y + RtPac::dy(d))) { mine = d; break; }
+        }
+    } else if (pong) {                                        // follow the ball, not too well
       int c = botPg.pad[me] + RP_PH / 2, b = botPg.by >> 4;
       mine = (rtRand(botRnd) % 5 < 2) ? 0 : (b < c - 2 ? 1 : (b > c + 2 ? 2 : 0));
     } else {                                           // keep going, turn before a wall
@@ -142,7 +152,7 @@ static void simBotRealtime(uint32_t now) {
     B.syncPut(mine, now);
     botRtNext += RT_TICK_MS;
   }
-  uint8_t w = pong ? botPg.winner : botSn.winner;
+  uint8_t w = pong ? botPg.winner : (pac ? botPm.winner : botSn.winner);
   if (w) {
     simBotGames++;
     simBotResult = w == 3 ? 3 : (w == me + 1 ? 1 : 2);

@@ -250,6 +250,7 @@ struct RtPac {
   static int dy(uint8_t d) { return (d == 2) - (d == 1); }
   static uint8_t back(uint8_t d) { static const uint8_t O[5] = { 0, 2, 1, 4, 3 }; return O[d]; }
 
+  void begin(uint32_t seed) { begin(seed, 2); }    // online: always two
   void begin(uint32_t seed, uint8_t players) {
     memset(this, 0, sizeof(*this));
     rnd = seed | 1;

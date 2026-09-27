@@ -384,18 +384,20 @@ struct NoPause { NoPause() { pauseBlock++; } ~NoPause() { pauseBlock--; } };   /
 
 uint8_t chooseMode(const char *title, const char *const *opts, uint8_t n) {
   NoPause np;
-  uint8_t sel = 0;
+  uint8_t sel = 0, top = 0;
   btnClear();
   while (poll()) {
     if (btn(B_UP)   && sel)         { sel--; sfx(700, 15); }
     if (btn(B_DOWN) && sel < n - 1) { sel++; sfx(700, 15); }
     if (btn(B_OK)) { sfx(1200, 60); return sel; }
+    if (sel < top) top = sel;                         // 4 lines fit, longer lists scroll
+    if (sel >= top + 4) top = sel - 3;
     oled.setFont(FONT_B);
     oled.drawStr(2, 12, title);
     oled.drawHLine(0, TOP_H - 1, SCR_W);
     oled.setFont(FONT);
-    for (uint8_t i = 0; i < n; i++) {
-      uint8_t y = TOP_H + 3 + i * 11;
+    for (uint8_t i = top; i < n && i < top + 4; i++) {
+      uint8_t y = TOP_H + 3 + (i - top) * 11;
       if (i == sel) { oled.drawBox(0, y, SCR_W, 10); oled.setDrawColor(0); }
       oled.drawStr(6, y + 8, opts[i]);
       oled.setDrawColor(1);
