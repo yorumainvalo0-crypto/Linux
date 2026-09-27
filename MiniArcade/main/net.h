@@ -19,7 +19,8 @@ enum NetJob : uint8_t {
   JOB_NEWER,        // another version is online: netRemoteVersion()
   JOB_UPDATING,     // writing a new image (GitHub or upload): netProgress()
   JOB_DONE,         // image written, the board restarts in a moment
-  JOB_ERROR         // netError() says why
+  JOB_ERROR,        // netError() says why
+  JOB_ASKING        // a file was uploaded: install it? netAnswer() decides
 };
 
 bool        netHasConfig();       // WLAN name and password stored?
@@ -41,3 +42,20 @@ NetJob      netJob();
 const char *netRemoteVersion();
 uint8_t     netProgress();        // 0..100 while JOB_UPDATING
 const char *netError();
+const char *netAskVersion();      // version of the uploaded file while JOB_ASKING
+void        netAnswer(bool yes);  // the player's decision on the device
+
+// ---------------- firmware slots ----------------
+/* Two app slots: the running firmware and the one before (or the one just
+   downloaded). A new firmware counts as "pending" until fwConfirm(); if the
+   board restarts before that, the bootloader goes back to the other slot. */
+struct FwSlot {
+  char version[32];
+  bool present;          // holds a firmware
+  bool bootable;         // complete, checksum ok and not marked as failed
+  bool pending;          // started, but not confirmed yet
+};
+void fwSlots(FwSlot s[2]);    // [0] = running, [1] = the other slot
+bool fwStartOther();          // restarts into the other slot, false if it cannot
+void fwConfirm();             // the running firmware works - keep it
+bool fwPending();

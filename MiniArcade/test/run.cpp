@@ -57,7 +57,8 @@ void arcadeTraceStr(const char *s){
 
 static void applyMask(uint8_t m){ for(int i=0;i<5;i++) pinPress[WIRED[i]] = (m>>i&1); }
 
-void simDeepSleep(){ printf("      board went to deep sleep\n"); throw SimEnd{}; }
+static bool simSlept = false;
+void simDeepSleep(){ simSlept = true; printf("      board went to deep sleep\n"); throw SimEnd{}; }
 
 void simDelayMs(uint32_t ms){
   for(uint32_t i=0;i<ms;i++){
@@ -306,6 +307,22 @@ int main(int argc,char**argv){
       script.push_back({9000,16}); script.push_back({9060,0});     // check for update
       script.push_back({9500,16}); script.push_back({9560,0});     // install it
       captureAt={1000,1100};
+  } else if(scenario=="versions"){ simEnd=8000;
+      simTwoSlots=true;                                             // fresh update, nothing pressed
+      script.push_back({6000,2}); script.push_back({6060,0});      // first key press in the menu
+      captureAt={250,500};
+  } else if(scenario=="versions2"){ simEnd=8000;
+      simTwoSlots=true;
+      script.push_back({1600,2}); script.push_back({1660,0});      // pick the previous version
+      script.push_back({1900,16}); script.push_back({1960,0});
+      captureAt={250};
+  } else if(scenario=="versions3"){ simEnd=90000;
+      simTwoSlots=true; simNvsU16["slp"]=1;                        // fresh update, sleep after 1 min
+  } else if(scenario=="upload"){ simEnd=9000; downs(14,1300,250); simUpload=true;
+      script.push_back({5000,16}); script.push_back({5060,0});     // open settings
+      for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
+      script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
+      script.push_back({8300,16}); script.push_back({8360,0});     // OK on the question
   } else if(scenario=="wizard2"){ simEnd=20000;
       /* like "wizard", but the board holds GPIO2 and GPIO10 high through
          external pull-ups - this used to make key detection impossible */
@@ -501,6 +518,22 @@ int main(int argc,char**argv){
     check("settings list the wlan page", saw("wlan and update..."));
     check("address of the update page shown", saw("http://192.168.1.50"));
     check("newer release offered", saw("install 9.3"));
+    check("update written, restart announced", saw("done - restarting"));
+  } else if(scenario=="versions"){
+    check("version choice shown at start", saw("VERSION")&&saw("previous")&&saw("new"));
+    check("countdown shown", saw("3s")&&saw("1s"));
+    check("started the new version by itself", saw("MiniArcade")&&!simSwitched);
+    check("kept after the first key press", simConfirmed);
+  } else if(scenario=="versions2"){
+    check("version choice shown at start", saw("VERSION"));
+    check("switched to the previous version", simSwitched&&saw("STARTING"));
+    check("new version not confirmed", !simConfirmed);
+  } else if(scenario=="versions3"){
+    check("no deep sleep while the update is unconfirmed", !simSlept);
+    check("not confirmed without a key press", !simConfirmed);
+  } else if(scenario=="upload"){
+    check("upload question shown on the device", saw("install firmware")&&saw("v9.4"));
+    check("confirmed with OK", simAnswer==1);
     check("update written, restart announced", saw("done - restarting"));
   } else if(scenario=="wizard2"){
     printf("      learned UP=%u DOWN=%u LEFT=%u RIGHT=%u OK=%u\n",

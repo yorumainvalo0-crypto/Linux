@@ -55,14 +55,34 @@ open, and it needs a cpu clock of at least 80 MHz (the page offers to switch).
 
 The update page in the browser can do the same: check GitHub, or upload a
 `miniarcade.bin` from a release or from `build/` and press "flash". No extra
-software needed. A new image that crashes before the menu appears is rolled
-back to the previous one automatically.
+software needed. An uploaded file is only written after **OK is pressed on
+the console itself** (LEFT = no), so nobody else on the network can flash
+it. Uploads are refused over the open setup hotspot.
+
+WLAN range: many C3 SuperMini boards cannot join at full transmit power, so
+it is limited to 8.5 dBm (menuconfig -> MiniArcade -> transmit power). Raise
+it if the board is far from the router.
+
+### Two versions, never stuck
+
+The board keeps two firmwares: the running one and the one before. The next
+update overwrites the older one.
+
+* **At every start** a "VERSION" page shows both for 3 s (only when two are
+  stored). UP/DOWN and OK start the other one, otherwise the current one
+  starts by itself.
+* **Settings -> "firmware version..."** switches later.
+* A **new version is only kept after the first key press** in the menu. If
+  it shows nothing or the keys do not work, switch the board off and on:
+  the previous version comes back by itself. Until then the sleep timer is
+  paused, because waking up would count as such a restart.
 
 ### First flash (once, by cable)
 
 The updates need a new partition table with two app slots, so the first
 flash after v9.1 has to go over USB:
 
+    idf.py fullclean               # an old sdkconfig still has the old partition table
     idf.py -p COM5 flash           # keeps high scores and settings
 
 or, on a fresh board, `miniarcade-full.bin` from a release at address 0x0
@@ -78,8 +98,10 @@ publish a version, either
 * GitHub -> Actions -> "MiniArcade firmware" -> "Run workflow", enter e.g. `9.3`, or
 * push a tag: `git tag v9.3 && git push origin v9.3`
 
-The release then holds `miniarcade.bin` (for updates), `miniarcade-full.bin`
-(for the first flash) and `version.txt`. The boards look at the repository
+"Run workflow" publishes from `main` only. The release then holds
+`miniarcade.bin` (for updates), `miniarcade-full.bin` (for the first flash)
+and `version.txt`. Versions like `9.3-rc1` become prereleases and are never
+offered to the boards; a board only offers versions newer than its own. The boards look at the repository
 set in `CONFIG_ARCADE_GITHUB_REPO` (menuconfig -> MiniArcade); the GitHub
 build fills in its own repository. The repository must be public.
 

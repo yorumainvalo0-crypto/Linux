@@ -16,7 +16,7 @@ on:
         default: ""
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   host-tests:
@@ -27,7 +27,10 @@ jobs:
         run: sh MiniArcade/test/build.sh
 
   firmware:
+    needs: host-tests                 # no release with failing tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: write                 # only this job publishes
     steps:
       - uses: actions/checkout@v4
 
@@ -38,11 +41,21 @@ jobs:
         run: |
           VER=""
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then VER="${GITHUB_REF_NAME#v}"; fi
-          if [ -n "$INPUT_VERSION" ]; then VER="${INPUT_VERSION#v}"; fi
+          if [ -n "$INPUT_VERSION" ]; then
+            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::publish from main only (this run is on $GITHUB_REF_NAME)"; exit 1
+            fi
+            VER="${INPUT_VERSION#v}"
+          fi
+          if [ -n "$VER" ] && ! echo "$VER" | grep -Eq '^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::version must look like 9.3 or 9.3-rc1, got '$VER'"; exit 1
+          fi
           if [ -n "$VER" ]; then
             echo "$VER" > MiniArcade/version.txt
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+            # "9.3-rc1" is a test build: a prerelease, never offered to the boards
+            case "$VER" in *-*) echo "pre=true" >> "$GITHUB_OUTPUT";; *) echo "pre=false" >> "$GITHUB_OUTPUT";; esac
           fi
           # boards built here look for updates in this repository
           echo "CONFIG_ARCADE_GITHUB_REPO=\"$GITHUB_REPOSITORY\"" >> MiniArcade/sdkconfig.defaults
@@ -67,12 +80,28 @@ jobs:
           name: miniarcade-firmware
           path: out/
 
-      - name: Publish the release
+      # created as a draft first: the boards must never see a release whose
+      # files are still being uploaded
+      - name: Upload the release files
         if: steps.ver.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          make_latest: true
+          draft: true
+          prerelease: ${{ steps.ver.outputs.pre == 'true' }}
           generate_release_notes: true
           files: out/*
+
+      - name: Publish the release
+        if: steps.ver.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          PRE: ${{ steps.ver.outputs.pre }}
+        run: |
+          if [ "$PRE" = "true" ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
