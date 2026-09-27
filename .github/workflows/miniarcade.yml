@@ -139,7 +139,7 @@ jobs:
           for try in 1 2 3; do            # main may move meanwhile: start over from it
             rm -rf /tmp/main; git worktree prune
             git fetch -q origin main
-            git worktree add -q --detach /tmp/main origin/main
+            git worktree add -q --detach /tmp/main FETCH_HEAD
             mkdir -p "/tmp/main/Versions/$V"
             cp out/miniarcade-full.bin out/miniarcade.bin "out/MiniArcade-$V.zip" "/tmp/main/Versions/$V/"
             git -C /tmp/main add "Versions/$V"
