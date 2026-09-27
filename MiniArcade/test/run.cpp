@@ -962,7 +962,7 @@ int main(int argc,char**argv){
   } else if(scenario=="stats"){
     check("stats page drawn with the total time", saw("STATS")&&saw("1h03  AWARDS>"));
     check("per game line", saw("Tetris        3x   1h02"));
-    check("awards page drawn", saw("AWARDS")&&saw("1/22  <STATS")&&saw("* FIRST STEPS")&&saw("- EXPLORER"));
+    check("awards page drawn", saw("AWARDS")&&saw("1/30  <STATS")&&saw("* FIRST STEPS")&&saw("- EXPLORER"));
     check("what an award needs is shown", saw("try every game"));
   } else if(scenario=="wlan"){
     check("settings list the wlan page", saw("wlan and update..."));

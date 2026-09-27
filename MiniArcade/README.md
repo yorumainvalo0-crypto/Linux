@@ -1,15 +1,24 @@
 # MiniArcade - ESP-IDF version
 
-15 games: Tetris, Snake, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders,
-Dino, Breakout, Rocks, Racer, Frogger, Connect Four and Tic Tac Toe.
+22 games: Tetris, Snake, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders,
+Dino, Breakout, Rocks, Racer, Frogger, Connect Four, Tic Tac Toe, 2048,
+Minesweeper, Pac-Man, Shooter, Jump & Run, Sokoban and Battleship.
 Against a second console nearby (Multiplayer): Connect Four, Tic Tac Toe,
-Pong and Snake.
+Pong, Snake, Pac-Man and Battleship.
+
+Ready-made firmware: `MiniArcade-Firmware/` in the repository and every
+release have `MiniArcade-<version>.zip` with a German how-to.
 
 ## Playing
 
     UP/DOWN/LEFT/RIGHT + OK
     hold OK in a game    pause: continue / restart / quit to menu
                          (hold OK once more = quit)
+    UP in the library    jumps from the top to Settings, Stats, Multiplayer
+    Minesweeper          OK opens, a quick double tap on OK sets a flag
+    Sokoban              OK takes the last move back
+    Shooter              the ship fires by itself, OK = bomb
+    Battleship           UP shuffles your fleet before the start
     Stats                how often and how long each game was played, and
                          22 awards (LEFT/RIGHT switches the two pages).
                          A new award pops up with a short tune.
@@ -44,7 +53,9 @@ the WLAN page only exists in this build, because it needs `main/net.h`.
     main/settings.h       settings page
     main/wlan.h           WLAN page and firmware versions
     main/multiplayer.h    multiplayer page and the online games
-    main/rtgames.h        rules of online Pong and Snake (no hardware, tested on the PC)
+    main/rtgames.h        rules of Pong, Snake and Pac-Man for two consoles (no hardware,
+                          tested on the PC); Pac-Man alone uses it too
+    main/sokoban_levels.h the Sokoban levels (generated, every one solved by the test)
     main/arcade.cpp       SSD1306 driver, GPIO, timing, NVS
     main/net.cpp          WLAN, setup hotspot, update page, GitHub updates
     main/linkcore.h       multiplayer protocol (no hardware, tested on the PC)
@@ -120,7 +131,8 @@ the consoles talk directly over ESP-NOW (channel 1), typically 50-200 m.
 
     first line   your own name and code - OK = change the name
     UP / DOWN    choose a player
-    OK           challenge: pick 4 wins, Tic Tac Toe, Pong or Snake
+    OK           challenge: pick 4 wins, Tic Tac Toe, Pong, Snake, Pac-Man
+                 or Battleship
     RIGHT        mark as friend (*) - friends are listed first
     hold OK      back to the games
 
@@ -142,8 +154,11 @@ of both players for it are there, so both screens always show the same
 game - with a bad signal it waits a moment ("waiting...") instead of
 drifting apart. Pong: first to 5 points, your paddle is always on the
 left. Snake: your snake is filled, the other one hollow; whoever hits a
-wall, a body or the other head loses. Consoles with an older firmware do
-not know these two games - the challenge then says "needs an update".
+wall, a body or the other head loses. **Pac-Man** online: both Pac-Men
+share the maze and the dots, the ghosts hunt whoever is nearer, and when
+the dots are gone the higher score wins. **Battleship** takes turns like
+4 wins. Consoles with an older firmware do not know the newer games - the
+challenge then says "needs an update".
 
 ### Version numbers and publishing an update
 
@@ -173,6 +188,7 @@ build fills in its own repository. The repository must be public.
     ESP-IDF 5.3.2       785 kB firmware  9.3: WLAN, TLS, updates and multiplayer -
                                          each update slot holds 1.9 MB
     ESP-IDF 5.3.2       792 kB firmware  9.4: + pause, stats, awards, online Pong / Snake
+    ESP-IDF 5.3.2       797 kB firmware  9.5: + 7 games, online Pac-Man and Battleship
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 
