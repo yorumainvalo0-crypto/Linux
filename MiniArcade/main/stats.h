@@ -7,10 +7,10 @@
 /* Kept as one small blob in flash and written only when a game is left,
    so the flash does not wear out. Times are counted with gameMillis(),
    the pause menu does not count.                                        */
-#define ST_GAMES 16                     // room for this many games
+#define ST_GAMES 32                     // room for this many games
 
 struct __attribute__((packed)) StatBlob {
-  uint8_t  ver;
+  uint8_t  ver;                         // 2 (version 1 had room for 16 games)
   uint16_t plays[ST_GAMES];             // times started (a restart counts)
   uint32_t secs[ST_GAMES];              // seconds played
   uint32_t awards;                      // one bit per award
@@ -19,14 +19,31 @@ struct __attribute__((packed)) StatBlob {
 static StatBlob st;
 static bool     stLoaded = false;
 
+struct __attribute__((packed)) StatBlob1 {   // firmware 9.4
+  uint8_t  ver;
+  uint16_t plays[16];
+  uint32_t secs[16];
+  uint32_t awards;
+  uint16_t mpGames, mpWins;
+};
+
 void statLoad() {
   if (stLoaded) return;
   stLoaded = true;
   memset(&st, 0, sizeof(st));
   prefs.begin("arcade", true);
   size_t n = prefs.getBytes("stats", &st, sizeof(st));
+  if (n != sizeof(st) || st.ver != 2) {
+    StatBlob1 o;
+    memset(&st, 0, sizeof(st));
+    if (prefs.getBytes("stats", &o, sizeof(o)) == sizeof(o) && o.ver == 1) {   // keep it all
+      memcpy(st.plays, o.plays, sizeof(o.plays));
+      memcpy(st.secs, o.secs, sizeof(o.secs));
+      st.awards = o.awards; st.mpGames = o.mpGames; st.mpWins = o.mpWins;
+    }
+    st.ver = 2;
+  }
   prefs.end();
-  if (n != sizeof(st) || st.ver != 1) { memset(&st, 0, sizeof(st)); st.ver = 1; }
 }
 
 void statSave() {

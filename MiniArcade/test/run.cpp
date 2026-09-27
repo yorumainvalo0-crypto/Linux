@@ -195,6 +195,10 @@ static void check(const char*w,bool ok){ printf("  [%s] %s\n", ok?"OK":"FAIL", w
 static void downs(int k, uint32_t t0=1300, uint32_t step=250){
   for(int i=0;i<k;i++){ script.push_back({t0+i*step,2}); script.push_back({t0+i*step+60,0}); }
 }
+// the library wraps: 1 up = Settings, 2 = Stats, 3 = Multiplayer
+static void ups(int k, uint32_t t0=1300, uint32_t step=250){
+  for(int i=0;i<k;i++){ script.push_back({t0+i*step,1}); script.push_back({t0+i*step+60,0}); }
+}
 
 int main(int argc,char**argv){
   scenario = argc>1?argv[1]:"menu";
@@ -207,7 +211,7 @@ int main(int argc,char**argv){
     for(int i=0;i<5;i++){ simNvsU16["p"+std::to_string(i)]=3+i; simNvsU16["a"+std::to_string(i)]=1; }
   }
 
-  if(scenario=="menu"){        simEnd=10000; downs(17,1300,300); captureAt={30,300,700};
+  if(scenario=="menu"){        simEnd=10000; downs(GAME_COUNT-1,1300,300); captureAt={30,300,700};
   } else if(scenario=="tetris"){ simEnd=60000; script={{1300,16},{1360,0}}; autoplay=true; captureAt={200,900};
   } else if(scenario=="snake"){  simEnd=20000; downs(1);
       script.push_back({1500,16}); script.push_back({1560,0});
@@ -301,8 +305,8 @@ int main(int argc,char**argv){
       script.push_back({31600,2});  script.push_back({31660,0});
       script.push_back({31900,16}); script.push_back({31960,0});   // ... quit to menu
       captureAt={900};
-  } else if(scenario=="stats"){   simEnd=9000; downs(16,1300,200);
-      StatBlob b; memset(&b,0,sizeof(b)); b.ver=1;
+  } else if(scenario=="stats"){   simEnd=9000; ups(2,1300,200);
+      StatBlob1 b; memset(&b,0,sizeof(b)); b.ver=1;                 // as 9.4 stored it
       b.plays[0]=3; b.secs[0]=3725; b.plays[1]=1; b.secs[1]=61; b.awards=1;
       simNvsBlob["stats"]=std::string((const char*)&b,sizeof(b));
       script.push_back({5000,16}); script.push_back({5060,0});     // open stats
@@ -312,7 +316,7 @@ int main(int argc,char**argv){
   } else if(scenario=="sleep"){   simEnd=90000;
       simNvsU16["slp"]=1;                       // one minute, then nothing happens
       captureAt={200};
-  } else if(scenario=="settings"){ simEnd=26000; downs(17,1300,220);
+  } else if(scenario=="settings"){ simEnd=26000; ups(1,1300,220);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
       script.push_back({5900,4});  script.push_back({5960,0});
@@ -331,7 +335,7 @@ int main(int argc,char**argv){
       script.push_back({10800,1}); script.push_back({10860,0});
       script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
       captureAt={1000,1700};
-  } else if(scenario=="wlan"){ simEnd=12000; downs(17,1300,220);
+  } else if(scenario=="wlan"){ simEnd=12000; ups(1,1300,220);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
       script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
@@ -351,7 +355,7 @@ int main(int argc,char**argv){
       captureAt={250};
   } else if(scenario=="versions3"){ simEnd=90000;
       simTwoSlots=true; simNvsU16["slp"]=1;                        // fresh update, sleep after 1 min
-  } else if(scenario=="upload"){ simEnd=9000; downs(17,1300,220); simUpload=true;
+  } else if(scenario=="upload"){ simEnd=9000; ups(1,1300,220); simUpload=true;
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
       script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
@@ -361,7 +365,7 @@ int main(int argc,char**argv){
       if(scenario=="mpno")   simBotAnswer=0;
       if(scenario=="mpwait") simBotAnswer=-1;
       if(scenario=="mpleft") simBotLeaveAfter=2;
-      downs(15,1300,180);
+      ups(3,1300,180);
       script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
       script.push_back({6500,2});  script.push_back({6560,0});     // ANNA's row
       script.push_back({6900,16}); script.push_back({6960,0});     // challenge ...
@@ -371,7 +375,7 @@ int main(int argc,char**argv){
         script.push_back({t+200,16}); script.push_back({t+260,0}); }
   } else if(scenario=="mppong"||scenario=="mpsnake"){ simEnd=90000;
       bool pong = scenario=="mppong";
-      downs(15,1300,180);
+      ups(3,1300,180);
       script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
       script.push_back({6500,2});  script.push_back({6560,0});     // ANNA's row
       script.push_back({6900,16}); script.push_back({6960,0});     // challenge ...
@@ -383,7 +387,7 @@ int main(int argc,char**argv){
       captureAt={2200,2600};
   } else if(scenario=="mpold"){ simEnd=12000;
       simBotOld=true;                                              // ANNA runs an old firmware
-      downs(15,1300,180);
+      ups(3,1300,180);
       script.push_back({4300,16}); script.push_back({4360,0});
       script.push_back({6500,2});  script.push_back({6560,0});
       script.push_back({6900,16}); script.push_back({6960,0});
@@ -392,7 +396,7 @@ int main(int argc,char**argv){
       script.push_back({8200,16}); script.push_back({8260,0});     // pong
   } else if(scenario=="mpin"){ simEnd=40000;
       simBotInviteAt=7000; simBotGame=LKG_TTT;
-      downs(15,1300,180);
+      ups(3,1300,180);
       script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
       script.push_back({9000,16}); script.push_back({9060,0});     // accept the challenge
       for(uint32_t t=11000;t<36000;t+=400){                       // wander and place
@@ -400,7 +404,7 @@ int main(int argc,char**argv){
         script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
         script.push_back({t+180,16}); script.push_back({t+240,0}); }
   } else if(scenario=="mpname"){ simEnd=9000;
-      downs(15,1300,180);
+      ups(3,1300,180);
       script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
       script.push_back({6000,16}); script.push_back({6060,0});     // own row: rename
       script.push_back({6500,1});  script.push_back({6560,0});     // P -> Q
@@ -691,7 +695,7 @@ int main(int argc,char**argv){
   } else if(scenario=="sleep"){   simEnd=90000;
       simNvsU16["slp"]=1;                       // one minute, then nothing happens
       captureAt={200};
-  } else if(scenario=="settings"){ simEnd=26000; downs(17,1300,220);
+  } else if(scenario=="settings"){ simEnd=26000; ups(1,1300,220);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
       script.push_back({5900,4});  script.push_back({5960,0});
