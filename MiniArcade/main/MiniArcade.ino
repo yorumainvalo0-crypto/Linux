@@ -307,8 +307,10 @@ void statusBar(const char *title, uint16_t score, uint16_t best) {
   oled.setFont(FONT);
   snprintf(b, sizeof(b), "%u", score);
   oled.drawStr(x, 12, b);
+  uint8_t end = x + oled.getStrWidth(b) + 4;             // first free column
   snprintf(b, sizeof(b), "BEST %u", best);
-  rightStr(12, b);
+  if (SCR_W - 2 - oled.getStrWidth(b) < end) snprintf(b, sizeof(b), "HI %u", best);
+  if (SCR_W - 2 - oled.getStrWidth(b) >= end) rightStr(12, b);   // long title: drop it
   oled.drawHLine(0, TOP_H - 1, SCR_W);
 }
 
@@ -1031,12 +1033,12 @@ void tetrisRun() {
         while (!tHit(p, r, px, py + 1)) py++;
         drop = true;
       }
-      if (btnHeld(B_DOWN)) nextFall = 0;                 // soft drop
+      if (btnHeld(B_DOWN) && nextFall > millis() + 40) nextFall = millis() + 40;   // soft drop
 
       // ---- gravity ----
       uint32_t now = millis();
       if (drop || now >= nextFall) {
-        uint16_t step = 500 - (uint16_t)level * 40;
+        int16_t step = 500 - (int16_t)level * 40;       // signed: level 13+ went negative
         if (step < 100) step = 100;
         if (!drop && !tHit(p, r, px, py + 1)) {
           py++;
@@ -1104,7 +1106,11 @@ void snakeRun() {
 
       uint32_t now = millis();
       if (now >= nextStep) {
-        nextStep = now + (btnHeld(B_OK) ? stepMs / 3 : stepMs);   // OK = boost
+        // boost: keep holding the key of the current direction (holding OK
+        // would mean "back to the menu")
+        bool boost = (dx > 0 && btnHeld(B_RIGHT)) || (dx < 0 && btnHeld(B_LEFT)) ||
+                     (dy > 0 && btnHeld(B_DOWN))  || (dy < 0 && btnHeld(B_UP));
+        nextStep = now + (boost ? stepMs / 3 : stepMs);
         dx = ndx; dy = ndy;
         int8_t hx = (int8_t)(body[0] >> 8) + dx;
         int8_t hy = (int8_t)(body[0] & 0xFF) + dy;
@@ -1124,8 +1130,8 @@ void snakeRun() {
           while (true) {                                          // respawn food
             fx = random(S_W); fy = random(S_H);
             uint16_t f = ((uint16_t)fx << 8) | fy;
-            bool bad = false;
-            for (uint16_t i = 0; i < len; i++) if (body[i] == f) { bad = true; break; }
+            bool bad = (f == head);                               // the head moves there now
+            for (uint16_t i = 0; i + 1 < len && !bad; i++) if (body[i] == f) bad = true;
             if (!bad) break;
           }
         }
@@ -1173,6 +1179,7 @@ void pongRun() {
         uint8_t sp = 2 + score / 20; if (sp > 4) sp = 4;
         if (bt > at + 1 && ay < P_BOT - P_PH) ay += sp;
         if (bt < at - 1 && ay > P_TOP)        ay -= sp;
+        if (ay < P_TOP) ay = P_TOP;                      // not into the status bar
 
         bx += vx; by += vy;
         if (by < (P_TOP << 4))       { by = P_TOP << 4;       vy = -vy; }
@@ -1187,6 +1194,7 @@ void pongRun() {
             vy += ((int16_t)(byp - (py + P_PH / 2))) * 2;        // angle from hit point
             if (vy >  24) vy =  24;
             if (vy < -24) vy = -24;
+            if (vy > -3 && vy < 3) vy = random(2) ? 5 : -5;     // never perfectly flat
             sfx(750, 30);
             score++;
           }
@@ -1265,6 +1273,31 @@ static uint16_t dCast(int32_t px, int32_t py, uint8_t ra, uint8_t *side) {
   return (uint16_t)perp;
 }
 
+/* steps from every free cell to the player, so monsters walk around walls
+   instead of through them (breadth first search over the 16x16 maze)     */
+static uint8_t dDist[16][16];
+
+static void dFlow(int32_t px, int32_t py) {
+  static const int8_t DIR[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+  uint8_t q[256];
+  uint16_t head = 0, tail = 0;
+  memset(dDist, 255, sizeof(dDist));
+  uint8_t sx = px >> 8, sy = py >> 8;
+  dDist[sy][sx] = 0;
+  q[tail++] = sy * 16 + sx;
+  while (head < tail) {
+    uint8_t c = q[head++];
+    int8_t cx = c & 15, cy = c >> 4;
+    for (uint8_t k = 0; k < 4; k++) {
+      int8_t nx = cx + DIR[k][0], ny = cy + DIR[k][1];
+      if (nx < 0 || nx > 15 || ny < 0 || ny > 15 || ((D_MAP[ny] >> nx) & 1)) continue;
+      if (dDist[ny][nx] != 255) continue;
+      dDist[ny][nx] = dDist[cy][cx] + 1;
+      q[tail++] = ny * 16 + nx;
+    }
+  }
+}
+
 struct DMon { int32_t x, y; bool alive; };
 static DMon dMon[D_MON];          // global: keeps the .ino auto prototypes happy
 
@@ -1314,10 +1347,22 @@ void doomRun() {
           if (!dWall(px, ny)) py = ny;
         }
 
+        dFlow(px, py);
         for (uint8_t i = 0; i < D_MON; i++) {
           if (!dMon[i].alive) { dSpawn(i, px, py); continue; }
-          dMon[i].x += (px > dMon[i].x) ? 6 : -6;
-          dMon[i].y += (py > dMon[i].y) ? 6 : -6;
+          int8_t  mcx = dMon[i].x >> 8, mcy = dMon[i].y >> 8;
+          int32_t tx = px, ty = py;                  // same cell: straight at you
+          uint8_t best = dDist[mcy][mcx];
+          static const int8_t DIR[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+          for (uint8_t k = 0; k < 4; k++) {          // otherwise to the next cell on the way
+            int8_t nx = mcx + DIR[k][0], ny = mcy + DIR[k][1];
+            if (nx < 0 || nx > 15 || ny < 0 || ny > 15) continue;
+            if (dDist[ny][nx] < best) { best = dDist[ny][nx]; tx = nx * 256 + 128; ty = ny * 256 + 128; }
+          }
+          int32_t mx = dMon[i].x + constrain(tx - dMon[i].x, -6, 6);
+          int32_t my = dMon[i].y + constrain(ty - dMon[i].y, -6, 6);
+          if (!dWall(mx, dMon[i].y)) dMon[i].x = mx;
+          if (!dWall(dMon[i].x, my)) dMon[i].y = my;
           if (abs(px - dMon[i].x) + abs(py - dMon[i].y) < 90) {   // it got you
             hp--;
             dMon[i].alive = false;
@@ -1444,9 +1489,12 @@ static void tuLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
 
 /* Every third ring carries a barrier that blocks half of the opening, so
    you have to move out of the way instead of coasting down the middle.  */
+static uint32_t tuSeed;                      // new barrier order every run
+
 static uint8_t tuBar(int32_t idx) {          // 0 = free, 1..4 = blocked side
   if (idx < 6 || idx % 4) return 0;          // a few free rings to settle in
-  return 1 + (uint8_t)((idx * 7 + (idx >> 2)) & 3);
+  uint32_t h = (uint32_t)idx * 2654435761u + tuSeed;
+  return 1 + (uint8_t)((h >> 13) & 3);
 }
 
 /* centre of ring number idx; the tube bends with two slow sine waves */
@@ -1467,6 +1515,7 @@ void tunnelRun() {
     uint16_t score = 0;
     uint8_t  speed = 10;
     uint32_t next = 0;
+    tuSeed = random(0x7FFFFFFF);
     btnClear();
 
     while (poll()) {
@@ -1477,7 +1526,6 @@ void tunnelRun() {
         if (btnHeld(B_RIGHT)) shipX += 3;
         if (btnHeld(B_UP))    shipY -= 3;
         if (btnHeld(B_DOWN))  shipY += 3;
-        if (btnHeld(B_OK) && speed < 40) speed++;      // boost
         if (shipX >  60) shipX =  60;
         if (shipX < -60) shipX = -60;
         if (shipY >  40) shipY =  40;
@@ -1537,10 +1585,13 @@ void tunnelRun() {
           if (bar == 2) x0 = cx + edge;               // right side closed
           if (bar == 3) y1 = cy - edge;               // top closed
           if (bar == 4) y0 = cy + edge;               // bottom closed
+          if (x0 < 0) x0 = 0;                         // near rings are huge: clip first
+          if (x1 > SCR_W - 1) x1 = SCR_W - 1;
+          if (y0 < TOP_H) y0 = TOP_H;
+          if (y1 > SCR_H - 1) y1 = SCR_H - 1;
           for (int16_t yy = y0; yy <= y1; yy++)
             for (int16_t xx = x0; xx <= x1; xx++)
-              if (xx >= 0 && xx < SCR_W && yy >= TOP_H && yy < SCR_H && dInk(xx, yy, lvl))
-                oled.drawPixel(xx, yy);
+              if (dInk(xx, yy, lvl)) oled.drawPixel(xx, yy);
         }
         if (psz > 0 && i <= 6) {                      // struts along the tube
           tuLine(pcx - psz, pcy - psz, cx - sz, cy - sz);
@@ -1566,7 +1617,9 @@ void tunnelRun() {
 // =========================================================
 #define F_TOP  (TOP_H + 1)
 #define F_BOT  (SCR_H - 1)
-#define F_GAP  22
+#define F_GAP  22             // gap at the start ...
+#define F_GAPMIN 17            // ... shrinks by one every 10 points down to this
+#define F_SHIFT 20             // next gap at most this far from the last one
 #define F_PIPES 3
 #define F_BX   24              // bird x position
 
@@ -1576,10 +1629,15 @@ void flappyRun() {
     again = false;
     int16_t by = ((F_TOP + F_BOT) / 2) << 4, vy = 0;   // bird y / speed, Q4
     int16_t fx[F_PIPES];
-    uint8_t fg[F_PIPES];
+    uint8_t fg[F_PIPES], fh[F_PIPES];              // gap top and gap height per pipe
+    uint8_t last = (F_TOP + F_BOT - F_GAP) / 2;
     for (uint8_t i = 0; i < F_PIPES; i++) {
       fx[i] = SCR_W + i * 44;
+      fh[i] = F_GAP;
       fg[i] = F_TOP + 4 + random(F_BOT - F_TOP - F_GAP - 8);
+      if (fg[i] > last + F_SHIFT) fg[i] = last + F_SHIFT;
+      if (fg[i] + F_SHIFT < last) fg[i] = last - F_SHIFT;
+      last = fg[i];
     }
     uint16_t score = 0;
     uint32_t next = 0;
@@ -1603,11 +1661,17 @@ void flappyRun() {
           if (old + 8 > F_BX && fx[i] + 8 <= F_BX) { score++; sfx(1200, 40); }   // passed
           if (fx[i] < -8) {
             fx[i] += F_PIPES * 44;
-            fg[i] = F_TOP + 4 + random(F_BOT - F_TOP - F_GAP - 8);
+            uint8_t h = F_GAP - score / 10;
+            if (h < F_GAPMIN || h > F_GAP) h = F_GAPMIN;
+            uint8_t prev = fg[(i + F_PIPES - 1) % F_PIPES];         // the pipe before it
+            fh[i] = h;
+            fg[i] = F_TOP + 4 + random(F_BOT - F_TOP - h - 8);
+            if (fg[i] > prev + F_SHIFT) fg[i] = prev + F_SHIFT;
+            if (fg[i] + F_SHIFT < prev) fg[i] = prev - F_SHIFT;
           }
           int16_t bt = by >> 4, bb = bt + 5;                       // bird box
           if (fx[i] < F_BX + 6 && fx[i] + 8 > F_BX &&
-              (bt < fg[i] || bb > fg[i] + F_GAP)) dead = true;
+              (bt < fg[i] || bb > fg[i] + fh[i])) dead = true;
         }
         if (dead) { again = gameOver(score); break; }
       }
@@ -1619,7 +1683,7 @@ void flappyRun() {
         uint8_t w = 8 - (x - fx[i]);
         if (x + w > SCR_W) w = SCR_W - x;
         oled.drawFrame(x, F_TOP, w, fg[i] - F_TOP);
-        oled.drawFrame(x, fg[i] + F_GAP, w, F_BOT - fg[i] - F_GAP + 1);
+        oled.drawFrame(x, fg[i] + fh[i], w, F_BOT - fg[i] - fh[i] + 1);
       }
       oled.drawBox(F_BX, by >> 4, 6, 5);                           // bird
       oled.setDrawColor(0);
@@ -1646,7 +1710,7 @@ void invadersRun() {
   while (again) {
     again = false;
     uint16_t score = 0;
-    uint8_t  lives = 3, wave = 0, ship = 60, stepMs = 90;
+    uint8_t  lives = 3, wave = 0, ship = 60, stepMs = 90, baseMs = 90;
     int16_t  ax = 2, ay = V_TOP;
     int8_t   adir = 1;
     int16_t  shotX = -1, shotY = 0;
@@ -1657,12 +1721,12 @@ void invadersRun() {
 
     while (poll()) {
       uint32_t now = millis();
-      if (btnHeld(B_LEFT)  && ship > 1)           ship -= 2;
-      if (btnHeld(B_RIGHT) && ship < SCR_W - 10)  ship += 2;
       if (btnTap(B_OK) && shotX < 0) { shotX = ship + 4; shotY = SCR_H - 8; sfx(280, 30); }
 
       if (now >= nextFrame) {                       // bullets run smoothly
         nextFrame = now + 25;
+        if (btnHeld(B_LEFT)  && ship > 1)           ship -= 2;   // same speed at any frame rate
+        if (btnHeld(B_RIGHT) && ship < SCR_W - 10)  ship += 2;
         if (shotX >= 0) { shotY -= 4; if (shotY < TOP_H) shotX = -1; }
         for (uint8_t b = 0; b < 3; b++)
           if (bombX[b] >= 0) {
@@ -1694,7 +1758,9 @@ void invadersRun() {
         next = now + stepMs;
         ax += adir * 2;
         if (ax < 1 || ax + V_COLS * V_CW > SCR_W - 1) { adir = -adir; ay += 3; }
-        if (ay + V_ROWS * V_CH >= SCR_H - 6) { again = gameOver(score); break; }
+        int8_t low = V_ROWS - 1;                    // lowest row that still has aliens
+        while (low > 0 && !vAlive[low]) low--;
+        if (ay + (low + 1) * V_CH >= SCR_H - 6) { again = gameOver(score); break; }
 
         for (uint8_t b = 0; b < 3; b++)             // drop a bomb
           if (bombX[b] < 0 && random(100) < 12) {
@@ -1715,9 +1781,10 @@ void invadersRun() {
           wave++;
           score += 50;
           ay = V_TOP; ax = 2; adir = 1;
-          if (stepMs > 40) stepMs -= 10;
+          if (baseMs > 50) baseMs -= 10;           // each wave a little faster
+          stepMs = baseMs;
           for (uint8_t r = 0; r < V_ROWS; r++) vAlive[r] = (1 << V_COLS) - 1;
-        } else if (left < 6 && stepMs > 40) stepMs = 45;
+        } else stepMs = (left < 6 && baseMs > 45) ? 45 : baseMs;   // last few rush
       }
 
       statusBar("INVADERS", score, curHigh);
@@ -1848,7 +1915,8 @@ void mineRun() {
         if (actD) { tx = px / M_TS;                        ty = ((py >> 4) + 8) / M_TS; }
         else      { tx = (px + (face > 0 ? 4 : -1)) / M_TS; ty = ((py >> 4) + 3) / M_TS; }
         uint8_t t = mGet(tx, ty);
-        if (t && ty < M_H)      { mSet(tx, ty, 0); inv++; score++; sfx(320, 25); }   // dig
+        bool inside = tx >= 0 && tx < M_W && ty >= 0 && ty < M_H;   // the edge is not diggable
+        if (t && inside)        { mSet(tx, ty, 0); inv++; score++; sfx(320, 25); }   // dig
         else if (!t && inv)     { mSet(tx, ty, 1); inv--; }            // build
       }
     }
@@ -1868,7 +1936,7 @@ void mineRun() {
         uint16_t tex = M_TEX[t];
         for (uint8_t r = 0; r < 4; r++)
           for (uint8_t c = 0; c < 4; c++)
-            if (tex & (0x8000 >> (r * 4 + c)))
+            if ((tex & (0x8000 >> (r * 4 + c))) && ty * M_TS + r - camY >= 0)   // not into the bar
               oled.drawPixel(tx * M_TS + c - camX, ty * M_TS + r - camY + TOP_H);
       }
     int16_t sx = px - camX, sy = (py >> 4) - camY + TOP_H;
@@ -1904,6 +1972,20 @@ void mineRun() {
 static uint8_t dnWidth(uint8_t t)  { return (t == 1) ? 13 : (t == 2 ? 9 : (t == 3 ? 9 : 6)); }
 static uint8_t dnHeight(uint8_t t) { return (t == 2) ? 13 : (t == 3 ? 6 : 9); }
 
+/* Low birds must be jumped over, middle ones ducked under, high ones fly
+   past. Before, the middle one flew over a standing dino - ducking was
+   never needed.                                                          */
+static int16_t dnBirdY(uint8_t h) { return (h == 0) ? DN_GY - 12 : (h == 1 ? DN_GY - 17 : DN_GY - 28); }
+
+/* Smallest distance between two obstacles that can always be cleared at
+   this speed - found by trying every jump / dive / duck timing on a PC.
+   With a fixed 45 px some pairs could not be passed from speed 5 on.   */
+static int16_t dnGap(uint16_t spd) {
+  static const uint8_t g[9] = { 45, 45, 45, 45, 45, 51, 57, 69, 77 };
+  uint8_t v = spd / 8;
+  return g[v > 8 ? 8 : v];
+}
+
 void dinoRun() {
   bool again = true;
   while (again) {
@@ -1911,7 +1993,8 @@ void dinoRun() {
     int16_t  y = 0, vy = 0;                    // height above ground, Q4
     int16_t  ox[DN_OBS], cx[DN_CLOUDS];
     uint8_t  ot[DN_OBS], oh[DN_OBS], cy[DN_CLOUDS];
-    uint16_t score = 0, dist = 0, spd = 26, blink = 0, nextBlink = 100;
+    uint16_t score = 0, spd = 26, blink = 0, nextBlink = 100;
+    uint32_t dist = 0;                         // 16 bit wrapped: score stopped at 818
     bool     night = false;
     uint32_t next = 0;
     for (uint8_t i = 0; i < DN_OBS; i++) {
@@ -1934,7 +2017,7 @@ void dinoRun() {
         y += vy;
         if (y > 0) { y = 0; vy = 0; }
         dist += spd;
-        score = dist / 80;
+        score = (dist / 80 > 65535) ? 65535 : (uint16_t)(dist / 80);
         if (spd < 64) spd = 26 + score / 5;
         if (score >= nextBlink) { nextBlink += 100; blink = 30; sfx(1150, 120); }
         if (blink) blink--;
@@ -1947,12 +2030,12 @@ void dinoRun() {
           if (ox[i] < -16) {                              // recycle behind the screen
             int16_t far = ox[0];
             for (uint8_t k = 1; k < DN_OBS; k++) if (ox[k] > far) far = ox[k];
-            ox[i] = far + 45 + random(50);
+            ox[i] = far + dnGap(spd) + random(50);
             ot[i] = (score > 30 && random(4) == 0) ? 3 : random(3);
             oh[i] = (ot[i] == 3) ? random(3) : 0;         // three flight heights
           }
           int16_t ow = dnWidth(ot[i]), ohh = dnHeight(ot[i]);
-          int16_t oy = (ot[i] == 3) ? (DN_GY - 12 - oh[i] * 8) : (DN_GY - ohh);
+          int16_t oy = (ot[i] == 3) ? dnBirdY(oh[i]) : (DN_GY - ohh);
           if (ox[i] < DN_X + (duck ? 12 : 8) && ox[i] + ow > DN_X + 1 &&
               oy < dt + dh && oy + ohh > dt) {
             again = gameOver(score);
@@ -2014,7 +2097,7 @@ void dinoRun() {
       for (uint8_t i = 0; i < DN_OBS; i++) {              // obstacles
         if (ox[i] > SCR_W || ox[i] < -16) continue;
         if (ot[i] == 3) {                                 // pterodactyl
-          int16_t by = DN_GY - 12 - oh[i] * 8;
+          int16_t by = dnBirdY(oh[i]);
           oled.drawBox(ox[i] + 2, by + 2, 5, 3);
           oled.drawPixel(ox[i] + 7, by + 2);
           bool up = (dist / 50) & 1;
@@ -2104,6 +2187,7 @@ void breakoutRun() {
             vy = -vy;
             sfx(850, 25);
             score += 10 * (level + 1);
+            break;                                     // one brick per step: no tunnelling
           }
         }
         uint8_t left = 0;
@@ -2125,7 +2209,7 @@ void breakoutRun() {
             oled.drawBox(c * BR_BW + 1, BR_TOP + r * (BR_BH + 2), BR_BW - 2, BR_BH);
       oled.drawBox(pad, 61, 25, 3);
       oled.drawBox(bx >> 4, by >> 4, 3, 3);
-      for (uint8_t i = 1; i < lives; i++) oled.drawBox(SCR_W - i * 5, 18, 3, 3);
+      for (uint8_t i = 1; i < lives; i++) oled.drawBox(SCR_W - i * 5, 52, 3, 3);   // below the bricks
       oled.sendBuffer();
     }
   }
@@ -2148,6 +2232,19 @@ static void asWrap(int16_t *x, int16_t *y) {
   if (*y >= (SCR_H << 4))  *y -= (SCR_H - AS_TOP) << 4;
 }
 
+static void asSpawn(uint8_t i, int16_t x, int16_t y, uint8_t size);
+
+// a random place for a new rock that is not on top of the ship
+static void asSpawnFar(uint8_t i, int16_t sx, int16_t sy) {
+  int16_t x, y;
+  for (uint8_t tries = 0; tries < 30; tries++) {
+    x = random(SCR_W); y = AS_TOP + random(SCR_H - AS_TOP);
+    int16_t dx = x - (sx >> 4), dy = y - (sy >> 4);
+    if (dx * dx + dy * dy > 28 * 28) break;
+  }
+  asSpawn(i, x << 4, y << 4, 3);
+}
+
 static void asSpawn(uint8_t i, int16_t x, int16_t y, uint8_t size) {
   asX[i] = x; asY[i] = y; asSize[i] = size;
   asVX[i] = (int16_t)random(-6, 7);
@@ -2161,15 +2258,14 @@ void asteroidsRun() {
   while (again) {
     again = false;
     int16_t sx = (SCR_W / 2) << 4, sy = ((AS_TOP + SCR_H) / 2) << 4, svx = 0, svy = 0;
-    uint8_t ang = 192, lives = 3, wave = 1;
+    uint8_t ang = 192, lives = 3, wave = 1, safe = 50;   // safe: steps without collisions
     int16_t shx[AS_SHOTS], shy[AS_SHOTS], shvx[AS_SHOTS], shvy[AS_SHOTS];
     uint8_t shl[AS_SHOTS];
     uint16_t score = 0;
     uint32_t next = 0;
     for (uint8_t i = 0; i < AS_SHOTS; i++) shl[i] = 0;
     for (uint8_t i = 0; i < AS_N; i++) asSize[i] = 0;
-    for (uint8_t i = 0; i < 4; i++)
-      asSpawn(i, random(SCR_W) << 4, (AS_TOP + random(SCR_H - AS_TOP)) << 4, 3);
+    for (uint8_t i = 0; i < 4; i++) asSpawnFar(i, sx, sy);
     btnClear();
 
     while (poll()) {
@@ -2225,22 +2321,22 @@ void asteroidsRun() {
           asWrap(&asX[a], &asY[a]);
           int16_t dx = (sx - asX[a]) >> 4, dy = (sy - asY[a]) >> 4;
           int16_t r = asSize[a] * 3 + 2;
-          if (dx * dx + dy * dy < r * r) {                     // ship hit
+          if (!safe && dx * dx + dy * dy < r * r) {            // ship hit
             if (--lives == 0) { again = gameOver(score); goto astDone; }
             sx = (SCR_W / 2) << 4; sy = ((AS_TOP + SCR_H) / 2) << 4;
             svx = svy = 0;
             asSize[a] = 0;
+            safe = 50;                                         // 1.5 s to get going
           }
         }
+        if (safe) safe--;
         if (!alive) {                                          // next wave
           wave++;
           score += 50;
-          for (uint8_t i = 0; i < 3 + (wave > 3 ? 2 : wave / 2); i++)
-            asSpawn(i, random(SCR_W) << 4, (AS_TOP + random(SCR_H - AS_TOP)) << 4, 3);
+          for (uint8_t i = 0; i < 3 + (wave > 3 ? 2 : wave / 2); i++) asSpawnFar(i, sx, sy);
         }
       }
 
-      statusBar("ROCKS", score, curHigh);
       for (uint8_t a = 0; a < AS_N; a++) {                     // rocks as polygons
         if (!asSize[a]) continue;
         int16_t cx = asX[a] >> 4, cy = asY[a] >> 4, r = asSize[a] * 3;
@@ -2258,13 +2354,19 @@ void asteroidsRun() {
         int16_t nx = cx + ((DCOS(ang) * 5) >> 10),      ny = cy + ((DSIN(ang) * 5) >> 10);
         int16_t lx = cx + ((DCOS(ang + 100) * 4) >> 10), ly = cy + ((DSIN(ang + 100) * 4) >> 10);
         int16_t rx = cx + ((DCOS(ang - 100) * 4) >> 10), ry = cy + ((DSIN(ang - 100) * 4) >> 10);
-        oled.drawLine(nx, ny, lx, ly);
-        oled.drawLine(nx, ny, rx, ry);
-        oled.drawLine(lx, ly, rx, ry);
+        if (!safe || (safe / 4) & 1) {                         // blinks while safe
+          oled.drawLine(nx, ny, lx, ly);
+          oled.drawLine(nx, ny, rx, ry);
+          oled.drawLine(lx, ly, rx, ry);
+        }
       }
       for (uint8_t i = 0; i < AS_SHOTS; i++)
         if (shl[i]) oled.drawBox(shx[i] >> 4, shy[i] >> 4, 2, 2);
       for (uint8_t i = 1; i < lives; i++) oled.drawBox(SCR_W - i * 5, 18, 3, 3);
+      oled.setDrawColor(0);                                    // rocks near the top edge
+      oled.drawBox(0, 0, SCR_W, TOP_H);                        // must not cover the bar
+      oled.setDrawColor(1);
+      statusBar("ROCKS", score, curHigh);
       oled.sendBuffer();
     }
     astDone: ;
@@ -2782,8 +2884,16 @@ void connect4Run() {
             uint8_t c = c4Think(mode);
             c4Drop(c, 2);
             sfx(350, 40);
-            if (c4Wins(2)) { again = gameOver(score); break; }
-            if (c4Full()) { memset(c4, 0, sizeof(c4)); }
+            if (c4Wins(2)) {                     // let the player see how it happened
+              sfx(200, 250);
+              for (uint8_t i = 0; i < 45 && poll(); i++) c4Draw(sel, "CPU WINS", score);
+              again = gameOver(score);
+              break;
+            }
+            if (c4Full()) {
+              for (uint8_t i = 0; i < 30 && poll(); i++) c4Draw(sel, "DRAW", score);
+              memset(c4, 0, sizeof(c4));
+            }
           }
         }
       }

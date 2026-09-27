@@ -24,4 +24,7 @@ void     deepSleepUntilButton(uint8_t pin, uint8_t level);
 void     randomSeed(unsigned long seed);
 long     random(long max);
 long     random(long lo, long hi);
+#ifndef constrain
+#define constrain(v, lo, hi) ((v) < (lo) ? (lo) : ((v) > (hi) ? (hi) : (v)))
+#endif
 #include "esp_random.h"   // IDF provides this one
