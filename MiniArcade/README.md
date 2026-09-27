@@ -18,7 +18,10 @@ release have `MiniArcade-<version>.zip` with a German how-to.
     Minesweeper          OK opens, a quick double tap on OK sets a flag
     Sokoban              OK takes the last move back
     Shooter              the ship fires by itself, OK = bomb
-    Battleship           UP shuffles your fleet before the start
+    Battleship           before the start: UP mixes a fleet, DOWN places the
+                         ships by hand (OK sets one down, double OK turns it)
+                         marks: square = missed shot, X = hit, solid = sunk,
+                         dot = water next to a sunk ship
     Stats                how often and how long each game was played, and
                          22 awards (LEFT/RIGHT switches the two pages).
                          A new award pops up with a short tune.
