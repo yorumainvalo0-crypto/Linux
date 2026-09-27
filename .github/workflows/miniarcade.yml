@@ -3,7 +3,8 @@
 #   - main gets a MiniArcade/version.txt whose number has no release yet
 #     (so: raise the number in the pull request, merge, done), or
 #   - a tag "v9.3" is pushed, or "Run workflow" is started with a version.
-# The boards fetch their updates from releases/latest/download/.
+# The boards fetch their updates from releases/latest/download/, and the
+# files are also added to Versions/<version>/ on main for flashing by hand.
 name: MiniArcade firmware
 
 on:
@@ -89,7 +90,7 @@ jobs:
           # everything in one zip named after the version, with the German how-to
           V="${{ steps.ver.outputs.version }}"
           [ -n "$V" ] || V=$(tr -d ' \r\n' < MiniArcade/version.txt)
-          cp MiniArcade-Firmware/ANLEITUNG.txt out/
+          cp Versions/ANLEITUNG.txt out/
           (cd out && zip -q -9 "MiniArcade-$V.zip" miniarcade-full.bin miniarcade.bin version.txt ANLEITUNG.txt && rm ANLEITUNG.txt)
           ls -l out
 
@@ -124,3 +125,27 @@ jobs:
           else
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           fi
+
+      # the same files also go into Versions/<version>/ on main, where they
+      # are easy to find for flashing by hand (test builds like 9.6-rc1 not)
+      - name: Add the version to Versions/ on main
+        if: steps.ver.outputs.publish == 'true' && steps.ver.outputs.pre != 'true'
+        continue-on-error: true           # a refused push must not spoil the release
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for try in 1 2 3; do            # main may move meanwhile: start over from it
+            rm -rf /tmp/main; git worktree prune
+            git fetch -q origin main
+            git worktree add -q --detach /tmp/main origin/main
+            mkdir -p "/tmp/main/Versions/$V"
+            cp out/miniarcade-full.bin out/miniarcade.bin "out/MiniArcade-$V.zip" "/tmp/main/Versions/$V/"
+            git -C /tmp/main add "Versions/$V"
+            if git -C /tmp/main diff --cached --quiet; then echo "Versions/$V is up to date"; exit 0; fi
+            git -C /tmp/main commit -q -m "Versions: add MiniArcade $V"
+            if git -C /tmp/main push -q origin HEAD:main; then echo "added Versions/$V"; exit 0; fi
+            sleep 5
+          done
+          exit 1

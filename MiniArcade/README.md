@@ -6,7 +6,7 @@ Minesweeper, Pac-Man, Shooter, Jump & Run, Sokoban and Battleship.
 Against a second console nearby (Multiplayer): Connect Four, Tic Tac Toe,
 Pong, Snake, Pac-Man and Battleship.
 
-Ready-made firmware: `MiniArcade-Firmware/` in the repository and every
+Ready-made firmware: `Versions/<version>/` in the repository and every
 release have `MiniArcade-<version>.zip` with a German how-to.
 
 ## Playing
