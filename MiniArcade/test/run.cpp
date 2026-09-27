@@ -183,6 +183,7 @@ void simFrameSent(const uint8_t* d, size_t n){
 #include "net.h"             // pretend network, before the sketch finds main/net.h
 #include "link.h"            // multiplayer with a bot next door
 #include "MiniArcade.ino"
+#include "sksolve.h"
 
 static bool saw(const char*s){ for(auto&t:seenTexts) if(t.find(s)!=std::string::npos) return true; return false; }
 static uint16_t maxScore(const char*p){
@@ -325,6 +326,13 @@ int main(int argc,char**argv){
       for(uint32_t t=5400;t<58000;t+=600){                        // run right, jump now and then
         script.push_back({t,8}); script.push_back({t+250,9}); script.push_back({t+400,8}); script.push_back({t+580,0}); }
       captureAt={1500,2500};
+  } else if(scenario=="sokoban"){ simEnd=20000; downs(20,1300,150);
+      script.push_back({5000,16}); script.push_back({5060,0});     // level list
+      script.push_back({5500,16}); script.push_back({5560,0});     // play level 1
+      static const uint8_t mv[]={4,4,4,1,4,2,8,8,2,4};             // some steps ...
+      for(int i=0;i<10;i++){ script.push_back({6000+i*300,mv[i]}); script.push_back({6060+i*300,0}); }
+      for(int i=0;i<3;i++){ script.push_back({9500+i*300,16}); script.push_back({9560+i*300,0}); }   // ... 3 undone
+      captureAt={1100,1900};
   } else if(scenario=="pause"){   simEnd=36000;
       script.push_back({1300,16});  script.push_back({1360,0});    // open tetris
       script.push_back({3000,16});  script.push_back({4000,0});    // hold OK -> pause
@@ -615,6 +623,31 @@ int main(int argc,char**argv){
     printf("%s\n", fails?"### FAILURES ###":"all checks passed");
     return fails?1:0;
   }
+  if(scenario=="sklevels"){
+    /* every level: fits the screen, one player, as many boxes as goals,
+       and the solver finds a way; the game's own moves undo cleanly */
+    int bad=0, last=-1;
+    for(uint8_t l=0; l<SK_N; l++){
+      SkLevel L=skParse(SK_LEVELS[l]);
+      int goals=0; for(uint8_t g:L.goal) goals+=g;
+      if(L.w>SK_W||L.h>SK_H||goals!=(int)L.boxes.size()||L.boxes.empty()){ bad++; printf("      level %u malformed\n",l+1); continue; }
+      int p=skSolve(L);
+      printf("      level %2u: %dx%d, %d boxes, %d pushes\n", l+1, L.w, L.h, (int)L.boxes.size(), p);
+      if(p<=0){ bad++; continue; }
+      if(p<last) printf("      (easier than the one before)\n");
+      last=p;
+      if(!skLoad(l)||skW!=L.w||skH!=L.h||skX!=L.px||skY!=L.py){ bad++; printf("      level %u loads differently\n",l+1); }
+      uint8_t before[SK_H][SK_W]; memcpy(before,sk,sizeof(sk)); uint8_t bx=skX, by=skY;
+      randomSeed(l); int n=0;
+      for(int k=0;k<300;k++) if(skStep(random(4))) n++;
+      while(skBack()) {}
+      if(n>SK_UNDO) { skLoad(l); }                     // more than the undo can hold: fine
+      else if(memcmp(before,sk,sizeof(sk))||skX!=bx||skY!=by){ bad++; printf("      level %u: undo does not restore\n",l+1); }
+    }
+    check("all levels well formed and solvable, undo exact", bad==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
   if(scenario=="frogroll"){
     /* Rolls lanes for every difficulty and level and checks them: objects
        never overlap, every gap has the promised size, the road always
@@ -876,6 +909,10 @@ int main(int argc,char**argv){
     check("ran some way", maxScore("SCORE ")>0||simNvsU16["hs19"]>0);
     printf("      score %u, stored hs19 %u\n", maxScore("SCORE "), simNvsU16["hs19"]);
     check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
+  } else if(scenario=="sokoban"){
+    check("level list shown", saw("SOKOBAN 1")&&saw("<1/")&&saw(" OK"));
+    check("moves counted", saw("7 moves")||saw("8 moves")||saw("9 moves"));
+    check("undo counts back", saw("5 moves")||saw("6 moves"));
   } else if(scenario=="pause"){
     StatBlob b; memset(&b,0,sizeof(b));
     if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));
