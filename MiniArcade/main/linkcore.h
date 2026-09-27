@@ -32,8 +32,8 @@
 enum LkType  : uint8_t { LK_BEACON = 1, LK_INVITE, LK_ANSWER, LK_MOVE, LK_ACK, LK_BYE, LK_SYNC };
 enum LkState : uint8_t { LK_LOBBY, LK_INVITING, LK_INVITED, LK_PLAYING, LK_OVER };
 enum LkEnd   : uint8_t { LKE_NONE, LKE_DECLINED, LKE_BUSY, LKE_TIMEOUT, LKE_GONE, LKE_LEFT, LKE_ERROR };
-enum LkGame  : uint8_t { LKG_C4 = 1, LKG_TTT = 2, LKG_PONG = 3, LKG_SNAKE = 4, LKG_PAC = 5 };
-#define LK_CAPS 6             // beacon flags: 2 = Pong and Snake, 4 = Pac-Man
+enum LkGame  : uint8_t { LKG_C4 = 1, LKG_TTT = 2, LKG_PONG = 3, LKG_SNAKE = 4, LKG_PAC = 5, LKG_SHIP = 6 };
+#define LK_CAPS 14            // beacon flags: 2 = Pong and Snake, 4 = Pac-Man, 8 = Battleship
 
 struct __attribute__((packed)) LkPacket {
   char     m0, m1;                    // 'M' 'A'
@@ -170,7 +170,7 @@ public:
 
   // ---------------- real-time games ----------------
   static bool realtime(uint8_t g) { return g == LKG_PONG || g == LKG_SNAKE || g == LKG_PAC; }
-  static uint8_t capOf(uint8_t g) { return g == LKG_PAC ? 4 : (realtime(g) ? 2 : 0); }
+  static uint8_t capOf(uint8_t g) { return g == LKG_SHIP ? 8 : (g == LKG_PAC ? 4 : (realtime(g) ? 2 : 0)); }
 
   /* The next tick, when both inputs for it are there. After each tick the
      game hands in its input for the tick LK_LEAD ahead with syncPut().   */

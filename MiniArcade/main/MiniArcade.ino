@@ -457,6 +457,7 @@ bool gameOver(uint16_t score) {
 #include "game_shooter.h"
 #include "game_jump.h"
 #include "game_sokoban.h"
+#include "game_battleship.h"
 #include "stats.h"
 #include "multiplayer.h"
 
@@ -488,6 +489,7 @@ static const Game GAMES[] = {
   { "Shooter",    shooterRun  },
   { "Jump & Run", jumpRun     },
   { "Sokoban",    sokobanRun  },
+  { "Battleship", battleshipRun },
   // add new games here (before the entries with a tag), e.g. { "Chess", chessRun },
 #ifdef HAVE_LINK
   { "Multiplayer", multiplayerRun, "2P" },

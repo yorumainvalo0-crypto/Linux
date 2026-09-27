@@ -333,6 +333,15 @@ int main(int argc,char**argv){
       for(int i=0;i<10;i++){ script.push_back({6000+i*300,mv[i]}); script.push_back({6060+i*300,0}); }
       for(int i=0;i<3;i++){ script.push_back({9500+i*300,16}); script.push_back({9560+i*300,0}); }   // ... 3 undone
       captureAt={1100,1900};
+  } else if(scenario=="battleship"){ simEnd=120000; downs(21,1300,150);
+      script.push_back({4600,16}); script.push_back({4660,0});     // open
+      script.push_back({5000,1});  script.push_back({5060,0});     // shuffle once
+      script.push_back({5400,16}); script.push_back({5460,0});     // ready
+      for(uint32_t t=6000;t<115000;t+=450){                       // aim somewhere, fire
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
+        script.push_back({t+200,16}); script.push_back({t+260,0}); }
+      captureAt={1100,3000};
   } else if(scenario=="pause"){   simEnd=36000;
       script.push_back({1300,16});  script.push_back({1360,0});    // open tetris
       script.push_back({3000,16});  script.push_back({4000,0});    // hold OK -> pause
@@ -413,18 +422,20 @@ int main(int argc,char**argv){
       if(scenario!="mpwait") for(uint32_t t=10000;t<36000;t+=450){   // play: move and drop
         script.push_back({t,(uint8_t)((rand()%2)?4:8)}); script.push_back({t+60,0});
         script.push_back({t+200,16}); script.push_back({t+260,0}); }
-  } else if(scenario=="mppong"||scenario=="mpsnake"||scenario=="mppac"){ simEnd=90000;
+  } else if(scenario=="mppong"||scenario=="mpsnake"||scenario=="mppac"||scenario=="mpship"){ simEnd=scenario=="mpship"?400000:90000;
       bool pong = scenario=="mppong";
-      int downsTo = pong ? 2 : (scenario=="mpsnake" ? 3 : 4);
+      int downsTo = pong ? 2 : (scenario=="mpsnake" ? 3 : (scenario=="mppac" ? 4 : 5));
       ups(3,1300,180);
       script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
       script.push_back({6500,2});  script.push_back({6560,0});     // ANNA's row
       script.push_back({6900,16}); script.push_back({6960,0});     // challenge ...
       for(int i=0;i<downsTo;i++){ script.push_back({7200+i*230,2}); script.push_back({7260+i*230,0}); }
       script.push_back({8200,16}); script.push_back({8260,0});     // ... to pong / snake / pac-man
-      for(uint32_t t=10000;t<80000;t+=300){                       // wander
+      if(scenario=="mpship"){ script.push_back({9500,16}); script.push_back({9560,0}); }   // fleet ready
+      for(uint32_t t=10000;t<(scenario=="mpship"?395000u:80000u);t+=300){                // wander
         static const uint8_t keys[4]={1,2,4,8};
-        script.push_back({t,keys[rand()%4]}); script.push_back({t+(pong?250:60),0}); }
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+(pong?250:60),0});
+        if(scenario=="mpship"){ script.push_back({t+150,16}); script.push_back({t+200,0}); } }
       captureAt={2200,2600};
   } else if(scenario=="mpold"){ simEnd=12000;
       simBotOld=true;                                              // ANNA runs an old firmware
@@ -645,6 +656,30 @@ int main(int argc,char**argv){
       else if(memcmp(before,sk,sizeof(sk))||skX!=bx||skY!=by){ bad++; printf("      level %u: undo does not restore\n",l+1); }
     }
     check("all levels well formed and solvable, undo exact", bad==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="bslogic"){
+    int bad=0; long shots=0; int most=0;
+    for(int g=0; g<500; g++){
+      randomSeed(700+g);
+      bsPlace(bsTheirs);
+      int cells=0, len[6]={0};
+      for(int i=0;i<64;i++){ uint8_t s=bsTheirs[i]; if(!s) continue; cells++; len[s]++;
+        int x=i%8,y=i/8;                                     // a different ship next to it?
+        for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){ int X=x+dx,Y=y+dy;
+          if(X>=0&&Y>=0&&X<8&&Y<8&&bsTheirs[Y*8+X]&&bsTheirs[Y*8+X]!=s) bad++; } }
+      if(cells!=14) bad++;
+      for(int s=0;s<5;s++) if(len[s+1]!=BS_LEN[s]) bad++;
+      memset(bsAiShot,0,64);
+      int n=0;
+      while(!bsAllSunk(bsTheirs) && n<64){ uint8_t c=bsAiPick(bsAiShot); uint8_t r=bsFire(bsTheirs,c); if(!r) bad++; bsMark(bsAiShot,c,r); n++; }
+      if(!bsAllSunk(bsTheirs)) bad++;
+      shots+=n; if(n>most) most=n;
+    }
+    printf("      CPU needs %.1f shots on average, at most %d (64 cells)\n", shots/500.0, most);
+    check("fleets legal (sizes, never touching) and the CPU always finishes", bad==0);
+    check("the CPU plays well", shots/500.0 < 48);
     printf("%s\n", fails?"### FAILURES ###":"all checks passed");
     return fails?1:0;
   }
@@ -913,6 +948,10 @@ int main(int argc,char**argv){
     check("level list shown", saw("SOKOBAN 1")&&saw("<1/")&&saw(" OK"));
     check("moves counted", saw("7 moves")||saw("8 moves")||saw("9 moves"));
     check("undo counts back", saw("5 moves")||saw("6 moves"));
+  } else if(scenario=="battleship"){
+    check("battleship drawn", saw("BATTLESHIP")&&saw("UP=new")&&saw("your go"));
+    check("shots fired", saw("miss")||saw("hit!"));
+    check("a game ended", saw("GAME OVER")||saw("NEW RECORD!"));
   } else if(scenario=="pause"){
     StatBlob b; memset(&b,0,sizeof(b));
     if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));
@@ -959,10 +998,10 @@ int main(int argc,char**argv){
     check("no answer after 30 s", saw("no answer from ANNA"));
   } else if(scenario=="mpleft"){
     check("opponent leaving reported", saw("ANNA left the game"));
-  } else if(scenario=="mppong"||scenario=="mpsnake"||scenario=="mppac"){
-    bool pong = scenario=="mppong";
+  } else if(scenario=="mppong"||scenario=="mpsnake"||scenario=="mppac"||scenario=="mpship"){
+    bool pong = scenario=="mppong"; (void)pong;
     check("challenge offers the real-time games", saw("Pong")&&saw("Snake")&&(scenario!="mppac"||saw("Pac-Man")));
-    check("game against ANNA shown", saw("YOU ")&&saw(" ANNA"));
+    check("game against ANNA shown", scenario=="mpship" ? saw("vs ANNA")&&saw("UP=new") : saw("YOU ")&&saw(" ANNA"));
     check("a game was decided", saw("YOU WIN")||saw("LOST")||saw("DRAW"));
     bool same = (simBotResult==1&&saw("LOST"))||(simBotResult==2&&saw("YOU WIN"))||(simBotResult==3&&saw("DRAW"));
     printf("      bot games %d, bot result %d (%s)\n", simBotGames, simBotResult, scenario.c_str());

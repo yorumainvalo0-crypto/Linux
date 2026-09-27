@@ -161,6 +161,59 @@ static void simBotRealtime(uint32_t now) {
   }
 }
 
+// battleship: a fixed fleet (4 3 3 2 2, not touching), random shots
+static const uint8_t BOT_FLEET[64] = {
+  1,1,1,1,0,0,2,0,
+  0,0,0,0,0,0,2,0,
+  3,0,0,0,0,0,2,0,
+  3,0,0,4,4,0,0,0,
+  3,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,5,0,
+  0,0,0,0,0,0,5,0,
+  0,0,0,0,0,0,0,0 };
+static uint8_t botFleet[64], botSea[64];
+static bool    botShipOn = false, botShipWait = false;
+static uint8_t botShipRes = 0, botShipHits = 0;
+
+static uint8_t botShipFire(uint8_t cell) {          // 1 miss, 2 hit, 3 sunk
+  botFleet[cell] |= 0x80;
+  uint8_t s = botFleet[cell] & 0x7F;
+  if (!s) return 1;
+  for (int i = 0; i < 64; i++) if ((botFleet[i] & 0x7F) == s && !(botFleet[i] & 0x80)) return 2;
+  return 3;
+}
+static bool botShipDead() { for (int i = 0; i < 64; i++) if ((botFleet[i] & 0x7F) && !(botFleet[i] & 0x80)) return false; return true; }
+static void botShipShoot(uint32_t now) {
+  uint8_t c; do c = rand() % 64; while (botSea[c]);
+  botSea[c] = 1;
+  simBot.sendMove((botShipRes << 6) | c, now);
+  botShipWait = true;
+}
+
+static void simBotShip(uint32_t now) {
+  LinkCore &B = simBot;
+  if (!botShipOn) {
+    botShipOn = true; botShipWait = false; botShipRes = 0; botShipHits = 0;
+    memcpy(botFleet, BOT_FLEET, 64); memset(botSea, 0, 64);
+    botNext = now + 2500;                          // "sets up its fleet" first
+    botTurn = B.iStart;
+  }
+  uint8_t m;
+  if (B.moveIn(&m)) {
+    uint8_t res = m >> 6, cell = m & 63;
+    if (botShipWait) {
+      botShipWait = false;
+      if (res >= 2) botShipHits++;
+      if (botShipHits >= 14) { simBotGames++; simBotResult = 1; B.finish(); botShipOn = false; return; }
+    }
+    uint8_t r = (botFleet[cell] & 0x80) ? 1 : botShipFire(cell);
+    botShipRes = r;
+    if (botShipDead()) { B.sendMove(r << 6, now); simBotGames++; simBotResult = 2; B.finish(); botShipOn = false; return; }
+    botTurn = true; botNext = now + 400;
+  }
+  if (botTurn && now >= botNext && !botShipWait) { botTurn = false; botShipShoot(now); }
+}
+
 static void simBotBrain(uint32_t now) {
   LinkCore &B = simBot;
   if (B.state == LK_INVITED && now >= botNext) {
@@ -172,7 +225,8 @@ static void simBotBrain(uint32_t now) {
   }
   if (B.state == LK_OVER && B.delivered()) B.toLobby();
   if (B.state == LK_PLAYING && LinkCore::realtime(B.game)) { simBotRealtime(now); return; }
-  if (B.state != LK_PLAYING) botRt = false;
+  if (B.state == LK_PLAYING && B.game == LKG_SHIP) { simBotShip(now); return; }
+  if (B.state != LK_PLAYING) { botRt = false; botShipOn = false; }
   if (B.state != LK_PLAYING) { if (B.state != LK_INVITED) botNext = now + 1500; return; }
   if (!botInGame) {                                    // a new game begins
     botInGame = true; botMoves = 0;

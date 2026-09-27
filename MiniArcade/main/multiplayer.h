@@ -13,8 +13,8 @@
 #include "rtgames.h"
 #define HAVE_LINK 1
 
-static const char *const MP_GAMES[5] = { "4 wins", "Tic Tac Toe", "Pong", "Snake", "Pac-Man" };   // LKG_C4 ..
-static const char *mpGameName(uint8_t g) { return g >= LKG_C4 && g <= LKG_PAC ? MP_GAMES[g - 1] : "?"; }
+static const char *const MP_GAMES[6] = { "4 wins", "Tic Tac Toe", "Pong", "Snake", "Pac-Man", "Battleship" };   // LKG_C4 ..
+static const char *mpGameName(uint8_t g) { return g >= LKG_C4 && g <= LKG_SHIP ? MP_GAMES[g - 1] : "?"; }
 
 static void mpHook() { linkTick(); lastInput = millis(); }  // radio on: no deep sleep
 
@@ -200,6 +200,75 @@ static uint8_t mpTTT() {
   return ret;
 }
 
+// ---------------- Battleship ----------------
+/* Taking turns like the other two: every move is one byte,
+   (result of their last shot << 6) | our shot. When our fleet is gone
+   the last move only carries the result.                              */
+static const char *mpBsMsg;
+static void mpBsDraw(const char *msg) {
+  char b[16];
+  snprintf(b, sizeof(b), "vs %.6s", linkCore().opp.name);
+  bsBar(b);
+  bsDraw(bsShot, bsMine, -1, msg, NULL);
+}
+
+static uint8_t mpBattle() {
+  LinkCore &L = linkCore();
+  char vs[16];
+  snprintf(vs, sizeof(vs), "vs %.6s", L.opp.name);
+  if (!bsSetup(vs)) { L.cancel(); return 1; }       // hold OK while setting up = give up
+  memset(bsShot, 0, sizeof(bsShot));
+  bool mine = L.iStart, waiting = false;            // waiting: for the result of our shot
+  uint8_t cur = 27, shotAt = 0, lastRes = 0, hits = 0;
+  const char *end = NULL;
+  mpBsMsg = NULL;
+  uint8_t ret = 0;
+  btnClear();
+  while (!end) {
+    if (!poll()) { L.cancel(); ret = 1; break; }
+    if (L.state != LK_PLAYING) break;
+    if (mine) {
+      int16_t c = bsAim(cur, bsShot);
+      if (c >= 0 && L.sendMove((lastRes << 6) | c, linkNow())) {
+        shotAt = c; waiting = true; mine = false; sfx(500, 30);
+      }
+    } else {
+      uint8_t m;
+      if (L.moveIn(&m)) {
+        uint8_t res = m >> 6, cell = m & 63;
+        if (waiting) {                              // how our shot went
+          waiting = false;
+          if (!res) { L.cancel(); mpNote("connection error", NULL); ret = 2; break; }
+          bsMark(bsShot, shotAt, res);
+          if (res != BS_MISS) hits++;
+          sfx(res == BS_MISS ? 300 : 1000, res == BS_SUNK ? 250 : 60);
+          mpBsMsg = res == BS_MISS ? "miss" : (res == BS_HIT ? "hit!" : "sunk!");
+          uint8_t total = 0;
+          for (uint8_t s = 0; s < BS_SHIPS; s++) total += BS_LEN[s];
+          if (hits >= total) { end = "YOU WIN"; break; }
+        }
+        uint8_t r = bsFire(bsMine, cell);           // their shot
+        lastRes = r ? r : (uint8_t)BS_MISS;
+        if (r != BS_MISS) sfx(180, 200);
+        if (bsAllSunk(bsMine)) {                    // the last move: just the result
+          L.sendMove(lastRes << 6, linkNow());
+          end = "LOST";
+          break;
+        }
+        mine = true;
+        mpBsMsg = r == BS_HIT ? "ouch!" : (r == BS_SUNK ? "sunk us" : mpBsMsg);
+      }
+    }
+    char b[16], t[12];
+    snprintf(b, sizeof(b), "vs %.6s", L.opp.name);
+    snprintf(t, sizeof(t), "%.6s...", L.opp.name);
+    bsBar(b);
+    bsDraw(bsShot, bsMine, mine ? cur : -1, mine ? "your go" : t, mpBsMsg);   // 2nd line: what just happened
+  }
+  if (end) { sfx(strcmp(end, "LOST") ? 1400 : 200, 250); mpFinish(mpBsDraw, end); statOnline(!strcmp(end, "YOU WIN")); }
+  return ret;
+}
+
 // ---------------- real-time: Pong and Snake ----------------
 /* Both consoles compute the same game (rtgames.h); only the keys go over
    the radio, in lockstep (linkcore.h). A tick is taken as soon as both
@@ -380,13 +449,14 @@ void multiplayerRun() {
     before = st;
 
     if (st == LK_PLAYING) {
-      gameEnd = LinkCore::realtime(L.game) ? mpRealtime() : (L.game == LKG_C4) ? mpC4() : mpTTT();
+      gameEnd = LinkCore::realtime(L.game) ? mpRealtime() : L.game == LKG_C4 ? mpC4() :
+                L.game == LKG_TTT ? mpTTT() : mpBattle();
       btnClear();
       continue;
     }
 
     if (st == LK_INVITED) {                             // somebody challenges us
-      if (L.game < LKG_C4 || L.game > LKG_PAC) { L.answer(false, linkNow()); continue; }
+      if (L.game < LKG_C4 || L.game > LKG_SHIP) { L.answer(false, linkNow()); continue; }
       if (millis() >= nextBeep) { nextBeep = millis() + 2000; sfx(1500, 90); }
       if (btn(B_OK))                      { L.answer(true, linkNow()); sfx(1200, 60); btnClear(); continue; }
       if (btn(B_LEFT) || btn(B_RIGHT) || !alive) { L.answer(false, linkNow()); sfx(300, 80); btnClear(); continue; }
@@ -433,7 +503,7 @@ void multiplayerRun() {
       if (!sel) mpName();
       else if (L.peer(idx[sel - 1]).busy) sfx(300, 120);
       else {
-        uint8_t g = chooseMode("CHALLENGE", MP_GAMES, 5);
+        uint8_t g = chooseMode("CHALLENGE", MP_GAMES, 6);
         if (g != 255) {
           for (uint8_t i = 0; i < L.peerCount(); i++)   // the list may have changed meanwhile
             if (!strcmp(L.peer(i).code, selCode)) {
