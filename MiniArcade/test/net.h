@@ -7,10 +7,11 @@
 
 static NetState simNet = NET_OFF;
 static NetJob   simJob = JOB_IDLE;
+static bool     simUpload = false;  // a file arrives over the web page right after joining
 
 bool        netHasConfig()      { return true; }
 const char *netSsid()           { return "HomeNet"; }
-void        netConnect()        { simNet = NET_ONLINE; }
+void        netConnect()        { simNet = NET_ONLINE; if (simUpload) simJob = JOB_ASKING; }
 void        netSetup()          { simNet = NET_SETUP; }
 void        netStop()           { simNet = NET_OFF; if (simJob != JOB_ERROR) simJob = JOB_IDLE; }
 void        netForget()         { netStop(); }
@@ -26,6 +27,9 @@ NetJob      netJob()            { return simJob; }
 const char *netRemoteVersion()  { return "9.3"; }
 uint8_t     netProgress()       { return simJob == JOB_DONE ? 100 : 0; }
 const char *netError()          { return ""; }
+static uint8_t simAnswer = 0;       // 1 = yes, 2 = no
+const char *netAskVersion()     { return "9.4"; }
+void        netAnswer(bool yes) { simAnswer = yes ? 1 : 2; simJob = yes ? JOB_DONE : JOB_ERROR; }
 
 // two stored firmwares only in the "versions" scenarios
 static bool simTwoSlots = false, simConfirmed = false, simSwitched = false;

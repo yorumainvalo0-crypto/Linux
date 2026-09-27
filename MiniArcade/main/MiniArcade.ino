@@ -124,6 +124,7 @@ static uint8_t  cfgClock  = 160;      // cpu clock in MHz
 static uint8_t  cfgSleep  = 5;        // minutes without a key press, 0 = never
 static uint32_t lastInput = 0;        // for the sleep timer
 static uint8_t  runClock  = 160;      // clock the board actually booted with
+static bool     fwUnconfirmed = false; // fresh update, no key pressed yet
 
 #ifdef ARDUINO                        // the IDF build has its own version
 #include <esp_sleep.h>
@@ -159,7 +160,9 @@ void centerStr(uint8_t y, const char *s);          // defined further down
    the OK button wakes the board - that is a normal reset, so the launcher
    comes back with everything (high scores, mine world) still in flash.  */
 void sleepCheck() {
-  if (!cfgSleep) return;
+  /* Waking up is a restart, and an update that was never confirmed would be
+     thrown away by that - so a fresh update stays awake until a key press. */
+  if (!cfgSleep || fwUnconfirmed) return;
   bool anyKey = false;
   for (uint8_t i = 0; i < B_COUNT; i++) if (bDown[i]) anyKey = true;
   if (anyKey) { lastInput = millis(); return; }
@@ -686,13 +689,29 @@ void wlanRun() {
     netTick();
     NetState st = netState();
     NetJob   jb = netJob();
-    bool locked = (jb == JOB_UPDATING || jb == JOB_DONE);   // an update is being written
+    bool locked = (jb == JOB_UPDATING || jb == JOB_DONE || jb == JOB_ASKING);   // update running
     if (!alive) {                          // hold OK = back
       leaving = true;
       oled.clearBuffer();
       oled.setFont(FONT);
     }
     if (leaving && !locked && jb != JOB_CHECKING) break;    // let a GitHub check finish
+    if (leaving && !locked) btnClear();                     // ... and ignore the keys meanwhile
+    if (jb == JOB_ASKING) {                // a file came in over the web page
+      if (btn(B_OK))                        { netAnswer(true);  sfx(1200, 50); }
+      if (btn(B_LEFT) || btn(B_RIGHT))      { netAnswer(false); sfx(300, 120); }
+      char b[40];
+      wlanTitle("UPLOAD");
+      centerStr(28, "install firmware");
+      snprintf(b, sizeof(b), "v%.31s", netAskVersion());
+      oled.setFont(FONT_B);
+      centerStr(42, b);
+      oled.setFont(FONT);
+      centerStr(54, "from the web page?");
+      centerStr(63, "OK = yes  LEFT = no");
+      oled.sendBuffer();
+      continue;
+    }
     if (locked) { wlanProgress(jb); oled.sendBuffer(); continue; }
     if (st == NET_SETUP) { wlanSetupHelp(); oled.sendBuffer(); continue; }
 
@@ -779,7 +798,7 @@ void versionRun(bool atBoot) {
     uint32_t left = 3000 - (millis() - t0 < 3000 ? millis() - t0 : 3000);
     if (pressed || (waiting && !left)) {
       if (sel == 0) {
-        if (pressed) fwConfirm();              // display and keys work: keep it
+        if (pressed) { fwConfirm(); fwUnconfirmed = false; }   // display and keys work
         sfx(1200, 50);
         return;
       }
@@ -2653,16 +2672,13 @@ static const uint8_t GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 
 void menu() {
   static uint8_t sel = 0, top = 0;
-#ifdef HAVE_NET
-  static bool unconfirmed = fwPending();      // fresh update: kept after a key press
-#endif
   btnClear();
   while (true) {
     poll();                                   // long press does nothing here
 #ifdef HAVE_NET
-    if (unconfirmed)
+    if (fwUnconfirmed)                        // fresh update: kept after a key press
       for (uint8_t i = 0; i < B_COUNT; i++)
-        if (bDown[i]) { fwConfirm(); unconfirmed = false; break; }
+        if (bDown[i]) { fwConfirm(); fwUnconfirmed = false; break; }
 #endif
     if (btn(B_UP)   && sel > 0)               { sel--; sfx(700, 15); }
     if (btn(B_DOWN) && sel < GAME_COUNT - 1)  { sel++; sfx(700, 15); }
@@ -2733,6 +2749,7 @@ void setup() {
   }
   if (!known || held) learnKeys();
 #ifdef HAVE_NET
+  fwUnconfirmed = fwPending();
   versionRun(true);                      // choose the firmware when two are stored
 #endif
 

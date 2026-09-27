@@ -29,11 +29,21 @@ static volatile NetState state = NET_OFF;
 static volatile NetJob   job = JOB_IDLE;
 static volatile uint8_t  progress = 0;
 static volatile bool     wantConnect = false;   // setup page stored a new network
-static volatile int64_t  restartAt = 0;         // esp_timer time in us, 0 = none
+static volatile uint32_t connectAt = 0;         // ... switch over at this time (ms)
+static volatile uint32_t restartAt = 0;         // ms, 0 = no restart planned
+static volatile uint8_t  answer = 0;            // upload question: 1 = yes, 2 = no
+static portMUX_TYPE      jobLock = portMUX_INITIALIZER_UNLOCKED;
 
 static char ssid[33], pass[65];
 static bool cfgLoaded = false;
-static char addr[16], apName[20], remoteVer[24], errMsg[48];
+static char addr[16], apName[20], remoteVer[32], askVer[32], errMsg[48];
+
+// networks found when the setup hotspot opened
+#define NETS_MAX 12
+static char    nets[NETS_MAX][33];
+static volatile uint8_t netsFound = 0;
+
+static uint32_t nowMs() { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 static bool baseUp = false, wifiUp = false;
 static uint8_t retries = 0;
@@ -87,6 +97,18 @@ static void onEvent(void *, esp_event_base_t base, int32_t id, void *data) {
     addr[0] = 0;
     if (retries++ < 5) { state = NET_CONNECTING; esp_wifi_connect(); }
     else state = NET_FAILED;
+  } else if (base == WIFI_EVENT && id == WIFI_EVENT_SCAN_DONE) {
+    static wifi_ap_record_t rec[NETS_MAX];
+    uint16_t n = NETS_MAX;
+    if (esp_wifi_scan_get_ap_records(&n, rec) != ESP_OK) n = 0;
+    uint8_t k = 0;
+    for (uint16_t i = 0; i < n; i++) {
+      const char *s = (const char *)rec[i].ssid;
+      bool dup = !s[0];
+      for (uint8_t j = 0; j < k && !dup; j++) if (!strcmp(s, nets[j])) dup = true;
+      if (!dup) strlcpy(nets[k++], s, sizeof(nets[0]));
+    }
+    netsFound = k;
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
     const ip_event_got_ip_t *e = (const ip_event_got_ip_t *)data;
     snprintf(addr, sizeof(addr), IPSTR, IP2STR(&e->ip_info.ip));
@@ -186,10 +208,38 @@ static const char *checkImage(const uint8_t *b, size_t n) {
 }
 
 static bool busy() {
-  return job == JOB_CHECKING || job == JOB_UPDATING || job == JOB_DONE;
+  return job == JOB_CHECKING || job == JOB_UPDATING || job == JOB_DONE || job == JOB_ASKING;
 }
 
-static void restartSoon() { restartAt = esp_timer_get_time() + 1500000; }
+// takes the job slot, so an upload and a GitHub install never meet
+static bool claim(NetJob j) {
+  bool ok;
+  portENTER_CRITICAL(&jobLock);
+  ok = !busy();
+  if (ok) { job = j; progress = 0; }
+  portEXIT_CRITICAL(&jobLock);
+  return ok;
+}
+
+static void restartSoon() { restartAt = nowMs() + 1500; }
+
+/* true when version a is newer than b: the numbers are compared one by one
+   (9.10 > 9.9), and on a tie a final release beats a "-rc" build.       */
+static bool verNewer(const char *a, const char *b) {
+  while (*a || *b) {
+    while (*a && (*a < '0' || *a > '9') && *a != '-') a++;
+    while (*b && (*b < '0' || *b > '9') && *b != '-') b++;
+    bool ea = !*a || *a == '-', eb = !*b || *b == '-';     // numbers used up?
+    if (ea || eb) {
+      if (!ea) return true;                                // 9.3.1 > 9.3
+      if (!eb) return false;
+      return !*a && *b == '-';                             // 9.3 > 9.3-rc1
+    }
+    unsigned long x = strtoul(a, (char **)&a, 10), y = strtoul(b, (char **)&b, 10);
+    if (x != y) return x > y;
+  }
+  return false;
+}
 
 static void clientCfg(esp_http_client_config_t *c, const char *url) {
   memset(c, 0, sizeof(*c));
@@ -210,8 +260,8 @@ static bool fetchVersion() {
   bool ok = false;
   int status = 0;
   for (uint8_t hop = 0; hop < 5; hop++) {        // follow the redirect to the file
-    if (esp_http_client_open(c, 0) != ESP_OK) { fail("no connection to GitHub"); break; }
-    esp_http_client_fetch_headers(c);
+    if (esp_http_client_open(c, 0) != ESP_OK) { status = -1; fail("no connection to GitHub"); break; }
+    if (esp_http_client_fetch_headers(c) < 0) { status = -1; fail("no answer from GitHub"); break; }
     status = esp_http_client_get_status_code(c);
     if (status < 300 || status > 308) break;
     esp_http_client_set_redirection(c);
@@ -235,7 +285,7 @@ static bool fetchVersion() {
     if (!ok) fail("empty version.txt");
   } else if (status == 404) {
     fail("no release on GitHub yet");
-  } else if (status) {
+  } else if (status > 0) {
     char m[32]; snprintf(m, sizeof(m), "GitHub error %d", status);
     fail(m);
   }
@@ -250,8 +300,6 @@ static void installFromGithub() {
   esp_https_ota_config_t oc = {};
   oc.http_config = &cfg;
   esp_https_ota_handle_t h = NULL;
-  progress = 0;
-  job = JOB_UPDATING;
   if (esp_https_ota_begin(&oc, &h) != ESP_OK) { fail("download failed"); return; }
 
   esp_app_desc_t d;
@@ -281,15 +329,13 @@ static void githubTask(void *arg) {
   bool install = arg != NULL;
   if (install) installFromGithub();
   else if (fetchVersion())
-    job = strcmp(remoteVer, netVersion()) ? JOB_NEWER : JOB_UPTODATE;
+    job = verNewer(remoteVer, netVersion()) ? JOB_NEWER : JOB_UPTODATE;
   vTaskDelete(NULL);
 }
 
 static void startGithub(bool install) {
-  if (busy()) return;
-  if (state != NET_ONLINE) { fail("not connected"); return; }
-  job = install ? JOB_UPDATING : JOB_CHECKING;
-  progress = 0;
+  if (state != NET_ONLINE) { if (!busy()) fail("not connected"); return; }
+  if (!claim(install ? JOB_UPDATING : JOB_CHECKING)) return;
   // TLS needs a fair amount of stack
   if (xTaskCreate(githubTask, "github", 8192, install ? (void *)1 : NULL, 5, NULL) != pdPASS)
     fail("out of memory");
@@ -328,18 +374,19 @@ static const char PAGE_TAIL[] =
   "<button>save and connect</button></form>"
   "<script>"
   "function $(i){return document.getElementById(i)}"
-  "var T=['','checking GitHub...','up to date','','installing','done - MiniArcade restarts','error: '];"
+  "var T=['','checking GitHub...','up to date','','installing','done - MiniArcade restarts','error: ','press OK on the MiniArcade to install'];"
   "function show(s){var g=$('g');if(!g)return;var t=T[s.job];"
   "if(s.job==2)t+=' ('+s.ver+')';if(s.job==3)t='online: '+s.remote+'  (this: '+s.ver+')';"
   "if(s.job==4)t+=' '+s.pct+'%';if(s.job==6)t+=s.err;g.textContent=t;"
   "$('i').hidden=s.job!=3;$('i').textContent='install '+s.remote;"
-  "if(s.job==1||s.job==4)setTimeout(poll,1000);if(s.job==5)setTimeout(function(){location.reload()},9000)}"
+  "if(s.job==1||s.job==4||s.job==7)setTimeout(poll,1000);if(s.job==5)setTimeout(function(){location.reload()},9000)}"
   "function poll(){fetch('/status').then(function(r){return r.json()}).then(show)}"
   "function gh(a){fetch('/gh?do='+a,{method:'POST'}).then(poll)}"
   "function up(){var f=$('f').files[0];if(!f)return;var x=new XMLHttpRequest();"
   "x.open('POST','/update');x.upload.onprogress=function(e){if(e.lengthComputable)$('p').value=e.loaded*100/e.total};"
-  "x.onload=function(){$('u').textContent=x.responseText;if(x.status==200)setTimeout(function(){location.reload()},9000)};"
-  "x.onerror=function(){$('u').textContent='connection lost'};$('u').textContent='uploading...';x.send(f)}"
+  "x.onload=function(){$('u').textContent=x.responseText;poll();if(x.status==200)setTimeout(function(){location.reload()},9000)};"
+  "x.onerror=function(){$('u').textContent='connection lost'};$('u').textContent='uploading - then confirm with OK on the MiniArcade';"
+  "x.send(f);setTimeout(poll,1500)}"
   "if($('g'))poll();"
   "</script></body></html>";
 
@@ -352,7 +399,7 @@ static void chunkEsc(httpd_req_t *r, const char *s) {
   for (; *s; s++) {
     const char *e = NULL;
     if (*s == '&') e = "&amp;"; else if (*s == '<') e = "&lt;";
-    else if (*s == '>') e = "&gt;"; else if (*s == '"' || *s == '\'') e = "&quot;";
+    else if (*s == '>') e = "&gt;"; else if (*s == '"') e = "&quot;"; else if (*s == '\'') e = "&#39;";
     if (k > sizeof(b) - 8) { b[k] = 0; chunk(r, b); k = 0; }
     if (e) { strcpy(b + k, e); k += strlen(e); } else b[k++] = *s;
   }
@@ -360,21 +407,12 @@ static void chunkEsc(httpd_req_t *r, const char *s) {
   chunk(r, b);
 }
 
-// networks around, only offered while the setup hotspot is open
+// networks found when the hotspot opened - scanning again per page load
+// would take the hotspot off its channel while the phone uses it
 static void chunkNetworks(httpd_req_t *r) {
-  static wifi_ap_record_t rec[12];
-  wifi_scan_config_t sc = {};
-  if (esp_wifi_scan_start(&sc, true) != ESP_OK) return;
-  uint16_t n = sizeof(rec) / sizeof(rec[0]);
-  if (esp_wifi_scan_get_ap_records(&n, rec) != ESP_OK) return;
-  for (uint16_t i = 0; i < n; i++) {
-    const char *s = (const char *)rec[i].ssid;
-    if (!s[0]) continue;
-    bool dup = false;
-    for (uint16_t j = 0; j < i; j++) if (!strcmp(s, (const char *)rec[j].ssid)) dup = true;
-    if (dup) continue;
+  for (uint8_t i = 0; i < netsFound; i++) {
     chunk(r, "<option value=\"");
-    chunkEsc(r, s);
+    chunkEsc(r, nets[i]);
     chunk(r, "\">");
   }
 }
@@ -398,8 +436,8 @@ static esp_err_t pageGet(httpd_req_t *r) {
 }
 
 static esp_err_t statusGet(httpd_req_t *r) {
-  char b[160];
-  snprintf(b, sizeof(b), "{\"job\":%u,\"pct\":%u,\"ver\":\"%s\",\"remote\":\"%s\",\"err\":\"%s\"}",
+  char b[256];
+  snprintf(b, sizeof(b), "{\"job\":%u,\"pct\":%u,\"ver\":\"%.31s\",\"remote\":\"%.31s\",\"err\":\"%.47s\"}",
            (unsigned)job, (unsigned)progress, netVersion(), remoteVer, errMsg);
   httpd_resp_set_type(r, "application/json");
   httpd_resp_set_hdr(r, "Cache-Control", "no-store");
@@ -431,9 +469,10 @@ static esp_err_t savePost(httpd_req_t *r) {
   char body[300], s[100], p[200];
   int n = 0;
   if (r->content_len >= sizeof(body)) return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "too long");
+  uint8_t stalls = 0;
   while (n < (int)r->content_len) {
     int k = httpd_req_recv(r, body + n, r->content_len - n);
-    if (k == HTTPD_SOCK_ERR_TIMEOUT) continue;
+    if (k == HTTPD_SOCK_ERR_TIMEOUT && ++stalls < 3) continue;   // do not wait forever
     if (k <= 0) return ESP_FAIL;
     n += k;
   }
@@ -452,6 +491,7 @@ static esp_err_t savePost(httpd_req_t *r) {
   chunkEsc(r, s);
   chunk(r, "</b>.</p><p class=m>The display shows the new address of this page.</p></body></html>");
   httpd_resp_send_chunk(r, NULL, 0);
+  connectAt = nowMs() + 1500;         // give the page time to reach the phone
   wantConnect = true;                 // switched over from the UI loop
   return ESP_OK;
 }
@@ -470,13 +510,15 @@ static esp_err_t uploadFail(httpd_req_t *r, char *buf, const char *why) {
 
 // receives the raw file body and writes it into the free app slot
 static esp_err_t updatePost(httpd_req_t *r) {
-  if (busy()) return sendText(r, "409 Conflict", "another update is running");
+  // the setup hotspot is open to everybody around - no firmware from there
+  if (state == NET_SETUP) return sendText(r, "403 Forbidden", "updates only over your own WLAN");
   const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
   size_t total = r->content_len;
   if (!part) return sendText(r, "500 Internal Server Error", "no update slot - flash once by cable");
   if (total < 1024 || total > part->size) return sendText(r, "400 Bad Request", "file size does not fit");
+  if (!claim(JOB_UPDATING)) return sendText(r, "409 Conflict", "another update is running");
   char *buf = (char *)malloc(4096);
-  if (!buf) return sendText(r, "500 Internal Server Error", "out of memory");
+  if (!buf) return uploadFail(r, buf, "out of memory");
 
   const size_t head = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t);
   size_t got = 0;
@@ -490,10 +532,20 @@ static esp_err_t updatePost(httpd_req_t *r) {
   const char *why = checkImage((const uint8_t *)buf, got);
   if (why) return uploadFail(r, buf, why);
 
+  // somebody has to press OK on the console itself before anything is written
+  {
+    esp_app_desc_t d;
+    memcpy(&d, buf + sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t), sizeof(d));
+    strlcpy(askVer, d.version, sizeof(askVer));
+  }
+  answer = 0;
+  job = JOB_ASKING;
+  for (uint16_t t = 0; t < 300 && !answer; t++) vTaskDelay(pdMS_TO_TICKS(100));   // 30 s
+  if (answer != 1) return uploadFail(r, buf, "not confirmed on the MiniArcade");
+  job = JOB_UPDATING;
+
   esp_ota_handle_t h;
   if (esp_ota_begin(part, total, &h) != ESP_OK) return uploadFail(r, buf, "cannot erase the update slot");
-  job = JOB_UPDATING;
-  progress = 0;
   esp_err_t e = esp_ota_write(h, buf, got);
   size_t done = got;
   stalls = 0;
@@ -548,6 +600,14 @@ static void stopServer() {
   server = NULL;
 }
 
+/* Many C3 SuperMini boards have a poorly matched antenna and fail to join
+   a network at full power - a lower transmit power helps.               */
+static void txPower() {
+#if CONFIG_ARCADE_WIFI_TX_POWER > 0
+  esp_wifi_set_max_tx_power(CONFIG_ARCADE_WIFI_TX_POWER);
+#endif
+}
+
 // ---------------- public ----------------
 void netConnect() {
   loadCfg();
@@ -563,6 +623,7 @@ void netConnect() {
   addr[0] = 0;
   state = NET_CONNECTING;
   esp_wifi_start();                               // STA_START then joins the network
+  txPower();
   startServer();
 }
 
@@ -582,6 +643,10 @@ void netSetup() {
   esp_wifi_set_config(WIFI_IF_AP, &ac);
   state = NET_SETUP;
   esp_wifi_start();
+  txPower();
+  netsFound = 0;
+  wifi_scan_config_t sc = {};
+  esp_wifi_scan_start(&sc, false);                // once, before a phone joins
   strlcpy(addr, AP_IP, sizeof(addr));
   dnsStart();
   startServer();
@@ -598,9 +663,12 @@ void netStop() {
 }
 
 void netTick() {
-  if (wantConnect) { wantConnect = false; netConnect(); }
-  if (restartAt && esp_timer_get_time() >= restartAt) esp_restart();
+  if (wantConnect && (int32_t)(nowMs() - connectAt) >= 0) { wantConnect = false; netConnect(); }
+  if (restartAt && (int32_t)(nowMs() - restartAt) >= 0) esp_restart();
 }
+
+const char *netAskVersion() { return askVer; }
+void        netAnswer(bool yes) { answer = yes ? 1 : 2; }
 
 void netRestart() { esp_restart(); }
 
@@ -639,6 +707,8 @@ void fwSlots(FwSlot s[2]) {
 
 bool fwStartOther() {
   if (busy()) return false;
+  // it started and the keys work - keep it choosable instead of "broken"
+  if (fwPending()) fwConfirm();
   const esp_partition_t *p = esp_ota_get_next_update_partition(NULL);
   if (!p || esp_ota_set_boot_partition(p) != ESP_OK) return false;   // also checks the image
   esp_restart();

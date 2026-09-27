@@ -19,7 +19,8 @@ enum NetJob : uint8_t {
   JOB_NEWER,        // another version is online: netRemoteVersion()
   JOB_UPDATING,     // writing a new image (GitHub or upload): netProgress()
   JOB_DONE,         // image written, the board restarts in a moment
-  JOB_ERROR         // netError() says why
+  JOB_ERROR,        // netError() says why
+  JOB_ASKING        // a file was uploaded: install it? netAnswer() decides
 };
 
 bool        netHasConfig();       // WLAN name and password stored?
@@ -41,6 +42,8 @@ NetJob      netJob();
 const char *netRemoteVersion();
 uint8_t     netProgress();        // 0..100 while JOB_UPDATING
 const char *netError();
+const char *netAskVersion();      // version of the uploaded file while JOB_ASKING
+void        netAnswer(bool yes);  // the player's decision on the device
 
 // ---------------- firmware slots ----------------
 /* Two app slots: the running firmware and the one before (or the one just

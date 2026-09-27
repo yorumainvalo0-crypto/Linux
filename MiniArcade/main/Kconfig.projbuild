@@ -6,4 +6,12 @@ menu "MiniArcade"
             owner/name of the repository. The board downloads
             releases/latest/download/version.txt and miniarcade.bin from it.
             The GitHub build sets this to the repository it runs in.
+    config ARCADE_WIFI_TX_POWER
+        int "WLAN transmit power limit (0.25 dBm steps, 0 = no limit)"
+        default 34
+        range 0 84
+        help
+            Many ESP32-C3 SuperMini boards have a poorly matched antenna
+            and cannot join a network at full power. 34 = 8.5 dBm works on
+            most of them; raise it for more range, 0 keeps the default.
 endmenu
