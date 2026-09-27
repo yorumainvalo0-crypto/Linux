@@ -384,18 +384,20 @@ struct NoPause { NoPause() { pauseBlock++; } ~NoPause() { pauseBlock--; } };   /
 
 uint8_t chooseMode(const char *title, const char *const *opts, uint8_t n) {
   NoPause np;
-  uint8_t sel = 0;
+  uint8_t sel = 0, top = 0;
   btnClear();
   while (poll()) {
     if (btn(B_UP)   && sel)         { sel--; sfx(700, 15); }
     if (btn(B_DOWN) && sel < n - 1) { sel++; sfx(700, 15); }
     if (btn(B_OK)) { sfx(1200, 60); return sel; }
+    if (sel < top) top = sel;                         // 4 lines fit, longer lists scroll
+    if (sel >= top + 4) top = sel - 3;
     oled.setFont(FONT_B);
     oled.drawStr(2, 12, title);
     oled.drawHLine(0, TOP_H - 1, SCR_W);
     oled.setFont(FONT);
-    for (uint8_t i = 0; i < n; i++) {
-      uint8_t y = TOP_H + 3 + i * 11;
+    for (uint8_t i = top; i < n && i < top + 4; i++) {
+      uint8_t y = TOP_H + 3 + (i - top) * 11;
       if (i == sel) { oled.drawBox(0, y, SCR_W, 10); oled.setDrawColor(0); }
       oled.drawStr(6, y + 8, opts[i]);
       oled.setDrawColor(1);
@@ -451,6 +453,11 @@ bool gameOver(uint16_t score) {
 #include "game_tictactoe.h"
 #include "game_2048.h"
 #include "game_mines.h"
+#include "game_pacman.h"
+#include "game_shooter.h"
+#include "game_jump.h"
+#include "game_sokoban.h"
+#include "game_battleship.h"
 #include "stats.h"
 #include "multiplayer.h"
 
@@ -478,6 +485,11 @@ static const Game GAMES[] = {
   { "Tic Tac Toe", tictactoeRun },
   { "2048",       g2048Run    },
   { "Minesweeper", minesRun   },
+  { "Pac-Man",    pacmanRun   },
+  { "Shooter",    shooterRun  },
+  { "Jump & Run", jumpRun     },
+  { "Sokoban",    sokobanRun  },
+  { "Battleship", battleshipRun },
   // add new games here (before the entries with a tag), e.g. { "Chess", chessRun },
 #ifdef HAVE_LINK
   { "Multiplayer", multiplayerRun, "2P" },

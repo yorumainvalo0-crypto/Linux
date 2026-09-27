@@ -31,7 +31,7 @@ static void simSendMe(void *, const uint8_t *, const uint8_t *d, uint8_t n)  { s
 static bool     simBotOld      = false;  // bot plays an older firmware: no real-time games
 static void simSendBot(void *, const uint8_t *, const uint8_t *d, uint8_t n) {
   std::vector<uint8_t> v(d, d + n);
-  if (simBotOld && n >= sizeof(LkPacket) && v[3] == LK_BEACON) v[offsetof(LkPacket, flags)] &= ~2;
+  if (simBotOld && n >= sizeof(LkPacket) && v[3] == LK_BEACON) v[offsetof(LkPacket, flags)] &= ~LK_CAPS;
   simAir.push_back({ false, v });
 }
 
@@ -110,24 +110,34 @@ static bool botDone() {
 // real-time games: the bot runs its own copy, like a second console would
 static RtPong   botPg;
 static RtSnake  botSn;
+static RtPac    botPm;
 static uint32_t botRtNext = 0, botRnd = 5;
 static bool     botRt = false;
 
 static void simBotRealtime(uint32_t now) {
   LinkCore &B = simBot;
-  bool pong = B.game == LKG_PONG;
+  bool pong = B.game == LKG_PONG, pac = B.game == LKG_PAC;
   uint8_t me = B.iStart ? 0 : 1;
   if (!botRt) {                                        // a new game begins
     botRt = true;
-    if (pong) botPg.begin(B.session() * 2654435761u); else botSn.begin(B.session() * 2654435761u);
+    uint32_t seed = B.session() * 2654435761u;
+    if (pong) botPg.begin(seed); else if (pac) botPm.begin(seed, 2); else botSn.begin(seed);
     botRtNext = now;
   }
   for (int k = 0; k < 3 && lkDue(now, botRtNext); k++) {
     uint8_t in[2];
     if (!B.syncStep(&in[me], &in[1 - me])) break;
-    if (pong) botPg.step(in); else botSn.step(in);
+    if (pong) botPg.step(in); else if (pac) botPm.step(in); else botSn.step(in);
     uint8_t mine;
-    if (pong) {                                        // follow the ball, not too well
+    if (pac) {                                         // wander: a new open way now and then
+      const RmEnt &e = botPm.pac[me];
+      mine = botPm.want[me];
+      if (!mine || rtRand(botRnd) % 40 == 0 || RtPac::wallAt(e.x + RtPac::dx(mine), e.y + RtPac::dy(mine)))
+        for (int t = 0; t < 8; t++) {
+          uint8_t d = 1 + rtRand(botRnd) % 4;
+          if (!RtPac::wallAt(e.x + RtPac::dx(d), e.y + RtPac::dy(d))) { mine = d; break; }
+        }
+    } else if (pong) {                                        // follow the ball, not too well
       int c = botPg.pad[me] + RP_PH / 2, b = botPg.by >> 4;
       mine = (rtRand(botRnd) % 5 < 2) ? 0 : (b < c - 2 ? 1 : (b > c + 2 ? 2 : 0));
     } else {                                           // keep going, turn before a wall
@@ -142,13 +152,66 @@ static void simBotRealtime(uint32_t now) {
     B.syncPut(mine, now);
     botRtNext += RT_TICK_MS;
   }
-  uint8_t w = pong ? botPg.winner : botSn.winner;
+  uint8_t w = pong ? botPg.winner : (pac ? botPm.winner : botSn.winner);
   if (w) {
     simBotGames++;
     simBotResult = w == 3 ? 3 : (w == me + 1 ? 1 : 2);
     B.finish();
     botRt = false;
   }
+}
+
+// battleship: a fixed fleet (4 3 3 2 2, not touching), random shots
+static const uint8_t BOT_FLEET[64] = {
+  1,1,1,1,0,0,2,0,
+  0,0,0,0,0,0,2,0,
+  3,0,0,0,0,0,2,0,
+  3,0,0,4,4,0,0,0,
+  3,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,5,0,
+  0,0,0,0,0,0,5,0,
+  0,0,0,0,0,0,0,0 };
+static uint8_t botFleet[64], botSea[64];
+static bool    botShipOn = false, botShipWait = false;
+static uint8_t botShipRes = 0, botShipHits = 0;
+
+static uint8_t botShipFire(uint8_t cell) {          // 1 miss, 2 hit, 3 sunk
+  botFleet[cell] |= 0x80;
+  uint8_t s = botFleet[cell] & 0x7F;
+  if (!s) return 1;
+  for (int i = 0; i < 64; i++) if ((botFleet[i] & 0x7F) == s && !(botFleet[i] & 0x80)) return 2;
+  return 3;
+}
+static bool botShipDead() { for (int i = 0; i < 64; i++) if ((botFleet[i] & 0x7F) && !(botFleet[i] & 0x80)) return false; return true; }
+static void botShipShoot(uint32_t now) {
+  uint8_t c; do c = rand() % 64; while (botSea[c]);
+  botSea[c] = 1;
+  simBot.sendMove((botShipRes << 6) | c, now);
+  botShipWait = true;
+}
+
+static void simBotShip(uint32_t now) {
+  LinkCore &B = simBot;
+  if (!botShipOn) {
+    botShipOn = true; botShipWait = false; botShipRes = 0; botShipHits = 0;
+    memcpy(botFleet, BOT_FLEET, 64); memset(botSea, 0, 64);
+    botNext = now + 2500;                          // "sets up its fleet" first
+    botTurn = B.iStart;
+  }
+  uint8_t m;
+  if (B.moveIn(&m)) {
+    uint8_t res = m >> 6, cell = m & 63;
+    if (botShipWait) {
+      botShipWait = false;
+      if (res >= 2) botShipHits++;
+      if (botShipHits >= 14) { simBotGames++; simBotResult = 1; B.finish(); botShipOn = false; return; }
+    }
+    uint8_t r = (botFleet[cell] & 0x80) ? 1 : botShipFire(cell);
+    botShipRes = r;
+    if (botShipDead()) { B.sendMove(r << 6, now); simBotGames++; simBotResult = 2; B.finish(); botShipOn = false; return; }
+    botTurn = true; botNext = now + 400;
+  }
+  if (botTurn && now >= botNext && !botShipWait) { botTurn = false; botShipShoot(now); }
 }
 
 static void simBotBrain(uint32_t now) {
@@ -162,7 +225,8 @@ static void simBotBrain(uint32_t now) {
   }
   if (B.state == LK_OVER && B.delivered()) B.toLobby();
   if (B.state == LK_PLAYING && LinkCore::realtime(B.game)) { simBotRealtime(now); return; }
-  if (B.state != LK_PLAYING) botRt = false;
+  if (B.state == LK_PLAYING && B.game == LKG_SHIP) { simBotShip(now); return; }
+  if (B.state != LK_PLAYING) { botRt = false; botShipOn = false; }
   if (B.state != LK_PLAYING) { if (B.state != LK_INVITED) botNext = now + 1500; return; }
   if (!botInGame) {                                    // a new game begins
     botInGame = true; botMoves = 0;

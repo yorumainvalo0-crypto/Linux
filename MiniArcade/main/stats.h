@@ -77,12 +77,21 @@ static const Award AWARDS[] = {
   { "FROG KING",    "Frogger: 500 points",     AW_SCORE, 12, 500 },
   { "FOUR IN A ROW","4 wins: 300 points",      AW_SCORE, 13, 300 },
   { "NOUGHTS PRO",  "Tic Tac Toe: 300 points", AW_SCORE, 14, 300 },
+  { "TILE MASTER",  "2048: 5000 points",       AW_SCORE, 15, 5000 },
+  { "DEMINER",      "Minesweeper: win once",   AW_SCORE, 16, 1 },
+  { "GHOST HUNTER", "Pac-Man: 3000 points",    AW_SCORE, 17, 3000 },
+  { "ACE PILOT",    "Shooter: 1000 points",    AW_SCORE, 18, 1000 },
+  { "LONG JUMP",    "Jump & Run: 500 points",  AW_SCORE, 19, 500 },
+  { "BOX PUSHER",   "Sokoban: solve 6 levels", AW_SCORE, 20, 6 },
+  { "WAREHOUSE",    "Sokoban: solve all",      AW_SCORE, 20, 12 },
+  { "ADMIRAL",      "Battleship: beat the CPU", AW_SCORE, 21, 1 },
   { "ONE HOUR",     "play 1 hour in all",      AW_TIME,   0, 60 },
   { "MARATHON",     "play 10 hours in all",    AW_TIME,   0, 600 },
   { "HELLO THERE",  "play an online game",     AW_ONLINE, 0, 1 },
   { "CHAMPION",     "win 5 online games",      AW_WINS,   0, 5 },
 };
 static const uint8_t AWARD_N = sizeof(AWARDS) / sizeof(AWARDS[0]);
+static_assert(sizeof(AWARDS) / sizeof(AWARDS[0]) <= 32, "one bit per award in StatBlob.awards");
 
 const char *gameName(uint8_t i);        // from the library table
 uint8_t     realGames();

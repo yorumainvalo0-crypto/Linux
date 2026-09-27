@@ -98,13 +98,25 @@ uint8_t botInput<RtSnake>(const RtSnake &g, uint8_t me, uint32_t &r) {
   return best;
 }
 
+template <>
+uint8_t botInput<RtPac>(const RtPac &g, uint8_t me, uint32_t &r) {
+  const RmEnt &e = g.pac[me];
+  uint8_t w = g.want[me];
+  if (!w || rtRand(r) % 30 == 0 || RtPac::wallAt(e.x + RtPac::dx(w), e.y + RtPac::dy(w)))
+    for (int t = 0; t < 8; t++) {
+      uint8_t d = 1 + rtRand(r) % 4;
+      if (!RtPac::wallAt(e.x + RtPac::dx(d), e.y + RtPac::dy(d))) return d;
+    }
+  return w;
+}
+
 template <class G>
 static bool playRealtime(int loss, int seed, uint8_t game, double *tps, uint8_t *win) {
   Air a; a.loss = loss; a.rs = 4242 + seed * 17;
   Node A, B; addNode(a, A, 1, "ANNA"); addNode(a, B, 2, "TOM");
   for (int w = 0; w < 100 && idxOf(A.core, B) < 0; w++) a.step(100);
   int b = idxOf(A.core, B);
-  if (b < 0 || !A.core.peer(b).rt) return false;
+  if (b < 0 || !(A.core.peer(b).caps & LinkCore::capOf(game))) return false;
   A.core.invite(b, game, a.now);
   for (int w = 0; w < 100 && B.core.state != LK_INVITED; w++) a.step(50);
   B.core.answer(true, a.now);
@@ -141,23 +153,27 @@ static bool playRealtime(int loss, int seed, uint8_t game, double *tps, uint8_t 
 
 int main() {
   // ---- real-time games: both copies stay the same, even with heavy loss ----
-  for (uint8_t game : { (uint8_t)LKG_PONG, (uint8_t)LKG_SNAKE }) {
+  for (uint8_t game : { (uint8_t)LKG_PONG, (uint8_t)LKG_SNAKE, (uint8_t)LKG_PAC }) {
+    const char *gn = game == LKG_PONG ? "pong" : (game == LKG_SNAKE ? "snake" : "pac-man");
     int same = 0, runs = 0, wins[4] = { 0 };
     double slow = 1e9;
     for (int loss : { 0, 30, 50 })
       for (int seed = 0; seed < 8; seed++, runs++) {
         double tps = 0; uint8_t w = 0;
-        bool ok = game == LKG_PONG ? playRealtime<RtPong>(loss, seed, game, &tps, &w)
-                                   : playRealtime<RtSnake>(loss, seed, game, &tps, &w);
-        if (ok) { same++; wins[w]++; } else printf("      %s loss %d seed %d: out of step\n", game == LKG_PONG ? "pong" : "snake", loss, seed);
+        bool ok = game == LKG_PONG  ? playRealtime<RtPong>(loss, seed, game, &tps, &w)
+                : game == LKG_SNAKE ? playRealtime<RtSnake>(loss, seed, game, &tps, &w)
+                                    : playRealtime<RtPac>(loss, seed, game, &tps, &w);
+        if (ok) { same++; wins[w]++; } else printf("      %s loss %d seed %d: out of step\n", gn, loss, seed);
         if (loss == 30 && tps < slow) slow = tps;
       }
     printf("      %s: %d of %d games identical on both consoles, winners p0 %d / p1 %d / draw %d, "
            "slowest at 30%% loss %.0f ticks/s (50 = full speed)\n",
-           game == LKG_PONG ? "pong" : "snake", same, runs, wins[1], wins[2], wins[3], slow);
-    check(game == LKG_PONG ? "pong: same game on both consoles despite loss"
-                           : "snake: same game on both consoles despite loss", same == runs);
-    check(game == LKG_PONG ? "pong: smooth enough at 30% loss" : "snake: smooth enough at 30% loss", slow > 35);
+           gn, same, runs, wins[1], wins[2], wins[3], slow);
+    char w1[64], w2[64];
+    snprintf(w1, sizeof(w1), "%s: same game on both consoles despite loss", gn);
+    snprintf(w2, sizeof(w2), "%s: smooth enough at 30%% loss", gn);
+    check(w1, same == runs);
+    check(w2, slow > 35);
   }
 
   // ---- list, invite, accept, a whole game with heavy loss ----

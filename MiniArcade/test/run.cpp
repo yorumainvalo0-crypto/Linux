@@ -183,6 +183,7 @@ void simFrameSent(const uint8_t* d, size_t n){
 #include "net.h"             // pretend network, before the sketch finds main/net.h
 #include "link.h"            // multiplayer with a bot next door
 #include "MiniArcade.ino"
+#include "sksolve.h"
 
 static bool saw(const char*s){ for(auto&t:seenTexts) if(t.find(s)!=std::string::npos) return true; return false; }
 static uint16_t maxScore(const char*p){
@@ -308,6 +309,39 @@ int main(int argc,char**argv){
         script.push_back({t+150,16}); script.push_back({t+200,0});
         if(rand()%5==0){ script.push_back({t+300,16}); script.push_back({t+350,0}); } }
       captureAt={1500,1700};
+  } else if(scenario=="pacman"){  simEnd=90000; downs(17,1300,180);
+      script.push_back({4600,16}); script.push_back({4660,0});
+      for(uint32_t t=5000;t<85000;t+=400){                        // wander
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0}); }
+      captureAt={1100,1600,2600};
+  } else if(scenario=="shooter"){ simEnd=60000; downs(18,1300,180);
+      script.push_back({4800,16}); script.push_back({4860,0});
+      for(uint32_t t=5200;t<58000;t+=500){                        // weave up and down
+        script.push_back({t,(uint8_t)(rand()%2?1:2)}); script.push_back({t+300,0});
+        if(rand()%12==0){ script.push_back({t+350,16}); script.push_back({t+400,0}); } }   // a bomb now and then
+      captureAt={1500,2500};
+  } else if(scenario=="jump"){    simEnd=60000; downs(19,1300,180);
+      script.push_back({5000,16}); script.push_back({5060,0});
+      for(uint32_t t=5400;t<58000;t+=600){                        // run right, jump now and then
+        script.push_back({t,8}); script.push_back({t+250,9}); script.push_back({t+400,8}); script.push_back({t+580,0}); }
+      captureAt={1500,2500};
+  } else if(scenario=="sokoban"){ simEnd=20000; downs(20,1300,150);
+      script.push_back({5000,16}); script.push_back({5060,0});     // level list
+      script.push_back({5500,16}); script.push_back({5560,0});     // play level 1
+      static const uint8_t mv[]={4,4,4,1,4,2,8,8,2,4};             // some steps ...
+      for(int i=0;i<10;i++){ script.push_back({6000+i*300,mv[i]}); script.push_back({6060+i*300,0}); }
+      for(int i=0;i<3;i++){ script.push_back({9500+i*300,16}); script.push_back({9560+i*300,0}); }   // ... 3 undone
+      captureAt={1100,1900};
+  } else if(scenario=="battleship"){ simEnd=120000; downs(21,1300,150);
+      script.push_back({4600,16}); script.push_back({4660,0});     // open
+      script.push_back({5000,1});  script.push_back({5060,0});     // shuffle once
+      script.push_back({5400,16}); script.push_back({5460,0});     // ready
+      for(uint32_t t=6000;t<115000;t+=450){                       // aim somewhere, fire
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
+        script.push_back({t+200,16}); script.push_back({t+260,0}); }
+      captureAt={1100,3000};
   } else if(scenario=="pause"){   simEnd=36000;
       script.push_back({1300,16});  script.push_back({1360,0});    // open tetris
       script.push_back({3000,16});  script.push_back({4000,0});    // hold OK -> pause
@@ -388,17 +422,20 @@ int main(int argc,char**argv){
       if(scenario!="mpwait") for(uint32_t t=10000;t<36000;t+=450){   // play: move and drop
         script.push_back({t,(uint8_t)((rand()%2)?4:8)}); script.push_back({t+60,0});
         script.push_back({t+200,16}); script.push_back({t+260,0}); }
-  } else if(scenario=="mppong"||scenario=="mpsnake"){ simEnd=90000;
+  } else if(scenario=="mppong"||scenario=="mpsnake"||scenario=="mppac"||scenario=="mpship"){ simEnd=scenario=="mpship"?400000:90000;
       bool pong = scenario=="mppong";
+      int downsTo = pong ? 2 : (scenario=="mpsnake" ? 3 : (scenario=="mppac" ? 4 : 5));
       ups(3,1300,180);
       script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
       script.push_back({6500,2});  script.push_back({6560,0});     // ANNA's row
       script.push_back({6900,16}); script.push_back({6960,0});     // challenge ...
-      for(int i=0;i<(pong?2:3);i++){ script.push_back({7200+i*250,2}); script.push_back({7260+i*250,0}); }
-      script.push_back({8200,16}); script.push_back({8260,0});     // ... to pong / snake
-      for(uint32_t t=10000;t<80000;t+=300){                       // wander
+      for(int i=0;i<downsTo;i++){ script.push_back({7200+i*230,2}); script.push_back({7260+i*230,0}); }
+      script.push_back({8200,16}); script.push_back({8260,0});     // ... to pong / snake / pac-man
+      if(scenario=="mpship"){ script.push_back({9500,16}); script.push_back({9560,0}); }   // fleet ready
+      for(uint32_t t=10000;t<(scenario=="mpship"?395000u:80000u);t+=300){                // wander
         static const uint8_t keys[4]={1,2,4,8};
-        script.push_back({t,keys[rand()%4]}); script.push_back({t+(pong?250:60),0}); }
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+(pong?250:60),0});
+        if(scenario=="mpship"){ script.push_back({t+150,16}); script.push_back({t+200,0}); } }
       captureAt={2200,2600};
   } else if(scenario=="mpold"){ simEnd=12000;
       simBotOld=true;                                              // ANNA runs an old firmware
@@ -538,6 +575,111 @@ int main(int argc,char**argv){
     }
     printf("      %d empty cells opened by flood fill\n", zeroOpen);
     check("mines placed right, first cell safe, flood fill complete", bad==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="pmlogic"){
+    /* thousands of ticks with a random player: nobody walks through walls,
+       every ghost gets out of the house, the dots go down, games end */
+    int wallHits=0, games=0, maxEaten=0; bool out[RM_GH]={false,false,false};
+    uint32_t r=99;
+    for(int g=0; g<30; g++){
+      RtPac P; P.begin(1234+g*77, 1+(g%2));
+      uint16_t start=P.dotsLeft; uint8_t in[2]={0,0};
+      for(int t=0; t<60000 && !P.winner; t++){
+        if(t%25==0){ in[0]=1+rtRand(r)%4; in[1]=1+rtRand(r)%4; }
+        P.step(in);
+        for(uint8_t p=0;p<P.np;p++) if(RtPac::wallAt(P.pac[p].x,P.pac[p].y)) wallHits++;
+        for(uint8_t k=0;k<RM_GH;k++){
+          const RmEnt&e=P.gh[k];
+          if(e.state==RG_CHASE) out[k]=true;
+          if(RtPac::wallAt(e.x,e.y)&&!RtPac::doorAt(e.x,e.y)) wallHits++;
+        }
+        if(start-P.dotsLeft>maxEaten) maxEaten=start-P.dotsLeft;
+      }
+      if(P.winner) games++;
+    }
+    printf("      %d of 30 games ended, up to %d dots eaten in one game\n", games, maxEaten);
+    check("nobody inside a wall", wallHits==0);
+    check("every ghost leaves the house", out[0]&&out[1]&&out[2]);
+    check("games end", games==30);
+    check("dots get eaten", maxEaten>40);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="jrfair"){
+    /* the jump itself: how high and how far, straight from the constants */
+    int vy=-JR_JUMP, y=0, top=0, t=0; do { y+=vy; vy+=JR_G; if(y<top) top=y; t++; } while(y<0);
+    int high=-top/JR_Q, far=t*JR_RUN/JR_Q;
+    printf("      jump: %d px high, %d px far at full speed\n", high, far);
+    check("steps up are within the jump", high >= JR_UP*JR_T + 4);
+    check("gaps are within the jump", far >= JR_GAP*JR_T + 8);
+    /* and the level: never a wider gap or a higher step than that */
+    int bad=0; long cols=0;
+    for(int g=0; g<200; g++){
+      randomSeed(300+g); jrMade=0; jrCur=1; jrLeft=0; jrMode=0; jrDiff=g%6;
+      memset(jrE,0,sizeof(jrE));
+      int gap=0, lastLand=1;
+      for(int c=0;c<3000;c++,cols++){
+        jrMake(); uint8_t i=c%JR_RING, land = jrH[i] ? jrH[i] : jrP[i];
+        for(uint8_t k=0;k<JR_EN;k++) jrE[k].on=false;
+        if(!land){ gap++; continue; }
+        if(gap>JR_GAP){ bad++; if(bad<5) printf("      gap of %d at %d\n",gap,c); }
+        if(land>lastLand+JR_UP || (gap>=2 && land>lastLand+1)){ bad++; if(bad<5) printf("      step %d->%d after gap %d\n",lastLand,land,gap); }
+        gap=0; lastLand=land;
+      }
+    }
+    printf("      %ld columns made\n", cols);
+    check("level never asks for an impossible jump", bad==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="sklevels"){
+    /* every level: fits the screen, one player, as many boxes as goals,
+       and the solver finds a way; the game's own moves undo cleanly */
+    int bad=0, last=-1;
+    for(uint8_t l=0; l<SK_N; l++){
+      SkLevel L=skParse(SK_LEVELS[l]);
+      int goals=0; for(uint8_t g:L.goal) goals+=g;
+      if(L.w>SK_W||L.h>SK_H||goals!=(int)L.boxes.size()||L.boxes.empty()){ bad++; printf("      level %u malformed\n",l+1); continue; }
+      int p=skSolve(L);
+      printf("      level %2u: %dx%d, %d boxes, %d pushes\n", l+1, L.w, L.h, (int)L.boxes.size(), p);
+      if(p<=0){ bad++; continue; }
+      if(p<last) printf("      (easier than the one before)\n");
+      last=p;
+      if(!skLoad(l)||skW!=L.w||skH!=L.h||skX!=L.px||skY!=L.py){ bad++; printf("      level %u loads differently\n",l+1); }
+      uint8_t before[SK_H][SK_W]; memcpy(before,sk,sizeof(sk)); uint8_t bx=skX, by=skY;
+      randomSeed(l); int n=0;
+      for(int k=0;k<300;k++) if(skStep(random(4))) n++;
+      while(skBack()) {}
+      if(n>SK_UNDO) { skLoad(l); }                     // more than the undo can hold: fine
+      else if(memcmp(before,sk,sizeof(sk))||skX!=bx||skY!=by){ bad++; printf("      level %u: undo does not restore\n",l+1); }
+    }
+    check("all levels well formed and solvable, undo exact", bad==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="bslogic"){
+    int bad=0; long shots=0; int most=0;
+    for(int g=0; g<500; g++){
+      randomSeed(700+g);
+      bsPlace(bsTheirs);
+      int cells=0, len[6]={0};
+      for(int i=0;i<64;i++){ uint8_t s=bsTheirs[i]; if(!s) continue; cells++; len[s]++;
+        int x=i%8,y=i/8;                                     // a different ship next to it?
+        for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){ int X=x+dx,Y=y+dy;
+          if(X>=0&&Y>=0&&X<8&&Y<8&&bsTheirs[Y*8+X]&&bsTheirs[Y*8+X]!=s) bad++; } }
+      if(cells!=14) bad++;
+      for(int s=0;s<5;s++) if(len[s+1]!=BS_LEN[s]) bad++;
+      memset(bsAiShot,0,64);
+      int n=0;
+      while(!bsAllSunk(bsTheirs) && n<64){ uint8_t c=bsAiPick(bsAiShot); uint8_t r=bsFire(bsTheirs,c); if(!r) bad++; bsMark(bsAiShot,c,r); n++; }
+      if(!bsAllSunk(bsTheirs)) bad++;
+      shots+=n; if(n>most) most=n;
+    }
+    printf("      CPU needs %.1f shots on average, at most %d (64 cells)\n", shots/500.0, most);
+    check("fleets legal (sizes, never touching) and the CPU always finishes", bad==0);
+    check("the CPU plays well", shots/500.0 < 48);
     printf("%s\n", fails?"### FAILURES ###":"all checks passed");
     return fails?1:0;
   }
@@ -785,6 +927,31 @@ int main(int argc,char**argv){
     check("difficulty offered", saw("easy    20 mines")&&saw("hard    36 mines"));
     check("minesweeper drawn", saw("MINES")&&saw("*20  0s"));
     check("a round ended", saw("GAME OVER")||saw("NEW RECORD!"));
+  } else if(scenario=="pacman"){
+    check("pac-man drawn", saw("PAC-MAN")&&saw("READY!"));
+    check("dots eaten", maxScore("SCORE ")>0);
+    check("game over reached", saw("GAME OVER")&&(saw("NEW RECORD!")||saw("BEST ")));
+    printf("      score %u, stored hs17 %u\n", maxScore("SCORE "), simNvsU16["hs17"]);
+    check("high score consistent", simNvsU16["hs17"]==maxScore("SCORE "));
+  } else if(scenario=="shooter"){
+    check("shooter drawn", saw("SHOOTER"));
+    check("something shot down", maxScore("SCORE ")>0);
+    check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      score %u, stored hs18 %u\n", maxScore("SCORE "), simNvsU16["hs18"]);
+    check("high score consistent", simNvsU16["hs18"]==maxScore("SCORE "));
+  } else if(scenario=="jump"){
+    check("jump & run drawn", saw("JUMP"));
+    check("ran some way", maxScore("SCORE ")>0||simNvsU16["hs19"]>0);
+    printf("      score %u, stored hs19 %u\n", maxScore("SCORE "), simNvsU16["hs19"]);
+    check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
+  } else if(scenario=="sokoban"){
+    check("level list shown", saw("SOKOBAN 1")&&saw("<1/")&&saw(" OK"));
+    check("moves counted", saw("7 moves")||saw("8 moves")||saw("9 moves"));
+    check("undo counts back", saw("5 moves")||saw("6 moves"));
+  } else if(scenario=="battleship"){
+    check("battleship drawn", saw("BATTLESHIP")&&saw("UP=new")&&saw("your go"));
+    check("shots fired", saw("miss")||saw("hit!"));
+    check("a game ended", saw("GAME OVER")||saw("NEW RECORD!"));
   } else if(scenario=="pause"){
     StatBlob b; memset(&b,0,sizeof(b));
     if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));
@@ -795,7 +962,7 @@ int main(int argc,char**argv){
   } else if(scenario=="stats"){
     check("stats page drawn with the total time", saw("STATS")&&saw("1h03  AWARDS>"));
     check("per game line", saw("Tetris        3x   1h02"));
-    check("awards page drawn", saw("AWARDS")&&saw("1/22  <STATS")&&saw("* FIRST STEPS")&&saw("- EXPLORER"));
+    check("awards page drawn", saw("AWARDS")&&saw("1/30  <STATS")&&saw("* FIRST STEPS")&&saw("- EXPLORER"));
     check("what an award needs is shown", saw("try every game"));
   } else if(scenario=="wlan"){
     check("settings list the wlan page", saw("wlan and update..."));
@@ -831,13 +998,13 @@ int main(int argc,char**argv){
     check("no answer after 30 s", saw("no answer from ANNA"));
   } else if(scenario=="mpleft"){
     check("opponent leaving reported", saw("ANNA left the game"));
-  } else if(scenario=="mppong"||scenario=="mpsnake"){
-    bool pong = scenario=="mppong";
-    check("challenge offers the real-time games", saw("Pong")&&saw("Snake"));
-    check("game against ANNA shown", saw("YOU ")&&saw(" ANNA"));
+  } else if(scenario=="mppong"||scenario=="mpsnake"||scenario=="mppac"||scenario=="mpship"){
+    bool pong = scenario=="mppong"; (void)pong;
+    check("challenge offers the real-time games", saw("Pong")&&saw("Snake")&&(scenario!="mppac"||saw("Pac-Man")));
+    check("game against ANNA shown", scenario=="mpship" ? saw("vs ANNA")&&saw("UP=new") : saw("YOU ")&&saw(" ANNA"));
     check("a game was decided", saw("YOU WIN")||saw("LOST")||saw("DRAW"));
     bool same = (simBotResult==1&&saw("LOST"))||(simBotResult==2&&saw("YOU WIN"))||(simBotResult==3&&saw("DRAW"));
-    printf("      bot games %d, bot result %d (%s)\n", simBotGames, simBotResult, pong?"pong":"snake");
+    printf("      bot games %d, bot result %d (%s)\n", simBotGames, simBotResult, scenario.c_str());
     check("both consoles saw the same end", simBotGames>=1 && same);
     StatBlob b; memset(&b,0,sizeof(b));
     if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));

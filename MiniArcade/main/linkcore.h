@@ -32,7 +32,8 @@
 enum LkType  : uint8_t { LK_BEACON = 1, LK_INVITE, LK_ANSWER, LK_MOVE, LK_ACK, LK_BYE, LK_SYNC };
 enum LkState : uint8_t { LK_LOBBY, LK_INVITING, LK_INVITED, LK_PLAYING, LK_OVER };
 enum LkEnd   : uint8_t { LKE_NONE, LKE_DECLINED, LKE_BUSY, LKE_TIMEOUT, LKE_GONE, LKE_LEFT, LKE_ERROR };
-enum LkGame  : uint8_t { LKG_C4 = 1, LKG_TTT = 2, LKG_PONG = 3, LKG_SNAKE = 4 };
+enum LkGame  : uint8_t { LKG_C4 = 1, LKG_TTT = 2, LKG_PONG = 3, LKG_SNAKE = 4, LKG_PAC = 5, LKG_SHIP = 6 };
+#define LK_CAPS 14            // beacon flags: 2 = Pong and Snake, 4 = Pac-Man, 8 = Battleship
 
 struct __attribute__((packed)) LkPacket {
   char     m0, m1;                    // 'M' 'A'
@@ -40,7 +41,7 @@ struct __attribute__((packed)) LkPacket {
   uint16_t sid;                       // session id, chosen by the challenger
   uint8_t  seq;                       // move number
   uint8_t  arg;                       // move, game or answer
-  uint8_t  flags;                     // beacon: 1 = in a game, 2 = knows real-time games
+  uint8_t  flags;                     // beacon: 1 = in a game, 2 / 4 = knows more games (LK_CAPS)
                                       // invite: 1 = challenger starts
   char     name[LK_NAME];
 };
@@ -65,7 +66,7 @@ struct LkPeer {
   char     name[LK_NAME + 1];
   char     code[5];                   // short id derived from the chip, e.g. "K7F2"
   bool     busy;
-  bool     rt;                        // its firmware knows Pong and Snake
+  uint8_t  caps;                      // games its firmware knows beyond the first two (LK_CAPS bits)
   uint16_t sid;                       // session the peer is in (from its beacon)
   int8_t   rssi;
   uint32_t seen;                      // ms of the last packet
@@ -168,7 +169,8 @@ public:
   }
 
   // ---------------- real-time games ----------------
-  static bool realtime(uint8_t g) { return g == LKG_PONG || g == LKG_SNAKE; }
+  static bool realtime(uint8_t g) { return g == LKG_PONG || g == LKG_SNAKE || g == LKG_PAC; }
+  static uint8_t capOf(uint8_t g) { return g == LKG_SHIP ? 8 : (g == LKG_PAC ? 4 : (realtime(g) ? 2 : 0)); }
 
   /* The next tick, when both inputs for it are there. After each tick the
      game hands in its input for the tick LK_LEAD ahead with syncPut().   */
@@ -262,7 +264,7 @@ public:
       nextBeacon = now + LK_BEACON_MS;
       LkPacket p = pkt(LK_BEACON);
       bool inGame = state == LK_PLAYING || (state == LK_OVER && !delivered());
-      p.flags = ((inGame || state == LK_INVITING || state == LK_INVITED) ? 1 : 0) | 2;
+      p.flags = ((inGame || state == LK_INVITING || state == LK_INVITED) ? 1 : 0) | LK_CAPS;
       p.sid = inGame ? sid : 0;
       tx(txCtx, NULL, (const uint8_t *)&p, sizeof(p));
     }
@@ -385,7 +387,7 @@ private:
     pe->name[LK_NAME] = 0;
     for (uint8_t i = 0; i < LK_NAME; i++)            // only plain characters on screen
       if (pe->name[i] && (pe->name[i] < ' ' || pe->name[i] > '~')) pe->name[i] = '?';
-    if (p.type == LK_BEACON) { pe->busy = p.flags & 1; pe->rt = p.flags & 2; pe->sid = p.sid; }
+    if (p.type == LK_BEACON) { pe->busy = p.flags & 1; pe->caps = p.flags & LK_CAPS; pe->sid = p.sid; }
     pe->rssi = rssi;
     pe->seen = now;
     return pe;
