@@ -751,6 +751,89 @@ void wlanRun() {
   }
   netStop();
 }
+
+// ---------------- firmware version ----------------
+/* Both update slots: the running firmware and the one before. At start this
+   page shows up for 3 s whenever both can be started, so a new version that
+   turns out broken never locks the player in. A fresh update is only kept
+   for good after a key press (here or in the menu) - switching the board
+   off and on before that also brings the previous version back.         */
+void versionRun(bool atBoot) {
+  FwSlot s[2];
+  fwSlots(s);
+  if (atBoot && !(s[1].present && s[1].bootable)) return;
+  uint8_t  sel = 0;
+  bool     waiting = atBoot;                 // count down until a key is pressed
+  uint32_t t0 = millis();
+  btnClear();
+  for (;;) {
+    bool alive = poll();
+    if (!alive) {
+      if (!atBoot) return;                     // hold OK = back to the settings
+      oled.clearBuffer();
+      oled.setFont(FONT);
+    }
+    if (btn(B_UP))   { sel = 0; waiting = false; sfx(700, 15); }
+    if (btn(B_DOWN)) { sel = 1; waiting = false; sfx(700, 15); }
+    bool pressed = btn(B_OK);
+    uint32_t left = 3000 - (millis() - t0 < 3000 ? millis() - t0 : 3000);
+    if (pressed || (waiting && !left)) {
+      if (sel == 0) {
+        if (pressed) fwConfirm();              // display and keys work: keep it
+        sfx(1200, 50);
+        return;
+      }
+      if (s[1].present && s[1].bootable) {
+        oled.clearBuffer();
+        oled.setFont(FONT_B);
+        centerStr(36, "STARTING");
+        oled.setFont(FONT);
+        {
+          char b[40];
+          snprintf(b, sizeof(b), "v%.31s", s[1].version);
+          centerStr(50, b);
+        }
+        oled.sendBuffer();
+        sfx(1200, 50);
+        delay(400);
+        fwStartOther();                        // only returns when it cannot
+        s[1].bootable = false;
+      }
+      sfx(300, 120);
+      continue;
+    }
+
+    oled.setFont(FONT_B);
+    oled.drawStr(2, 12, "VERSION");
+    oled.drawHLine(0, TOP_H - 1, SCR_W);
+    oled.setFont(FONT);
+    if (waiting) {
+      char b[8];
+      snprintf(b, sizeof(b), "%us", (unsigned)((left + 999) / 1000 % 10));
+      rightStr(12, b);
+    }
+    for (uint8_t i = 0; i < 2; i++) {
+      uint8_t y = 18 + i * 14;
+      const char *tag;
+      if (i == 0)                 tag = s[0].pending ? "new" : "running";
+      else if (!s[1].present)     tag = "";
+      else if (!s[1].bootable)    tag = "broken";
+      else                        tag = "previous";
+      char b[40];
+      if (s[i].present) snprintf(b, sizeof(b), "v%.31s", s[i].version);
+      else              snprintf(b, sizeof(b), "no other version");
+      if (i == sel) { oled.drawBox(0, y, SCR_W, 13); oled.setDrawColor(0); }
+      oled.setFont(s[i].present ? FONT_B : FONT);
+      oled.drawStr(3, y + 11, b);
+      oled.setFont(FONT);
+      rightStr(y + 10, tag);
+      oled.setDrawColor(1);
+    }
+    centerStr(55, "UP/DOWN, OK = start");
+    if (!atBoot) centerStr(63, "hold OK = back");
+    oled.sendBuffer();
+  }
+}
 #endif
 
 // =========================================================
@@ -759,7 +842,7 @@ void wlanRun() {
 /* One page with everything adjustable. LEFT/RIGHT changes the value of the
    selected line, OK runs the wizards, holding OK leaves.                 */
 #ifdef HAVE_NET
-#define SET_N 8                     // one more line: WLAN
+#define SET_N 9                     // two more lines: WLAN, firmware version
 #else
 #define SET_N 7
 #endif
@@ -803,6 +886,7 @@ void settingsRun() {
       else if (sel == 5) batterySetup();
 #ifdef HAVE_NET
       else if (sel == 6) wlanRun();
+      else if (sel == 7) versionRun(false);
 #endif
       else if (sel == SET_N - 1) return;                // back to the library
       applyCfg();
@@ -820,6 +904,7 @@ void settingsRun() {
     snprintf(line[5], 26, "set up battery...");
 #ifdef HAVE_NET
     snprintf(line[6], 26, "wlan and update...");
+    snprintf(line[7], 26, "firmware version...");
 #endif
     snprintf(line[SET_N - 1], 26, "back to the games");
 
@@ -2568,9 +2653,17 @@ static const uint8_t GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 
 void menu() {
   static uint8_t sel = 0, top = 0;
+#ifdef HAVE_NET
+  static bool unconfirmed = fwPending();      // fresh update: kept after a key press
+#endif
   btnClear();
   while (true) {
     poll();                                   // long press does nothing here
+#ifdef HAVE_NET
+    if (unconfirmed)
+      for (uint8_t i = 0; i < B_COUNT; i++)
+        if (bDown[i]) { fwConfirm(); unconfirmed = false; break; }
+#endif
     if (btn(B_UP)   && sel > 0)               { sel--; sfx(700, 15); }
     if (btn(B_DOWN) && sel < GAME_COUNT - 1)  { sel++; sfx(700, 15); }
     if (sel < top) top = sel;
@@ -2639,6 +2732,9 @@ void setup() {
     for (uint8_t i = 0; i < B_COUNT; i++) if (rawPressed(i)) held = true;
   }
   if (!known || held) learnKeys();
+#ifdef HAVE_NET
+  versionRun(true);                      // choose the firmware when two are stored
+#endif
 
   prefs.begin("arcade", true);
   bool sndKnown = prefs.getUShort("sset", 0) == 1;

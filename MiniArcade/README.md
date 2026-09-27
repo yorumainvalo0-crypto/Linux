@@ -55,8 +55,20 @@ open, and it needs a cpu clock of at least 80 MHz (the page offers to switch).
 
 The update page in the browser can do the same: check GitHub, or upload a
 `miniarcade.bin` from a release or from `build/` and press "flash". No extra
-software needed. A new image that crashes before the menu appears is rolled
-back to the previous one automatically.
+software needed.
+
+### Two versions, never stuck
+
+The board keeps two firmwares: the running one and the one before. The next
+update overwrites the older one.
+
+* **At every start** a "VERSION" page shows both for 3 s (only when two are
+  stored). UP/DOWN and OK start the other one, otherwise the current one
+  starts by itself.
+* **Settings -> "firmware version..."** switches later.
+* A **new version is only kept after the first key press** in the menu. If
+  it shows nothing or the keys do not work, switch the board off and on:
+  the previous version comes back by itself.
 
 ### First flash (once, by cable)
 

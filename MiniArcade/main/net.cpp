@@ -15,6 +15,7 @@
 #include "esp_https_ota.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
+#include "esp_image_format.h"
 #include "esp_crt_bundle.h"
 #include "nvs.h"
 #include "lwip/sockets.h"
@@ -611,3 +612,43 @@ NetJob      netJob()           { return job; }
 const char *netRemoteVersion() { return remoteVer; }
 uint8_t     netProgress()      { return progress; }
 const char *netError()         { return errMsg; }
+
+// ---------------- firmware slots ----------------
+static void slotInfo(FwSlot &s, const esp_partition_t *p, bool check) {
+  memset(&s, 0, sizeof(s));
+  esp_app_desc_t d;
+  if (!p || esp_ota_get_partition_description(p, &d) != ESP_OK) return;
+  if (strncmp(d.project_name, esp_app_get_description()->project_name, sizeof(d.project_name))) return;
+  s.present = true;
+  strlcpy(s.version, d.version, sizeof(s.version));
+  esp_ota_img_states_t st;
+  bool known = esp_ota_get_state_partition(p, &st) == ESP_OK;   // not found = flashed by cable
+  s.pending  = known && st == ESP_OTA_IMG_PENDING_VERIFY;
+  s.bootable = !(known && (st == ESP_OTA_IMG_INVALID || st == ESP_OTA_IMG_ABORTED));
+  if (s.bootable && check) {                      // a broken off upload leaves half an image
+    esp_partition_pos_t pos = { p->address, p->size };
+    esp_image_metadata_t md;
+    s.bootable = esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &pos, &md) == ESP_OK;
+  }
+}
+
+void fwSlots(FwSlot s[2]) {
+  slotInfo(s[0], esp_ota_get_running_partition(), false);
+  slotInfo(s[1], esp_ota_get_next_update_partition(NULL), true);
+}
+
+bool fwStartOther() {
+  if (busy()) return false;
+  const esp_partition_t *p = esp_ota_get_next_update_partition(NULL);
+  if (!p || esp_ota_set_boot_partition(p) != ESP_OK) return false;   // also checks the image
+  esp_restart();
+  return true;
+}
+
+void fwConfirm() { esp_ota_mark_app_valid_cancel_rollback(); }
+
+bool fwPending() {
+  esp_ota_img_states_t st;
+  return esp_ota_get_state_partition(esp_ota_get_running_partition(), &st) == ESP_OK &&
+         st == ESP_OTA_IMG_PENDING_VERIFY;
+}

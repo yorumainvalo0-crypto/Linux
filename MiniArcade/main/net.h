@@ -41,3 +41,18 @@ NetJob      netJob();
 const char *netRemoteVersion();
 uint8_t     netProgress();        // 0..100 while JOB_UPDATING
 const char *netError();
+
+// ---------------- firmware slots ----------------
+/* Two app slots: the running firmware and the one before (or the one just
+   downloaded). A new firmware counts as "pending" until fwConfirm(); if the
+   board restarts before that, the bootloader goes back to the other slot. */
+struct FwSlot {
+  char version[32];
+  bool present;          // holds a firmware
+  bool bootable;         // complete, checksum ok and not marked as failed
+  bool pending;          // started, but not confirmed yet
+};
+void fwSlots(FwSlot s[2]);    // [0] = running, [1] = the other slot
+bool fwStartOther();          // restarts into the other slot, false if it cannot
+void fwConfirm();             // the running firmware works - keep it
+bool fwPending();

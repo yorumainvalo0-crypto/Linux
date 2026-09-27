@@ -306,6 +306,15 @@ int main(int argc,char**argv){
       script.push_back({9000,16}); script.push_back({9060,0});     // check for update
       script.push_back({9500,16}); script.push_back({9560,0});     // install it
       captureAt={1000,1100};
+  } else if(scenario=="versions"){ simEnd=8000;
+      simTwoSlots=true;                                             // fresh update, nothing pressed
+      script.push_back({6000,2}); script.push_back({6060,0});      // first key press in the menu
+      captureAt={250,500};
+  } else if(scenario=="versions2"){ simEnd=8000;
+      simTwoSlots=true;
+      script.push_back({1600,2}); script.push_back({1660,0});      // pick the previous version
+      script.push_back({1900,16}); script.push_back({1960,0});
+      captureAt={250};
   } else if(scenario=="wizard2"){ simEnd=20000;
       /* like "wizard", but the board holds GPIO2 and GPIO10 high through
          external pull-ups - this used to make key detection impossible */
@@ -502,6 +511,15 @@ int main(int argc,char**argv){
     check("address of the update page shown", saw("http://192.168.1.50"));
     check("newer release offered", saw("install 9.3"));
     check("update written, restart announced", saw("done - restarting"));
+  } else if(scenario=="versions"){
+    check("version choice shown at start", saw("VERSION")&&saw("previous")&&saw("new"));
+    check("countdown shown", saw("3s")&&saw("1s"));
+    check("started the new version by itself", saw("MiniArcade")&&!simSwitched);
+    check("kept after the first key press", simConfirmed);
+  } else if(scenario=="versions2"){
+    check("version choice shown at start", saw("VERSION"));
+    check("switched to the previous version", simSwitched&&saw("STARTING"));
+    check("new version not confirmed", !simConfirmed);
   } else if(scenario=="wizard2"){
     printf("      learned UP=%u DOWN=%u LEFT=%u RIGHT=%u OK=%u\n",
       simNvsU16["p0"],simNvsU16["p1"],simNvsU16["p2"],simNvsU16["p3"],simNvsU16["p4"]);
