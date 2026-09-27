@@ -50,7 +50,15 @@ buttons = [
   [24.4, 45.0, 3],      // left
   [35.1, 45.0, 4]       // OK in the middle
 ];
-cap_sq  = 6.6;           // arrow caps are square: they cannot turn
+// direct = true: no caps - the lid sinks into a pocket around the D-pad whose
+// floor is level with the tops of the plungers; each switch looks through
+// its own square hole and is pressed with the finger.
+direct   = true;
+body_sq  = 6.0;          // 6 x 6 mm tact switch body
+floor_w  = 1.2;          // thickness of the pocket floor
+pocket   = [19.5, 28.5, 50.7, 58.5];   // floor: x0, y0, x1, y1 (keeps clear of the display)
+slope    = 3.5;          // how far the pocket opens out towards the top (not on the display side)
+cap_sq  = 6.6;           // (direct = false) arrow caps are square: they cannot turn
 cap_rd  = 6.8;           // OK cap is round
 cap_out = 1.5;           // how far the caps stand out of the case
 
@@ -137,10 +145,37 @@ module lid() {
         translate([0, 0, -1]) linear_extrude(z_in + 1) inner2d();
       }
       for (h = holes) translate([h[0], h[1], board_t]) cylinder(d = post_d, h = front_h + 0.01);
+      if (direct) pocket_tub();
     }
     for (h = holes) translate([h[0], h[1], board_t - 1]) cylinder(d = pilot_d, h = front_h);
     window();
-    for (b = buttons) translate([b[0], b[1], 0]) cap_hole(b[2]);
+    if (direct) {
+      pocket_air();
+      for (b = buttons) translate([b[0] - body_sq / 2 - 0.4, b[1] - body_sq / 2 - 0.4, board_t])
+        cube([body_sq + 0.8, body_sq + 0.8, btn_h + 1]);            // the switch bodies pass through
+    } else
+      for (b = buttons) translate([b[0], b[1], 0]) cap_hole(b[2]);
+  }
+}
+
+// ---------------- pocket around the D-pad (direct = true) ----------------
+z_pf = board_t + btn_h;                       // pocket floor, level with the plungers
+
+module prect(grow, open) {                    // pocket outline; open = top opening
+  s = open ? slope : 0;
+  translate([pocket[0] - s - grow, pocket[1] - s - grow, 0])
+    square([pocket[2] - pocket[0] + 2 * s + 2 * grow, pocket[3] - pocket[1] + s + (open ? 1 : 0) + 2 * grow]);
+}
+module pocket_air() {
+  hull() {
+    translate([0, 0, z_pf]) linear_extrude(0.01) prect(0, false);
+    translate([0, 0, z_top]) linear_extrude(0.02) prect(0, true);
+  }
+}
+module pocket_tub() {                          // the material that carries the floor
+  hull() {
+    translate([0, 0, z_pf - floor_w]) linear_extrude(0.01) prect(floor_w, false);
+    translate([0, 0, z_in]) linear_extrude(0.02) prect(floor_w, true);
   }
 }
 
@@ -197,7 +232,9 @@ module testplate() {
     linear_extrude(1.2) square([board_w, board_h]);
     for (h = holes) translate([h[0], h[1], -1]) cylinder(d = screw_d, h = 4);
     translate([win_c[0] - win[0] / 2, win_c[1] - win[1] / 2, -1]) cube([win[0], win[1], 4]);
-    for (b = buttons) translate([b[0], b[1], -1]) linear_extrude(4) cap2d(b[2], tol);
+    for (b = buttons) translate([b[0], b[1], -1])
+      if (direct) linear_extrude(4) square(body_sq + 0.8, center = true);
+      else linear_extrude(4) cap2d(b[2], tol);
     for (y = [usb_esp]) translate([0, y, -1]) rotate(45) cube([2.5, 2.5, 4], center = true);
     for (y = [usb_chg]) translate([board_w, y, -1]) rotate(45) cube([2.5, 2.5, 4], center = true);
     translate([buzzer_c[0], buzzer_c[1], -1]) cylinder(d = 3, h = 4);
@@ -209,9 +246,18 @@ if (part == "bottom") bottom();
 else if (part == "lid") translate([0, 0, z_top]) rotate([180, 0, 0]) lid();   // printed face down
 else if (part == "caps") caps_plate();
 else if (part == "testplate") testplate();
+else if (part == "assembled") {                  // closed case with the switches, for a look
+  color("#3a3f4b") bottom();
+  color("#2d8f5a") cube([board_w, board_h, board_t]);
+  for (b = buttons) color("#222222") translate([b[0] - 3, b[1] - 3, board_t]) cube([6, 6, 3.5]);
+  for (b = buttons) color("#111111") translate([b[0], b[1], board_t]) cylinder(d = 3.5, h = btn_h);
+  color("#dfe3ea") lid();
+}
 else {
   color("#3a3f4b") bottom();
   color("#2d8f5a", 0.9) cube([board_w, board_h, board_t]);                     // the board
   color("#dfe3ea", 0.85) translate([0, 0, 22]) lid();
-  for (b = buttons) color("#e8543f") translate([b[0], b[1], 22 + z_in - 1.0]) cap(b[2]);
+  for (b = buttons) color("#222222") translate([b[0] - 3, b[1] - 3, board_t]) cube([6, 6, 3.5]);   // switches
+  for (b = buttons) color("#111111") translate([b[0], b[1], board_t]) cylinder(d = 3.5, h = btn_h);
+  if (!direct) for (b = buttons) color("#e8543f") translate([b[0], b[1], 22 + z_in - 1.0]) cap(b[2]);
 }

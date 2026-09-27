@@ -10,10 +10,16 @@ from it and ready for the slicer.
 |---|---|---|
 | `testplate.stl` | 1.2 mm plate the size of the board - print this first | flat, ~10 min |
 | `bottom.stl` | back shell: screw posts, battery guides, USB-C openings, switch hole, sound holes | floor down |
-| `lid.stl` | front: display window, button holes, screw bosses | front face down |
-| `caps.stl` | 4 arrow caps + round OK cap | top down (as exported) |
+| `lid.stl` | front: display window, pocket for the buttons, screw bosses | front face down |
 
-No supports needed. PLA or PETG, 0.2 mm layers, 3 walls, 15 % infill works
+![buttons](preview_pocket.png)
+
+The buttons are pressed directly: around the D-pad the lid sinks into a
+pocket whose floor is level with the tops of the plungers, and each switch
+looks through its own square hole. (Separate caps are still in the file:
+`direct = false`, part `caps`.)
+
+No supports needed (the pocket floor is a short bridge). PLA or PETG, 0.2 mm layers, 3 walls, 15 % infill works
 on a Creality K2 Plus (both shells fit on the bed together).
 
 ## Test plate first
@@ -21,7 +27,7 @@ on a Creality K2 Plus (both shells fit on the bed together).
 Lay the test plate on the front of the board:
 
 - the 4 holes sit over the corner holes of the board
-- the 5 buttons come through their holes without touching
+- the 5 switch bodies go through their square holes without touching
 - the display window frames the picture (switch the console on)
 - the notches on the left / right edge point at the two USB-C sockets
 
@@ -36,13 +42,13 @@ These were estimated from photos:
 
 | parameter | now | what |
 |---|---|---|
-| `btn_h` | 5.0 | top of a button plunger above the board |
+| `btn_h` | 5.0 | top of a button plunger above the board - the pocket floor sits there |
 | `front_h` | 7.5 | tallest part on the front (display module) plus a little room |
 | `back_h` | 16 | tallest part on the back (buzzer ~15 mm) plus room for the battery |
 | `bat` | 51 x 66 x 5.5 | the Samsung battery |
 
-`btn_h` matters most: caps that are too long keep a button pressed. When in
-doubt print a single cap first.
+If `btn_h` is a bit off the plungers only stand a little above or below the
+pocket floor - the switch bodies pass through the holes either way.
 
 ## Assembly
 
