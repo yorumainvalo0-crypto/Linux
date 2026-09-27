@@ -1,6 +1,7 @@
 /* ------------------------------------------------------------------
    MiniArcade - tiny game launcher for ESP32-C3 + SSD1306 128x64 (I2C)
-   Games: Tetris, Snake, Pong           High scores are kept in flash.
+   15 games, one file each (game_*.h). High scores, stats and awards are
+   kept in flash.
    ------------------------------------------------------------------
    Display: laid out for the common two colour panels where the top
    16 pixel rows are yellow and the rest is blue. The yellow band is
@@ -11,7 +12,8 @@
    no soldering has to be redone. No external resistors needed.
 
    Controls: UP/DOWN/LEFT/RIGHT + OK
-             OK short = select / action, OK held ~0.7 s = back to menu
+             OK short = select / action
+             OK held ~0.7 s = pause menu in a game, back elsewhere
              Mine: OK acts on the block in front, DOWN on the one below -
              solid block = dig it, empty space = place one from the bag.
 
@@ -454,7 +456,7 @@ bool gameOver(uint16_t score) {
 //  GAME LIBRARY
 // =========================================================
 typedef void (*GameFn)();
-struct Game { const char *name; GameFn run; const char *tag; };   // tag: no high score
+struct Game { const char *name; GameFn run; const char *tag = NULL; };   // tag: no high score
 
 static const Game GAMES[] = {
   { "Tetris",     tetrisRun },

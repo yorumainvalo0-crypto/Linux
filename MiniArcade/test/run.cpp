@@ -369,6 +369,27 @@ int main(int argc,char**argv){
       if(scenario!="mpwait") for(uint32_t t=10000;t<36000;t+=450){   // play: move and drop
         script.push_back({t,(uint8_t)((rand()%2)?4:8)}); script.push_back({t+60,0});
         script.push_back({t+200,16}); script.push_back({t+260,0}); }
+  } else if(scenario=="mppong"||scenario=="mpsnake"){ simEnd=90000;
+      bool pong = scenario=="mppong";
+      downs(15,1300,180);
+      script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
+      script.push_back({6500,2});  script.push_back({6560,0});     // ANNA's row
+      script.push_back({6900,16}); script.push_back({6960,0});     // challenge ...
+      for(int i=0;i<(pong?2:3);i++){ script.push_back({7200+i*250,2}); script.push_back({7260+i*250,0}); }
+      script.push_back({8200,16}); script.push_back({8260,0});     // ... to pong / snake
+      for(uint32_t t=10000;t<80000;t+=300){                       // wander
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+(pong?250:60),0}); }
+      captureAt={2200,2600};
+  } else if(scenario=="mpold"){ simEnd=12000;
+      simBotOld=true;                                              // ANNA runs an old firmware
+      downs(15,1300,180);
+      script.push_back({4300,16}); script.push_back({4360,0});
+      script.push_back({6500,2});  script.push_back({6560,0});
+      script.push_back({6900,16}); script.push_back({6960,0});
+      script.push_back({7200,2});  script.push_back({7260,0});
+      script.push_back({7450,2});  script.push_back({7510,0});
+      script.push_back({8200,16}); script.push_back({8260,0});     // pong
   } else if(scenario=="mpin"){ simEnd=40000;
       simBotInviteAt=7000; simBotGame=LKG_TTT;
       downs(15,1300,180);
@@ -735,6 +756,19 @@ int main(int argc,char**argv){
     check("no answer after 30 s", saw("no answer from ANNA"));
   } else if(scenario=="mpleft"){
     check("opponent leaving reported", saw("ANNA left the game"));
+  } else if(scenario=="mppong"||scenario=="mpsnake"){
+    bool pong = scenario=="mppong";
+    check("challenge offers the real-time games", saw("Pong")&&saw("Snake"));
+    check("game against ANNA shown", saw("YOU ")&&saw(" ANNA"));
+    check("a game was decided", saw("YOU WIN")||saw("LOST")||saw("DRAW"));
+    bool same = (simBotResult==1&&saw("LOST"))||(simBotResult==2&&saw("YOU WIN"))||(simBotResult==3&&saw("DRAW"));
+    printf("      bot games %d, bot result %d (%s)\n", simBotGames, simBotResult, pong?"pong":"snake");
+    check("both consoles saw the same end", simBotGames>=1 && same);
+    StatBlob b; memset(&b,0,sizeof(b));
+    if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));
+    check("online game counted, award shown", b.mpGames>=1 && saw("HELLO THERE"));
+  } else if(scenario=="mpold"){
+    check("old firmware: no real-time challenge, a hint instead", saw("ANNA needs an update")&&!saw("waiting for ANNA"));
   } else if(scenario=="mpin"){
     check("incoming challenge shown", saw("CHALLENGE!")&&saw("wants to play Tic Tac Toe"));
     check("game against ANNA shown", saw("vs ANNA"));

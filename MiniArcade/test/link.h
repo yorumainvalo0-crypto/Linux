@@ -3,6 +3,7 @@
 // scenarios set what the bot does.
 #pragma once
 #include "../main/link.h"
+#include "../main/rtgames.h"
 #include <vector>
 #include <stdio.h>
 
@@ -27,7 +28,12 @@ static const uint8_t SIM_MY_MAC[6]  = { 0x24, 0x6F, 0x28, 0x01, 0x02, 0x03 };
 static const uint8_t SIM_BOT_MAC[6] = { 0x24, 0x6F, 0x28, 0x99, 0x88, 0x77 };
 
 static void simSendMe(void *, const uint8_t *, const uint8_t *d, uint8_t n)  { simAir.push_back({ true,  std::vector<uint8_t>(d, d + n) }); }
-static void simSendBot(void *, const uint8_t *, const uint8_t *d, uint8_t n) { simAir.push_back({ false, std::vector<uint8_t>(d, d + n) }); }
+static bool     simBotOld      = false;  // bot plays an older firmware: no real-time games
+static void simSendBot(void *, const uint8_t *, const uint8_t *d, uint8_t n) {
+  std::vector<uint8_t> v(d, d + n);
+  if (simBotOld && n >= sizeof(LkPacket) && v[3] == LK_BEACON) v[offsetof(LkPacket, flags)] &= ~2;
+  simAir.push_back({ false, v });
+}
 
 uint32_t  linkNow()   { return (uint32_t)(simMicros() / 1000); }
 LinkCore &linkCore()  { return simMe; }
@@ -101,6 +107,50 @@ static bool botDone() {
   return false;
 }
 
+// real-time games: the bot runs its own copy, like a second console would
+static RtPong   botPg;
+static RtSnake  botSn;
+static uint32_t botRtNext = 0, botRnd = 5;
+static bool     botRt = false;
+
+static void simBotRealtime(uint32_t now) {
+  LinkCore &B = simBot;
+  bool pong = B.game == LKG_PONG;
+  uint8_t me = B.iStart ? 0 : 1;
+  if (!botRt) {                                        // a new game begins
+    botRt = true;
+    if (pong) botPg.begin(B.session() * 2654435761u); else botSn.begin(B.session() * 2654435761u);
+    botRtNext = now;
+  }
+  for (int k = 0; k < 3 && lkDue(now, botRtNext); k++) {
+    uint8_t in[2];
+    if (!B.syncStep(&in[me], &in[1 - me])) break;
+    if (pong) botPg.step(in); else botSn.step(in);
+    uint8_t mine;
+    if (pong) {                                        // follow the ball, not too well
+      int c = botPg.pad[me] + RP_PH / 2, b = botPg.by >> 4;
+      mine = (rtRand(botRnd) % 5 < 2) ? 0 : (b < c - 2 ? 1 : (b > c + 2 ? 2 : 0));
+    } else {                                           // keep going, turn before a wall
+      static const int8_t DX[5] = { 0, 0, 0, -1, 1 }, DY[5] = { 0, -1, 1, 0, 0 };
+      mine = botSn.dir[me];
+      for (int t = 0; t < 8; t++) {
+        uint8_t d = t ? (uint8_t)(1 + rtRand(botRnd) % 4) : mine;
+        int nx = botSn.x[me][0] + DX[d], ny = botSn.y[me][0] + DY[d];
+        if (nx >= 0 && nx < RS_W && ny >= 0 && ny < RS_H && !botSn.body(nx, ny)) { mine = d; break; }
+      }
+    }
+    B.syncPut(mine, now);
+    botRtNext += RT_TICK_MS;
+  }
+  uint8_t w = pong ? botPg.winner : botSn.winner;
+  if (w) {
+    simBotGames++;
+    simBotResult = w == 3 ? 3 : (w == me + 1 ? 1 : 2);
+    B.finish();
+    botRt = false;
+  }
+}
+
 static void simBotBrain(uint32_t now) {
   LinkCore &B = simBot;
   if (B.state == LK_INVITED && now >= botNext) {
@@ -111,6 +161,8 @@ static void simBotBrain(uint32_t now) {
     B.invite(0, simBotGame, now);
   }
   if (B.state == LK_OVER && B.delivered()) B.toLobby();
+  if (B.state == LK_PLAYING && LinkCore::realtime(B.game)) { simBotRealtime(now); return; }
+  if (B.state != LK_PLAYING) botRt = false;
   if (B.state != LK_PLAYING) { if (B.state != LK_INVITED) botNext = now + 1500; return; }
   if (!botInGame) {                                    // a new game begins
     botInGame = true; botMoves = 0;

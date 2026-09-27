@@ -8,6 +8,7 @@
 //   MOVE    one move, repeated until the ACK with the same number arrives
 //   ACK     confirms a move
 //   BYE     left the game or took the challenge back
+//   SYNC    real-time games (Pong, Snake): the last inputs, see below
 //
 // A game counts as abandoned when the other console stops sending beacons
 // with our session id for LK_GONE_MS.
@@ -23,11 +24,15 @@
 #define LK_INVITE_RS    600   // invites
 #define LK_PEERS         12
 #define LK_NAME           6   // characters of a player name
+#define LK_LEAD           3   // real-time: an input counts this many ticks later
+#define LK_SYNC_N        12   // real-time: inputs repeated in every packet
+#define LK_SYNC_MS       20   // real-time: send this often
+#define LK_RING          64   // real-time: inputs kept (power of two)
 
-enum LkType  : uint8_t { LK_BEACON = 1, LK_INVITE, LK_ANSWER, LK_MOVE, LK_ACK, LK_BYE };
+enum LkType  : uint8_t { LK_BEACON = 1, LK_INVITE, LK_ANSWER, LK_MOVE, LK_ACK, LK_BYE, LK_SYNC };
 enum LkState : uint8_t { LK_LOBBY, LK_INVITING, LK_INVITED, LK_PLAYING, LK_OVER };
 enum LkEnd   : uint8_t { LKE_NONE, LKE_DECLINED, LKE_BUSY, LKE_TIMEOUT, LKE_GONE, LKE_LEFT, LKE_ERROR };
-enum LkGame  : uint8_t { LKG_C4 = 1, LKG_TTT = 2 };
+enum LkGame  : uint8_t { LKG_C4 = 1, LKG_TTT = 2, LKG_PONG = 3, LKG_SNAKE = 4 };
 
 struct __attribute__((packed)) LkPacket {
   char     m0, m1;                    // 'M' 'A'
@@ -35,8 +40,24 @@ struct __attribute__((packed)) LkPacket {
   uint16_t sid;                       // session id, chosen by the challenger
   uint8_t  seq;                       // move number
   uint8_t  arg;                       // move, game or answer
-  uint8_t  flags;                     // beacon: 1 = in a game, invite: 1 = challenger starts
+  uint8_t  flags;                     // beacon: 1 = in a game, 2 = knows real-time games
+                                      // invite: 1 = challenger starts
   char     name[LK_NAME];
+};
+
+/* Real-time games run in lockstep: both consoles compute the same game
+   one tick at a time, and a tick is only taken when the inputs of both
+   players for it are there. Every SYNC packet repeats the last inputs,
+   so a lost packet is covered by the next one. Version 2, so consoles
+   with an older firmware drop it before they look at it.               */
+struct __attribute__((packed)) LkSync {
+  char     m0, m1;                    // 'M' 'A'
+  uint8_t  ver, type;                 // 2, LK_SYNC
+  uint16_t sid;
+  uint16_t tick;                      // newest input in here (low 16 bits)
+  uint16_t ack;                       // newest input we have from the receiver
+  uint8_t  n;                         // inputs for tick-n+1 .. tick
+  uint8_t  in[LK_SYNC_N];
 };
 
 struct LkPeer {
@@ -44,6 +65,7 @@ struct LkPeer {
   char     name[LK_NAME + 1];
   char     code[5];                   // short id derived from the chip, e.g. "K7F2"
   bool     busy;
+  bool     rt;                        // its firmware knows Pong and Snake
   uint16_t sid;                       // session the peer is in (from its beacon)
   int8_t   rssi;
   uint32_t seen;                      // ms of the last packet
@@ -126,8 +148,9 @@ public:
 
   // the game is decided; keep sending until the last move is confirmed
   void finish() { if (state == LK_PLAYING) { state = LK_OVER; why = LKE_NONE; } }
-  bool delivered() const { return !pending; }
-  void toLobby() { state = LK_LOBBY; why = LKE_NONE; sid = 0; pending = false; }
+  bool delivered() const { return !pending && (!sync || acked >= myTick); }
+  void toLobby() { state = LK_LOBBY; why = LKE_NONE; sid = 0; pending = false; sync = false; }
+  uint16_t session() const { return sid; }       // same on both sides: seeds the games
 
   // ---------------- moves ----------------
   bool sendMove(uint8_t m, uint32_t now) {
@@ -144,8 +167,30 @@ public:
     return true;
   }
 
+  // ---------------- real-time games ----------------
+  static bool realtime(uint8_t g) { return g == LKG_PONG || g == LKG_SNAKE; }
+
+  /* The next tick, when both inputs for it are there. After each tick the
+     game hands in its input for the tick LK_LEAD ahead with syncPut().   */
+  bool syncStep(uint8_t *mine, uint8_t *theirs) {
+    if (!sync || state != LK_PLAYING) return false;
+    if (simTick >= myTick || simTick >= theirTick) return false;
+    simTick++;
+    *mine = myIn[simTick & (LK_RING - 1)];
+    *theirs = theirIn[simTick & (LK_RING - 1)];
+    return true;
+  }
+  void syncPut(uint8_t in, uint32_t now) {
+    if (!sync || myTick != simTick + LK_LEAD - 1) return;   // one input per tick
+    myTick++;
+    myIn[myTick & (LK_RING - 1)] = in;
+    nextSync = now;                                        // out with the next tick()
+  }
+  uint32_t syncTick() const { return simTick; }
+
   // ---------------- radio ----------------
   void onPacket(const uint8_t *mac, const uint8_t *data, int len, int8_t rssi, uint32_t now) {
+    if (len >= (int)sizeof(LkSync) && data[2] == 2) { onSync(mac, data, now); return; }
     if (len < (int)sizeof(LkPacket)) return;
     LkPacket p;
     memcpy(&p, data, sizeof(p));
@@ -216,8 +261,8 @@ public:
     if (lkDue(now, nextBeacon)) {
       nextBeacon = now + LK_BEACON_MS;
       LkPacket p = pkt(LK_BEACON);
-      bool inGame = state == LK_PLAYING || (state == LK_OVER && pending);
-      p.flags = (inGame || state == LK_INVITING || state == LK_INVITED) ? 1 : 0;
+      bool inGame = state == LK_PLAYING || (state == LK_OVER && !delivered());
+      p.flags = ((inGame || state == LK_INVITING || state == LK_INVITED) ? 1 : 0) | 2;
       p.sid = inGame ? sid : 0;
       tx(txCtx, NULL, (const uint8_t *)&p, sizeof(p));
     }
@@ -248,6 +293,17 @@ public:
     default:
       break;
     }
+    if (sync && (state == LK_PLAYING || state == LK_OVER) && lkDue(now, nextSync)) {
+      nextSync = now + LK_SYNC_MS;                   // the other side needs our acks too
+      LkSync p;
+      memset(&p, 0, sizeof(p));
+      p.m0 = 'M'; p.m1 = 'A'; p.ver = 2; p.type = LK_SYNC; p.sid = sid;
+      p.tick = (uint16_t)myTick;
+      p.ack = (uint16_t)theirTick;
+      p.n = myTick < LK_SYNC_N ? (uint8_t)myTick : LK_SYNC_N;
+      for (uint8_t i = 0; i < p.n; i++) p.in[i] = myIn[(myTick - p.n + 1 + i) & (LK_RING - 1)];
+      tx(txCtx, opp.mac, (const uint8_t *)&p, sizeof(p));
+    }
   }
 
 private:
@@ -263,6 +319,29 @@ private:
   uint8_t  mySeq = 0, theirSeq = 0, outMove = 0, inMove = 0;
   bool     pending = false, haveIn = false;
   uint32_t nextBeacon = 0, nextSend = 0, lastOpp = 0;
+  bool     sync = false;                                  // a real-time game
+  uint32_t myTick = 0, theirTick = 0, simTick = 0, acked = 0, nextSync = 0;
+  uint8_t  myIn[LK_RING], theirIn[LK_RING];
+
+  static uint32_t unwrap(uint32_t near, uint16_t v) { return near + (int16_t)(v - (uint16_t)near); }
+
+  void onSync(const uint8_t *mac, const uint8_t *data, uint32_t now) {
+    LkSync p;
+    memcpy(&p, data, sizeof(p));
+    if (p.m0 != 'M' || p.m1 != 'A' || p.type != LK_SYNC || !sync) return;
+    if (memcmp(mac, opp.mac, 6) || p.sid != sid || state == LK_LOBBY) return;
+    if (state == LK_INVITING) state = LK_PLAYING;           // the "yes" was lost, this says it
+    if (state != LK_PLAYING && state != LK_OVER) return;
+    lastOpp = now;
+    uint32_t a = unwrap(acked, p.ack);
+    if (a > acked && a <= myTick) acked = a;
+    if (p.n > LK_SYNC_N) return;
+    uint32_t last = unwrap(theirTick, p.tick);
+    for (uint8_t i = 0; i < p.n; i++) {
+      uint32_t t = last - p.n + 1 + i;
+      if (t == theirTick + 1) { theirIn[t & (LK_RING - 1)] = p.in[i]; theirTick = t; }
+    }
+  }
 
   uint32_t rnd() { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return seed; }
 
@@ -270,6 +349,11 @@ private:
     mySeq = theirSeq = 0;
     pending = haveIn = false;
     why = LKE_NONE;
+    sync = realtime(game);                   // the first LK_LEAD ticks have no input
+    myTick = theirTick = acked = LK_LEAD;
+    simTick = 0;
+    memset(myIn, 0, sizeof(myIn));
+    memset(theirIn, 0, sizeof(theirIn));
   }
 
   LkPacket pkt(uint8_t type) const {
@@ -301,7 +385,7 @@ private:
     pe->name[LK_NAME] = 0;
     for (uint8_t i = 0; i < LK_NAME; i++)            // only plain characters on screen
       if (pe->name[i] && (pe->name[i] < ' ' || pe->name[i] > '~')) pe->name[i] = '?';
-    if (p.type == LK_BEACON) { pe->busy = p.flags & 1; pe->sid = p.sid; }
+    if (p.type == LK_BEACON) { pe->busy = p.flags & 1; pe->rt = p.flags & 2; pe->sid = p.sid; }
     pe->rssi = rssi;
     pe->seen = now;
     return pe;

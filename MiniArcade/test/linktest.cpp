@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <vector>
 #include "../main/linkcore.h"
+#include "../main/rtgames.h"
 
 struct Air;
 struct Node { LinkCore core; uint8_t mac[6]; Air *air; bool alive = true; };
@@ -74,7 +75,91 @@ static bool playGame(Air &a, Node &x, Node &y, int moves) {
   return x.core.delivered() && y.core.delivered();
 }
 
+/* A real-time game in lockstep: both consoles run their own copy of the
+   game and feed it from syncStep(). Returns true when both copies ended
+   with exactly the same state; ticks/s tells how smooth it ran.        */
+template <class G>
+static uint8_t botInput(const G &g, uint8_t me, uint32_t &r);
+template <>
+uint8_t botInput<RtPong>(const RtPong &g, uint8_t me, uint32_t &r) {
+  int c = g.pad[me] + RP_PH / 2, b = g.by >> 4;
+  if (rtRand(r) % 5 < 2 || (me ? g.vx < 0 : g.vx > 0)) return 0;   // slow, only when the ball comes
+  return b < c - 2 ? 1 : (b > c + 2 ? 2 : 0);
+}
+template <>
+uint8_t botInput<RtSnake>(const RtSnake &g, uint8_t me, uint32_t &r) {
+  static const int8_t DX[5] = { 0, 0, 0, -1, 1 }, DY[5] = { 0, -1, 1, 0, 0 };
+  uint8_t best = g.dir[me];
+  for (int k = 0; k < 5; k++) {                              // keep going, else any free way
+    uint8_t d = k == 0 ? g.dir[me] : (uint8_t)(1 + rtRand(r) % 4);
+    int nx = g.x[me][0] + DX[d], ny = g.y[me][0] + DY[d];
+    if (nx >= 0 && nx < RS_W && ny >= 0 && ny < RS_H && !g.body(nx, ny)) { best = d; if (k || rtRand(r) % 6) break; }
+  }
+  return best;
+}
+
+template <class G>
+static bool playRealtime(int loss, int seed, uint8_t game, double *tps, uint8_t *win) {
+  Air a; a.loss = loss; a.rs = 4242 + seed * 17;
+  Node A, B; addNode(a, A, 1, "ANNA"); addNode(a, B, 2, "TOM");
+  for (int w = 0; w < 100 && idxOf(A.core, B) < 0; w++) a.step(100);
+  int b = idxOf(A.core, B);
+  if (b < 0 || !A.core.peer(b).rt) return false;
+  A.core.invite(b, game, a.now);
+  for (int w = 0; w < 100 && B.core.state != LK_INVITED; w++) a.step(50);
+  B.core.answer(true, a.now);
+  for (int w = 0; w < 200 && A.core.state != LK_PLAYING; w++) a.step(50);
+  if (A.core.state != LK_PLAYING || A.core.session() != B.core.session()) return false;
+
+  Node *n[2] = { &A, &B };
+  G g[2];
+  uint32_t r[2] = { 11u + seed, 99u + seed }, next[2] = { a.now, a.now };
+  for (int i = 0; i < 2; i++) g[i].begin(A.core.session() * 2654435761u);
+  uint32_t t0 = a.now;
+  while (a.now - t0 < 600000 && (!g[0].winner || !g[1].winner)) {
+    a.step(10);
+    for (int i = 0; i < 2; i++) {
+      LinkCore &c = n[i]->core;
+      uint8_t me = c.iStart ? 0 : 1;
+      for (int k = 0; k < 3 && !g[i].winner && lkDue(a.now, next[i]); k++) {
+        uint8_t mine, theirs;
+        if (!c.syncStep(&mine, &theirs)) break;
+        uint8_t in[2]; in[me] = mine; in[1 - me] = theirs;
+        g[i].step(in);
+        c.syncPut(botInput(g[i], me, r[i]), a.now);
+        next[i] += RT_TICK_MS;
+        if ((int32_t)(a.now - next[i]) > 100) next[i] = a.now;
+      }
+      if (g[i].winner && c.state == LK_PLAYING) c.finish();
+    }
+  }
+  for (int w = 0; w < 200 && !(A.core.delivered() && B.core.delivered()); w++) a.step(50);
+  *tps = A.core.syncTick() * 1000.0 / (a.now - t0);
+  *win = g[0].winner;
+  return g[0].winner && !memcmp(&g[0], &g[1], sizeof(G)) && A.core.delivered() && B.core.delivered();
+}
+
 int main() {
+  // ---- real-time games: both copies stay the same, even with heavy loss ----
+  for (uint8_t game : { (uint8_t)LKG_PONG, (uint8_t)LKG_SNAKE }) {
+    int same = 0, runs = 0, wins[4] = { 0 };
+    double slow = 1e9;
+    for (int loss : { 0, 30, 50 })
+      for (int seed = 0; seed < 8; seed++, runs++) {
+        double tps = 0; uint8_t w = 0;
+        bool ok = game == LKG_PONG ? playRealtime<RtPong>(loss, seed, game, &tps, &w)
+                                   : playRealtime<RtSnake>(loss, seed, game, &tps, &w);
+        if (ok) { same++; wins[w]++; } else printf("      %s loss %d seed %d: out of step\n", game == LKG_PONG ? "pong" : "snake", loss, seed);
+        if (loss == 30 && tps < slow) slow = tps;
+      }
+    printf("      %s: %d of %d games identical on both consoles, winners p0 %d / p1 %d / draw %d, "
+           "slowest at 30%% loss %.0f ticks/s (50 = full speed)\n",
+           game == LKG_PONG ? "pong" : "snake", same, runs, wins[1], wins[2], wins[3], slow);
+    check(game == LKG_PONG ? "pong: same game on both consoles despite loss"
+                           : "snake: same game on both consoles despite loss", same == runs);
+    check(game == LKG_PONG ? "pong: smooth enough at 30% loss" : "snake: smooth enough at 30% loss", slow > 35);
+  }
+
   // ---- list, invite, accept, a whole game with heavy loss ----
   int ok = 0, runs = 0;
   for (int loss : { 0, 30, 50 })
