@@ -293,6 +293,21 @@ int main(int argc,char**argv){
         script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
         script.push_back({t+130,16}); script.push_back({t+190,0}); }
       captureAt={};
+  } else if(scenario=="g2048"){   simEnd=60000; downs(15,1300,180);
+      script.push_back({4200,16}); script.push_back({4260,0});
+      for(uint32_t t=4600;t<55000;t+=150){                        // mash the arrows
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+50,0}); }
+      captureAt={1500,2500};
+  } else if(scenario=="mines"){   simEnd=60000; downs(16,1300,180);
+      script.push_back({4400,16}); script.push_back({4460,0});     // open minesweeper
+      script.push_back({4800,16}); script.push_back({4860,0});     // easy
+      for(uint32_t t=5500;t<55000;t+=700){                        // wander, open, sometimes flag
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
+        script.push_back({t+150,16}); script.push_back({t+200,0});
+        if(rand()%5==0){ script.push_back({t+300,16}); script.push_back({t+350,0}); } }
+      captureAt={1500,1700};
   } else if(scenario=="pause"){   simEnd=36000;
       script.push_back({1300,16});  script.push_back({1360,0});    // open tetris
       script.push_back({3000,16});  script.push_back({4000,0});    // hold OK -> pause
@@ -480,6 +495,52 @@ int main(int argc,char**argv){
     return ok ? 0 : 1;
   }
 
+  if(scenario=="g2logic"){
+    struct Case { uint8_t in[4]; uint8_t out[4]; uint32_t gain; };
+    static const Case C[] = {                          // one row, moved left (exponents)
+      {{1,1,1,1},{2,2,0,0},8}, {{1,1,2,0},{2,2,0,0},4}, {{0,0,0,1},{1,0,0,0},0},
+      {{2,1,1,0},{2,2,0,0},4}, {{1,2,1,2},{1,2,1,2},0}, {{3,0,3,3},{4,3,0,0},16} };
+    for(auto&c:C){
+      uint8_t b[16]; memset(b,0,16); memcpy(b,c.in,4);
+      uint32_t g=0; g2Move(b,B_LEFT,&g);
+      bool ok=!memcmp(b,c.out,4)&&g==c.gain;
+      if(!ok) printf("      %u%u%u%u -> %u%u%u%u gain %u\n",c.in[0],c.in[1],c.in[2],c.in[3],b[0],b[1],b[2],b[3],(unsigned)g);
+      check("row slides and merges once per pair", ok);
+    }
+    uint8_t b[16]; memset(b,0,16); b[0]=1; b[4]=1; b[12]=2; uint32_t g=0;
+    g2Move(b,B_DOWN,&g); check("column moves down", b[12]==2&&b[8]==2&&!b[0]&&!b[4]&&g==4);
+    uint8_t full[16]; for(int i=0;i<16;i++) full[i]=1+(i%2+(i/4)%2)%2;   // checkerboard of 2 and 4
+    check("no move left on a checkerboard", !g2CanMove(full));
+    full[5]=full[6]; check("a pair is a move", g2CanMove(full));
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="mslogic"){
+    int bad=0, zeroOpen=0;
+    for(int round=0; round<300; round++){
+      randomSeed(50+round);
+      uint8_t sx=random(MS_W), sy=random(MS_H), mines=20+(round%3)*8;
+      msPlace(mines,sx,sy);
+      int n=0; for(int y=0;y<MS_H;y++) for(int x=0;x<MS_W;x++){
+        if(ms[y][x]&MS_MINE){ n++; if(abs(x-sx)<=1&&abs(y-sy)<=1) bad++; }
+        int c=0; for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){ int X=x+dx,Y=y+dy;
+          if((dx||dy)&&X>=0&&X<MS_W&&Y>=0&&Y<MS_H&&(ms[Y][X]&MS_MINE)) c++; }
+        if(c!=(ms[y][x]&0x0F)) bad++; }
+      if(n!=mines) bad++;
+      if(!msOpen(sx,sy)) bad++;
+      // after the flood: every open empty cell has all neighbours open, no mine is open
+      for(int y=0;y<MS_H;y++) for(int x=0;x<MS_W;x++){
+        uint8_t c=ms[y][x];
+        if((c&MS_OPEN)&&(c&MS_MINE)) bad++;
+        if((c&MS_OPEN)&&!(c&0x0F)&&!(c&MS_MINE)){ zeroOpen++;
+          for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){ int X=x+dx,Y=y+dy;
+            if(X>=0&&X<MS_W&&Y>=0&&Y<MS_H&&!(ms[Y][X]&MS_OPEN)) bad++; } } }
+    }
+    printf("      %d empty cells opened by flood fill\n", zeroOpen);
+    check("mines placed right, first cell safe, flood fill complete", bad==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
   if(scenario=="frogroll"){
     /* Rolls lanes for every difficulty and level and checks them: objects
        never overlap, every gap has the promised size, the road always
@@ -714,6 +775,16 @@ int main(int argc,char**argv){
       script.push_back({10800,1}); script.push_back({10860,0});
       script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
       captureAt={1000,1700};
+  } else if(scenario=="g2048"){
+    check("2048 drawn", saw("2048")&&saw("MAX"));
+    check("tiles merged", maxScore("SCORE ")>0||simNvsU16["hs15"]>0);
+    check("game over reached", saw("NO MOVES")&&(saw("GAME OVER")||saw("NEW RECORD!")));
+    printf("      score %u, stored hs15 %u\n", maxScore("SCORE "), simNvsU16["hs15"]);
+    check("high score consistent", simNvsU16["hs15"]==maxScore("SCORE "));
+  } else if(scenario=="mines"){
+    check("difficulty offered", saw("easy    20 mines")&&saw("hard    36 mines"));
+    check("minesweeper drawn", saw("MINES")&&saw("*20  0s"));
+    check("a round ended", saw("GAME OVER")||saw("NEW RECORD!"));
   } else if(scenario=="pause"){
     StatBlob b; memset(&b,0,sizeof(b));
     if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));
