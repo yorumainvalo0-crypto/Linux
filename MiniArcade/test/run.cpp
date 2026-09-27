@@ -308,6 +308,12 @@ int main(int argc,char**argv){
         script.push_back({t+150,16}); script.push_back({t+200,0});
         if(rand()%5==0){ script.push_back({t+300,16}); script.push_back({t+350,0}); } }
       captureAt={1500,1700};
+  } else if(scenario=="pacman"){  simEnd=90000; downs(17,1300,180);
+      script.push_back({4600,16}); script.push_back({4660,0});
+      for(uint32_t t=5000;t<85000;t+=400){                        // wander
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0}); }
+      captureAt={1100,1600,2600};
   } else if(scenario=="pause"){   simEnd=36000;
       script.push_back({1300,16});  script.push_back({1360,0});    // open tetris
       script.push_back({3000,16});  script.push_back({4000,0});    // hold OK -> pause
@@ -538,6 +544,35 @@ int main(int argc,char**argv){
     }
     printf("      %d empty cells opened by flood fill\n", zeroOpen);
     check("mines placed right, first cell safe, flood fill complete", bad==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="pmlogic"){
+    /* thousands of ticks with a random player: nobody walks through walls,
+       every ghost gets out of the house, the dots go down, games end */
+    int wallHits=0, games=0, maxEaten=0; bool out[RM_GH]={false,false,false};
+    uint32_t r=99;
+    for(int g=0; g<30; g++){
+      RtPac P; P.begin(1234+g*77, 1+(g%2));
+      uint16_t start=P.dotsLeft; uint8_t in[2]={0,0};
+      for(int t=0; t<60000 && !P.winner; t++){
+        if(t%25==0){ in[0]=1+rtRand(r)%4; in[1]=1+rtRand(r)%4; }
+        P.step(in);
+        for(uint8_t p=0;p<P.np;p++) if(RtPac::wallAt(P.pac[p].x,P.pac[p].y)) wallHits++;
+        for(uint8_t k=0;k<RM_GH;k++){
+          const RmEnt&e=P.gh[k];
+          if(e.state==RG_CHASE) out[k]=true;
+          if(RtPac::wallAt(e.x,e.y)&&!RtPac::doorAt(e.x,e.y)) wallHits++;
+        }
+        if(start-P.dotsLeft>maxEaten) maxEaten=start-P.dotsLeft;
+      }
+      if(P.winner) games++;
+    }
+    printf("      %d of 30 games ended, up to %d dots eaten in one game\n", games, maxEaten);
+    check("nobody inside a wall", wallHits==0);
+    check("every ghost leaves the house", out[0]&&out[1]&&out[2]);
+    check("games end", games==30);
+    check("dots get eaten", maxEaten>40);
     printf("%s\n", fails?"### FAILURES ###":"all checks passed");
     return fails?1:0;
   }
@@ -785,6 +820,12 @@ int main(int argc,char**argv){
     check("difficulty offered", saw("easy    20 mines")&&saw("hard    36 mines"));
     check("minesweeper drawn", saw("MINES")&&saw("*20  0s"));
     check("a round ended", saw("GAME OVER")||saw("NEW RECORD!"));
+  } else if(scenario=="pacman"){
+    check("pac-man drawn", saw("PAC-MAN")&&saw("READY!"));
+    check("dots eaten", maxScore("SCORE ")>0);
+    check("game over reached", saw("GAME OVER")&&(saw("NEW RECORD!")||saw("BEST ")));
+    printf("      score %u, stored hs17 %u\n", maxScore("SCORE "), simNvsU16["hs17"]);
+    check("high score consistent", simNvsU16["hs17"]==maxScore("SCORE "));
   } else if(scenario=="pause"){
     StatBlob b; memset(&b,0,sizeof(b));
     if(simNvsBlob.count("stats")) memcpy(&b,simNvsBlob["stats"].data(),sizeof(b));
