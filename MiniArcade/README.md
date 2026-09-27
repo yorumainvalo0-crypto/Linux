@@ -1,8 +1,18 @@
 # MiniArcade - ESP-IDF version
 
 15 games: Tetris, Snake, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders,
-Dino, Breakout, Rocks, Racer, Frogger, Connect Four and Tic Tac Toe -
-the last two also against a second console nearby (Multiplayer).
+Dino, Breakout, Rocks, Racer, Frogger, Connect Four and Tic Tac Toe.
+Against a second console nearby (Multiplayer): Connect Four, Tic Tac Toe,
+Pong and Snake.
+
+## Playing
+
+    UP/DOWN/LEFT/RIGHT + OK
+    hold OK in a game    pause: continue / restart / quit to menu
+                         (hold OK once more = quit)
+    Stats                how often and how long each game was played, and
+                         22 awards (LEFT/RIGHT switches the two pages).
+                         A new award pops up with a short tune.
 
 ## Optional hardware
 
@@ -26,7 +36,15 @@ U8g2. The Arduino API is provided by the thin platform layer in
 `main/arcade.cpp`. `main/MiniArcade.ino` still builds in the Arduino IDE;
 the WLAN page only exists in this build, because it needs `main/net.h`.
 
-    main/MiniArcade.ino   the games
+    main/MiniArcade.ino   buttons, sound, storage, pause menu, the library;
+                          includes the parts below in this order
+    main/game_*.h         one file per game
+    main/stats.h          stats and awards
+    main/setup_wizard.h   key, sound and battery setup
+    main/settings.h       settings page
+    main/wlan.h           WLAN page and firmware versions
+    main/multiplayer.h    multiplayer page and the online games
+    main/rtgames.h        rules of online Pong and Snake (no hardware, tested on the PC)
     main/arcade.cpp       SSD1306 driver, GPIO, timing, NVS
     main/net.cpp          WLAN, setup hotspot, update page, GitHub updates
     main/linkcore.h       multiplayer protocol (no hardware, tested on the PC)
@@ -102,7 +120,7 @@ the consoles talk directly over ESP-NOW (channel 1), typically 50-200 m.
 
     first line   your own name and code - OK = change the name
     UP / DOWN    choose a player
-    OK           challenge: pick 4 wins or Tic Tac Toe
+    OK           challenge: pick 4 wins, Tic Tac Toe, Pong or Snake
     RIGHT        mark as friend (*) - friends are listed first
     hold OK      back to the games
 
@@ -116,6 +134,16 @@ console that is switched off is noticed after 15 s.
 Every move is repeated until the other console confirms it, so lost radio
 packets do not matter; `test/linktest.cpp` plays whole games with 50 %
 packet loss.
+
+**Pong and Snake** run in real time. Both consoles compute the same game
+(`main/rtgames.h`); only the keys go over the radio, 50 times a second, and
+every packet repeats the last inputs. A step is only taken when the keys
+of both players for it are there, so both screens always show the same
+game - with a bad signal it waits a moment ("waiting...") instead of
+drifting apart. Pong: first to 5 points, your paddle is always on the
+left. Snake: your snake is filled, the other one hollow; whoever hits a
+wall, a body or the other head loses. Consoles with an older firmware do
+not know these two games - the challenge then says "needs an update".
 
 ### Version numbers and publishing an update
 
@@ -144,6 +172,7 @@ build fills in its own repository. The repository must be public.
     Arduino             358 kB firmware
     ESP-IDF 5.3.2       785 kB firmware  9.3: WLAN, TLS, updates and multiplayer -
                                          each update slot holds 1.9 MB
+    ESP-IDF 5.3.2       792 kB firmware  9.4: + pause, stats, awards, online Pong / Snake
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 
@@ -153,4 +182,8 @@ exceptions or RTTI).
 
 ## Tests
 
-`test/build.sh` runs all ten scenarios against the real driver on a PC.
+`test/build.sh` runs every scenario against the real driver on a PC - each
+game, the menus, pause and stats, WLAN and updates, multiplayer against a
+bot console - and `test/linktest.cpp`, the radio protocol with lost packets
+(including whole online Pong and Snake games that must end the same on both
+consoles).
