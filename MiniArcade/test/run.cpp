@@ -1,0 +1,514 @@
+/* Host test harness for the ESP-IDF build.
+   Runs the real game code AND the real platform layer (arcade.cpp); only the
+   hardware calls are redirected here. The screen is decoded from the bytes the
+   SSD1306 driver puts on the I2C bus, so what the tests see is what the panel
+   would show. */
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
+
+std::map<std::string,uint16_t>     simNvsU16;
+std::map<std::string,std::string>  simNvsBlob;
+
+static uint64_t clockUs = 0;
+static uint8_t  pinMode_[64], pinWire[64], pinPress[64];
+static uint8_t  screen[64][128];
+static long     frames = 0, maxInk = 0;
+static long     toneCount = 0;
+static int      lastTone = -1;
+static bool     simHasBattery = true;
+static std::set<std::string> seenTexts;
+static std::string scenario;
+static uint8_t  WIRED[5] = {3,4,5,6,7};
+struct PinEv { uint32_t t; uint8_t pin; uint8_t on; };
+static std::vector<std::pair<uint32_t,uint8_t>> script;
+static std::vector<PinEv> pinScript;
+static std::set<int> captureAt;
+static bool autoplay = false;
+struct SimEnd {};
+static uint32_t simEnd = 0;
+
+uint64_t simMicros(){ return clockUs; }
+void simGpioConfig(uint64_t mask,int pu,int pd){
+  for(int p=0;p<64;p++) if(mask>>p&1) pinMode_[p] = pd?3:(pu?2:0); }
+int simGpioLevel(int p){
+  if(pinWire[p]==3) return 1;                 // external pull-up on the board
+  if(pinWire[p]==4) return 0;                 // external pull-down on the board
+  if(pinPress[p]){ if(pinWire[p]==1) return 0; if(pinWire[p]==2) return 1; }
+  return pinMode_[p]==3 ? 0 : 1; }            // otherwise the internal resistor wins
+static int grabNext = 0;      // capture the next frame after a marker string
+void simCpuMhz(int m){ printf("      cpu clock set to %d MHz\n", m); }
+void simDeepSleep();
+void simTone(int freq){ if(freq){ toneCount++; lastTone=freq; } }
+int  simAdcRaw(int ch){
+  if(ch==0 && simHasBattery) return 2510;      // ~1.9 V -> 3.8 V cell through 1:2
+  return 300 + (int)(clockUs/1000%400);        // floating pin: drifts
+}
+void arcadeTraceStr(const char *s){
+  seenTexts.insert(s);
+  const char *mark = getenv("GRAB");
+  if(mark && strstr(s, mark)) grabNext = 1;
+}
+
+static void applyMask(uint8_t m){ for(int i=0;i<5;i++) pinPress[WIRED[i]] = (m>>i&1); }
+
+void simDeepSleep(){ printf("      board went to deep sleep\n"); throw SimEnd{}; }
+
+void simDelayMs(uint32_t ms){
+  for(uint32_t i=0;i<ms;i++){
+    clockUs += 1000;
+    uint32_t t=(uint32_t)(clockUs/1000);
+    for(auto&e:script)    if(e.first==t) applyMask(e.second);
+    for(auto&e:pinScript) if(e.t==t)     pinPress[e.pin]=e.on;
+    if(autoplay && t>2000 && t%200==0){ static const uint8_t o[]={0,0,4,8,1,2}; applyMask(o[rand()%6]); }
+  }
+  if(clockUs/1000 > simEnd) throw SimEnd{};
+}
+
+// ---- frame based auto players, reading the decoded panel image ----
+static void pongBot(){
+  int pTop=-1, bally=-1;
+  for(int y=17;y<64;y++) if(screen[y][3]){ pTop=y; break; }
+  for(int y=17;y<64&&bally<0;y++) for(int x=8;x<120;x++) if(screen[y][x]){ bally=y; break; }
+  if(pTop<0||bally<0){ applyMask(0); return; }
+  int c=pTop+6;
+  applyMask(bally<c-1?1:(bally>c+1?2:0));
+}
+static void flappyBot(){
+  int bird=-1;
+  for(int y=17;y<64;y++) if(screen[y][25]){ bird=y+2; break; }
+  int col=-1;
+  for(int x=32;x<126&&col<0;x++){ int n=0; for(int y=17;y<64;y++) n+=screen[y][x]; if(n>=3) col=x+2; }
+  if(bird<0||col<0||col>127){ applyMask(0); return; }
+  int bA=-1,bB=-1,run=-1;
+  for(int y=17;y<=64;y++){
+    bool set=(y==64)||screen[y][col];
+    if(!set){ if(run<0) run=y; }
+    else if(run>=0){ if(bA<0||y-run>bB-bA){ bA=run; bB=y; } run=-1; }
+  }
+  if(bA<0){ applyMask(0); return; }
+  applyMask(bird>(bA+bB)/2 ? 1 : 0);
+}
+static void tunnelBot(){
+  /* The nearest ring dominates the picture: take the bounding box of all lit
+     pixels as the tube opening, then push away from whatever fills it.    */
+  int x0=999,x1=-1,y0=999,y1=-1; long sx=0,sy=0,n=0;
+  for(int y=17;y<64;y++) for(int x=0;x<128;x++) if(screen[y][x]){
+    if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+    sx+=x; sy+=y; n++;
+  }
+  if(n<10||x1<=x0){ applyMask(0); return; }
+  int bcx=(x0+x1)/2, bcy=(y0+y1)/2;
+  int ccx=(int)(sx/n), ccy=(int)(sy/n);
+  int tx=bcx + (bcx-ccx), ty=bcy + (bcy-ccy);       // away from the filled side
+  uint8_t m=0;
+  if(tx<62) m|=4; else if(tx>66) m|=8;
+  if(ty<38) m|=1; else if(ty>42) m|=2;
+  applyMask(m);
+}
+
+static void dinoBot(){          // jump over cacti, duck under birds
+  bool low=false, high=false;
+  for(int x=24;x<62;x++){
+    for(int y=45;y<61;y++) if(screen[y][x]) low=true;      // cactus height
+    for(int y=33;y<45;y++) if(screen[y][x]) high=true;     // pterodactyl height
+  }
+  /* pulse the key: a button that is still held when a round starts is muted
+     by the firmware until it is released, so the bot must let go now and then */
+  static int phase = 0;
+  phase++;
+  if(low)       applyMask((phase % 4 < 2) ? 1 : 0);   // UP
+  else if(high) applyMask(2);                         // DOWN
+  else          applyMask(0);
+}
+static void breakoutBot(){      // move the paddle under the ball
+  int ballx=-1,bally=-1,pad=-1;
+  for(int y=58;y<64;y++) for(int x=0;x<128;x++) if(screen[y][x]){ pad=x; goto padDone; }
+  padDone:
+  for(int y=56;y>=17;y--) for(int x=0;x<128;x++) if(screen[y][x]){ ballx=x; bally=y; goto ballDone; }
+  ballDone:
+  if(ballx<0||pad<0){ applyMask(0); return; }
+  applyMask(ballx<pad+8 ? 4 : (ballx>pad+16 ? 8 : 0));
+}
+static void racerBot(){         // steer to the middle of the road
+  int l=-1,r=-1;
+  for(int x=0;x<128;x++) if(screen[46][x]){ if(l<0) l=x; r=x; }
+  if(l<0||r<=l){ applyMask(0); return; }
+  int mid=(l+r)/2, car=-1, run=0;
+  for(int x=0;x<128;x++){                    // the player car is a solid 7 px run
+    if(screen[58][x]){ if(++run>=5){ car=x-run+1; break; } }
+    else run=0;
+  }
+  if(car<0){ applyMask(0); return; }
+  bool blocked=false;                        // something in the lane ahead?
+  for(int y=18;y<50&&!blocked;y++) for(int x=car-1;x<car+9;x++) if(x>=0&&x<128&&screen[y][x]) blocked=true;
+  if(blocked){ applyMask(car+3>mid ? 4 : 8); return; }   // dodge towards the wider side
+  applyMask(car+3<mid-2 ? 8 : (car+3>mid+2 ? 4 : 0));
+}
+
+void simFrameSent(const uint8_t* d, size_t n){
+  if(n < 1000 || d[0] != 0x40) return;                 // not a pixel transfer
+  frames++;
+  for(int page=0;page<8;page++)
+    for(int x=0;x<128;x++){
+      uint8_t col=d[1+page*128+x];
+      for(int b=0;b<8;b++) screen[page*8+b][x]=(col>>b)&1;
+    }
+  long ink=0; for(int y=16;y<64;y++) for(int x=0;x<128;x++) ink+=screen[y][x];
+  if(ink>maxInk) maxInk=ink;
+  uint32_t t=(uint32_t)(clockUs/1000);
+  if(scenario=="pong"   && t>2200 && t<25000) pongBot();
+  if(scenario=="flappy" && t>2800 && t<26000) flappyBot();
+  if(scenario=="tunnel"   && t>2900 && t<28000) tunnelBot();
+  if(scenario=="dino"     && t>3400 && t<40000) dinoBot();
+  if(scenario=="breakout" && t>3200 && t<40000) breakoutBot();
+  if(scenario=="racer"    && t>3600 && t<40000) racerBot();
+  if(grabNext){ grabNext = 0; captureAt.insert(frames); }
+  if(captureAt.count(frames)){
+    char fn[64]; snprintf(fn,sizeof(fn),"frames/%s_%04ld.txt",scenario.c_str(),frames);
+    FILE*fp=fopen(fn,"w");
+    for(int y=0;y<64;y++){ for(int x=0;x<128;x++) fputc(screen[y][x]?'#':'.',fp); fputc('\n',fp); }
+    fclose(fp);
+  }
+}
+
+#include "Arduino.h"
+#include <time.h>
+#include "MiniArcade.ino"
+
+static bool saw(const char*s){ for(auto&t:seenTexts) if(t.find(s)!=std::string::npos) return true; return false; }
+static uint16_t maxScore(const char*p){
+  uint16_t m=0;
+  for(auto&t:seenTexts){ if(t.rfind(p,0)!=0) continue; int v=atoi(t.c_str()+strlen(p)); if(v>(int)m) m=v; }
+  return m;
+}
+static int fails=0;
+static void check(const char*w,bool ok){ printf("  [%s] %s\n", ok?"OK":"FAIL", w); if(!ok) fails++; }
+static void downs(int k, uint32_t t0=1300, uint32_t step=250){
+  for(int i=0;i<k;i++){ script.push_back({t0+i*step,2}); script.push_back({t0+i*step+60,0}); }
+}
+
+int main(int argc,char**argv){
+  scenario = argc>1?argv[1]:"menu";
+  srand(7);
+  for(int i=0;i<64;i++){ pinMode_[i]=2; pinWire[i]=0; pinPress[i]=0; }
+  for(int i=0;i<5;i++) pinWire[WIRED[i]]=2;                 // buttons wired to 3V3
+  if(scenario.rfind("wizard",0)!=0){
+    simNvsU16["pset"]=2;
+    simNvsU16["sset"]=1;  simNvsU16["snd"]=10;      // buzzer already known
+    for(int i=0;i<5;i++){ simNvsU16["p"+std::to_string(i)]=3+i; simNvsU16["a"+std::to_string(i)]=1; }
+  }
+
+  if(scenario=="menu"){        simEnd=10000; downs(15,1300,300); captureAt={30,300,700};
+  } else if(scenario=="tetris"){ simEnd=60000; script={{1300,16},{1360,0}}; autoplay=true; captureAt={200,900};
+  } else if(scenario=="snake"){  simEnd=20000; downs(1);
+      script.push_back({1500,16}); script.push_back({1560,0});
+      script.push_back({9000,16}); script.push_back({9060,0});     // restart after death
+      script.push_back({15000,16}); script.push_back({16200,0});   // hold OK -> library
+      captureAt={200,1000};
+  } else if(scenario=="pong"){   simEnd=40000; downs(2);
+      script.push_back({1700,16}); script.push_back({1760,0}); captureAt={300,900};
+  } else if(scenario=="doom"){   simEnd=60000; downs(3);
+      script.push_back({1900,16}); script.push_back({1960,0});
+      for(uint32_t t=3000;t<57000;t+=400){           // sweep slowly and keep firing
+        script.push_back({t,8});                      // short turn
+        script.push_back({t+120,1});                  // step forward
+        script.push_back({t+220,0});
+        script.push_back({t+260,16});                 // OK tap = shoot
+        script.push_back({t+330,0}); }
+      captureAt={400,1500};
+  } else if(scenario=="mine"){   simEnd=30000; downs(4);
+      script.push_back({2300,16}); script.push_back({2360,0});
+      for(uint32_t t=3500;t<20000;t+=1000){
+        script.push_back({t,8}); script.push_back({t+400,0});
+        script.push_back({t+500,16}); script.push_back({t+560,0});
+        script.push_back({t+700,1}); script.push_back({t+780,0}); }
+      script.push_back({26000,16}); script.push_back({27500,0});   // hold OK -> save & exit
+      captureAt={900,3000};
+  } else if(scenario=="tunnel"){ simEnd=30000; downs(5,1300,200);
+      script.push_back({2400,16}); script.push_back({2460,0}); captureAt={620,700,820,950};
+  } else if(scenario=="flappy"){ simEnd=30000; downs(6,1300,200);
+      script.push_back({2600,16}); script.push_back({2660,0}); captureAt={400,1200};
+  } else if(scenario=="invaders"){ simEnd=40000; downs(7,1300,200);
+      script.push_back({2800,16}); script.push_back({2860,0});
+      for(uint32_t t=3000;t<36000;t+=800){
+        script.push_back({t,4}); script.push_back({t+300,0});
+        script.push_back({t+350,16}); script.push_back({t+420,0});
+        script.push_back({t+500,8}); script.push_back({t+750,0}); }
+      captureAt={620,700,800,950};
+  } else if(scenario=="dino"){     simEnd=45000; downs(8,1300,180);
+      script.push_back({3000,16}); script.push_back({3060,0});
+      captureAt={620,700,780,900};
+  } else if(scenario=="breakout"){ simEnd=45000; downs(9,1300,180);
+      script.push_back({3100,16}); script.push_back({3160,0});
+      captureAt={900,1500};
+  } else if(scenario=="rocks"){    simEnd=45000; downs(10,1300,180);
+      script.push_back({3300,16}); script.push_back({3360,0});
+      for(uint32_t t=4000;t<42000;t+=500){        // spin and fire
+        script.push_back({t,8}); script.push_back({t+200,0});
+        script.push_back({t+260,16}); script.push_back({t+330,0}); }
+      captureAt={900,1500};
+  } else if(scenario=="racer"){    simEnd=45000; downs(11,1300,180);
+      script.push_back({3500,16}); script.push_back({3560,0});
+      captureAt={700,720,745,770};
+  } else if(scenario=="frogger"){  simEnd=45000; downs(12,1300,180);
+      script.push_back({3700,16}); script.push_back({3760,0});     // open frogger
+      script.push_back({4000,2});  script.push_back({4060,0});     // choose "normal"
+      script.push_back({4300,16}); script.push_back({4360,0});
+      for(uint32_t t=5000;t<42000;t+=700){        // hop forward, sometimes sideways
+        script.push_back({t,1}); script.push_back({t+120,0});
+        script.push_back({t+300,8}); script.push_back({t+380,0}); }
+      captureAt={760,860};
+  } else if(scenario=="c4"){       simEnd=60000; downs(13,1300,180);
+      script.push_back({3900,16}); script.push_back({3960,0});     // open 4 wins
+      script.push_back({4200,2});  script.push_back({4260,0});     // "1P normal"
+      script.push_back({4500,16}); script.push_back({4560,0});
+      for(uint32_t t=5200, k=0; t<58000; t+=900, k++){   // wander over the columns
+        uint8_t dir = (k%3==0) ? 4 : 8;                  // sometimes left, mostly right
+        script.push_back({t,dir});        script.push_back({t+90,0});
+        if(k%2){ script.push_back({t+140,dir}); script.push_back({t+230,0}); }
+        script.push_back({t+400,16});     script.push_back({t+480,0}); }
+      captureAt={790,1400};
+  } else if(scenario=="sleep"){   simEnd=90000;
+      simNvsU16["slp"]=1;                       // one minute, then nothing happens
+      captureAt={200};
+  } else if(scenario=="settings"){ simEnd=26000; downs(14,1300,250);
+      script.push_back({5000,16}); script.push_back({5060,0});     // open settings
+      script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
+      script.push_back({5900,4});  script.push_back({5960,0});
+      script.push_back({6300,2});  script.push_back({6360,0});     // line: cpu clock
+      script.push_back({6700,4});  script.push_back({6760,0});     // slower clock
+      script.push_back({7100,2});  script.push_back({7160,0});     // line: sleep
+      script.push_back({7500,8});  script.push_back({7560,0});     // longer timeout
+      script.push_back({8000,2});  script.push_back({8060,0});     // down to battery
+      script.push_back({8300,2});  script.push_back({8360,0});
+      script.push_back({8600,2});  script.push_back({8660,0});
+      script.push_back({9000,16}); script.push_back({9060,0});     // open battery page
+      script.push_back({9600,1});  script.push_back({9660,0});
+      script.push_back({9900,1});  script.push_back({9960,0});
+      script.push_back({10200,1}); script.push_back({10260,0});
+      script.push_back({10500,1}); script.push_back({10560,0});
+      script.push_back({10800,1}); script.push_back({10860,0});
+      script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
+      captureAt={1000,1700};
+  } else if(scenario=="wizard2"){ simEnd=20000;
+      /* like "wizard", but the board holds GPIO2 and GPIO10 high through
+         external pull-ups - this used to make key detection impossible */
+      uint8_t w[5]={21,20,5,1,0};
+      for(int i=0;i<5;i++){ pinWire[WIRED[i]]=0; WIRED[i]=w[i]; pinWire[w[i]]=2; }
+      pinWire[2]=3; pinWire[10]=3;
+      simEnd=26000;
+      pinScript={{4000,21,1},{4400,21,0},{4600,20,1},{5000,20,0},{5200,5,1},{5600,5,0},
+                 {5800,1,1},{6200,1,0},{6400,0,1},{6800,0,0},
+                 {14000,0,1},{14150,0,0},{20000,0,1},{20150,0,0}};
+      captureAt={40,80};
+  } else if(scenario=="wizard"){ simEnd=16000;
+      uint8_t w[5]={21,20,10,1,0};                               // unusual pins, 3V3
+      for(int i=0;i<5;i++){ pinWire[WIRED[i]]=0; WIRED[i]=w[i]; pinWire[w[i]]=2; }
+      simEnd=26000;
+      pinScript={{4000,21,1},{4400,21,0},{4600,20,1},{5000,20,0},{5200,10,1},{5600,10,0},
+                 {5800,1,1},{6200,1,0},{6400,0,1},{6800,0,0},
+                 {14000,0,1},{14150,0,0},        // confirm the buzzer
+                 {20000,0,1},{20150,0,0}};       // then start a game
+      captureAt={20,40,60,70,80,90,100};
+  }
+
+  int easyScore=0, normalScore=0, normalLoss=0;
+  if(scenario=="c4bench"){
+    /* measured on a PC: depth 5 needs ~13 ms there, roughly 0.4 s on the
+       C3 - that is why "hard" stops at depth 5.                          */
+    // --- tactical unit tests ---
+    memset(c4,0,sizeof(c4));
+    c4[5][1]=2; c4[5][2]=2; c4[5][3]=2;                 // engine can win at 0 or 4
+    { uint8_t m=c4Think(2); printf("  win-in-1 -> col %u\n", m);
+      if(m!=0&&m!=4) printf("  ### engine missed the win\n"); }
+    memset(c4,0,sizeof(c4));
+    c4[5][0]=1; c4[5][1]=1; c4[5][2]=1;                 // only col 3 blocks
+    { uint8_t m=c4Think(2); printf("  block     -> col %u\n", m);
+      if(m!=3) printf("  ### engine failed to block\n"); }
+    memset(c4,0,sizeof(c4));
+    c4[5][3]=1; c4[4][3]=1; c4[3][3]=1;                 // vertical threat
+    { uint8_t m=c4Think(2); printf("  block col -> col %u\n", m);
+      if(m!=3) printf("  ### engine failed to block the column\n"); }
+
+    for(int opp=0; opp<2; opp++){
+    int hardWins=0, easyWins=0, draws=0;
+    for(int g=0; g<12; g++){
+      memset(c4,0,sizeof(c4));
+      uint8_t turn = (g&1) ? 1 : 2;     // alternate who starts
+      for(int ply=0; ply<42; ply++){
+        uint8_t col;
+        if(turn==2) col = c4Think(2);                       // hard plays as 2
+        else {                                              // easy plays as 1
+          for(int r=0;r<C4_H;r++) for(int c=0;c<C4_W;c++)
+            if(c4[r][c]) c4[r][c] = 3 - c4[r][c];           // flip colours
+          col = c4Think(opp);                               // 0 = easy, 1 = normal
+          for(int r=0;r<C4_H;r++) for(int c=0;c<C4_W;c++)
+            if(c4[r][c]) c4[r][c] = 3 - c4[r][c];
+        }
+        if(c4Drop(col,turn) < 0) break;
+        if(c4Wins(turn)){ (turn==2?hardWins:easyWins)++; goto done; }
+        if(c4Full()){ draws++; goto done; }
+        turn = 3 - turn;
+      }
+      done: ;
+    }
+    printf("  hard vs %-6s : %2d wins, %2d losses, %d draws\n",
+           opp ? "normal" : "easy", hardWins, easyWins, draws);
+    if(opp==0) easyScore = hardWins; else { normalScore = hardWins; normalLoss = easyWins; }
+    }
+    bool ok = (easyScore>=10 && normalScore>=5 && normalLoss<=2);
+    printf("%s\n", ok ? "all checks passed" : "### FAILURES ###");
+    return ok ? 0 : 1;
+  }
+
+  try { setup(); for(;;) loop(); } catch(SimEnd&){}
+
+  printf("scenario %s: %ld panel updates, %u ms simulated\n", scenario.c_str(), frames, (unsigned)(clockUs/1000));
+  if(getenv("DUMP")) for(auto&t:seenTexts) printf("   |%s|\n", t.c_str());
+
+  if(scenario=="menu"){
+    check("library drawn", saw("MiniArcade"));
+    check("all games listed", saw("Tetris")&&saw("Snake")&&saw("Pong")&&saw("Doom")&&saw("Mine")&&saw("Tunnel 3D")&&saw("Flappy")&&saw("Invaders")&&saw("Dino")&&saw("Breakout")&&saw("Rocks")&&saw("Racer")&&saw("Frogger")&&saw("4 wins"));
+    check("list scrolls to the last entry", saw("Settings"));
+    printf("      tones played: %ld, last %d Hz\n", toneCount, lastTone);
+    check("menu clicks are audible", toneCount>0);
+    check("battery percentage shown", saw("%"));
+  } else if(scenario=="tetris"){
+    check("HUD drawn", saw("TETRIS")&&saw("LINES")&&saw("LEVEL")&&saw("NEXT"));
+    check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
+    check("high score consistent", simNvsU16["hs0"]==maxScore("SCORE "));
+  } else if(scenario=="snake"){
+    check("snake drawn", saw("SNAKE"));
+    check("died at the wall", saw("GAME OVER")||saw("NEW RECORD!"));
+    check("back in the library after a long press", saw("MiniArcade"));
+    check("high score consistent", simNvsU16["hs1"]==maxScore("SCORE "));
+  } else if(scenario=="pong"){
+    check("pong drawn", saw("PONG"));
+    check("returned the ball at least once", maxScore("SCORE ")>0);
+    check("game over after missing", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      score %u, stored hs2 %u\n", maxScore("SCORE "), simNvsU16["hs2"]);
+    check("high score consistent", simNvsU16["hs2"]==maxScore("SCORE "));
+  } else if(scenario=="doom"){
+    check("doom drawn", saw("DOOM"));
+    check("3D view renders", maxInk>400);
+    check("killed a monster", maxScore("SCORE ")>0);
+    check("lost all lives", saw("GAME OVER")||saw("NEW RECORD!"));
+    check("high score consistent", simNvsU16["hs3"]==maxScore("SCORE "));
+  } else if(scenario=="mine"){
+    check("mine drawn", saw("MINE"));
+    check("world rendered", maxInk>300);
+    check("bag counter shown", saw("BAG 0")||saw("BAG 1"));
+    check("blocks were mined", simNvsU16["hs4"]>0);
+    check("world saved to flash", simNvsBlob.count("world")>0 && simNvsBlob["world"].size()==1024);
+    check("back in the library", saw("MiniArcade"));
+    printf("      blocks mined %u\n", simNvsU16["hs4"]);
+  } else if(scenario=="tunnel"){
+    check("tunnel drawn", saw("TUNNEL"));
+    check("wireframe renders", maxInk>150);
+    check("flew through rings", maxScore("SCORE ")>3);
+    check("crash -> game over", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      rings %u, stored hs5 %u\n", maxScore("SCORE "), simNvsU16["hs5"]);
+    check("high score consistent", simNvsU16["hs5"]==maxScore("SCORE "));
+  } else if(scenario=="flappy"){
+    check("flappy drawn", saw("FLAPPY"));
+    check("passed a pipe", maxScore("SCORE ")>0);
+    check("crash -> game over", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      pipes %u, stored hs6 %u\n", maxScore("SCORE "), simNvsU16["hs6"]);
+    check("high score consistent", simNvsU16["hs6"]==maxScore("SCORE "));
+  } else if(scenario=="invaders"){
+    check("invaders drawn", saw("INVADERS"));
+    check("shot aliens", maxScore("SCORE ")>0);
+    check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
+    check("high score consistent", simNvsU16["hs7"]==maxScore("SCORE "));
+  } else if(scenario=="dino"){
+    check("dino screen drawn", saw("DINO"));
+    check("ran some distance", maxScore("SCORE ")>0);
+    check("crashed -> game over", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      score %u, stored hs8 %u\n", maxScore("SCORE "), simNvsU16["hs8"]);
+    check("high score consistent", simNvsU16["hs8"]==maxScore("SCORE "));
+  } else if(scenario=="breakout"){
+    check("breakout screen drawn", saw("BREAKOUT"));
+    check("bricks were hit", maxScore("SCORE ")>0);
+    check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      score %u, stored hs9 %u\n", maxScore("SCORE "), simNvsU16["hs9"]);
+    check("high score consistent", simNvsU16["hs9"]==maxScore("SCORE "));
+  } else if(scenario=="rocks"){
+    check("asteroids screen drawn", saw("ROCKS"));
+    check("rocks rendered", maxInk>60);
+    check("something was shot", maxScore("SCORE ")>0);
+    check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      score %u, stored hs10 %u\n", maxScore("SCORE "), simNvsU16["hs10"]);
+    check("high score consistent", simNvsU16["hs10"]==maxScore("SCORE "));
+  } else if(scenario=="racer"){
+    check("racer screen drawn", saw("RACER"));
+    check("road rendered", maxInk>60);
+    check("drove some distance", maxScore("SCORE ")>0);
+    check("crash -> game over", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      score %u, stored hs11 %u\n", maxScore("SCORE "), simNvsU16["hs11"]);
+    check("high score consistent", simNvsU16["hs11"]==maxScore("SCORE "));
+  } else if(scenario=="frogger"){
+    check("frogger screen drawn", saw("FROGGER"));
+    check("difficulty menu offered", saw("easy")&&saw("normal")&&saw("hard"));
+    check("lanes rendered", maxInk>100);
+    check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      score %u, stored hs12 %u\n", maxScore("SCORE "), simNvsU16["hs12"]);
+    check("high score consistent", simNvsU16["hs12"]==maxScore("SCORE "));
+  } else if(scenario=="c4"){
+    check("connect four drawn", saw("4 WINS"));
+    check("hint shown", saw("OK=drop"));
+    check("difficulty menu offered", saw("1P normal")&&saw("2 players"));
+    check("the cpu takes its turn", saw("thinking..."));
+    check("a game ended", saw("GAME OVER")||saw("NEW RECORD!")||saw("YOU WIN!")||saw("DRAW"));
+  } else if(scenario=="sleep"){   simEnd=90000;
+      simNvsU16["slp"]=1;                       // one minute, then nothing happens
+      captureAt={200};
+  } else if(scenario=="settings"){ simEnd=26000; downs(14,1300,250);
+      script.push_back({5000,16}); script.push_back({5060,0});     // open settings
+      script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
+      script.push_back({5900,4});  script.push_back({5960,0});
+      script.push_back({6300,2});  script.push_back({6360,0});     // line: cpu clock
+      script.push_back({6700,4});  script.push_back({6760,0});     // slower clock
+      script.push_back({7100,2});  script.push_back({7160,0});     // line: sleep
+      script.push_back({7500,8});  script.push_back({7560,0});     // longer timeout
+      script.push_back({8000,2});  script.push_back({8060,0});     // down to battery
+      script.push_back({8300,2});  script.push_back({8360,0});
+      script.push_back({8600,2});  script.push_back({8660,0});
+      script.push_back({9000,16}); script.push_back({9060,0});     // open battery page
+      script.push_back({9600,1});  script.push_back({9660,0});
+      script.push_back({9900,1});  script.push_back({9960,0});
+      script.push_back({10200,1}); script.push_back({10260,0});
+      script.push_back({10500,1}); script.push_back({10560,0});
+      script.push_back({10800,1}); script.push_back({10860,0});
+      script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
+      captureAt={1000,1700};
+  } else if(scenario=="wizard2"){
+    printf("      learned UP=%u DOWN=%u LEFT=%u RIGHT=%u OK=%u\n",
+      simNvsU16["p0"],simNvsU16["p1"],simNvsU16["p2"],simNvsU16["p3"],simNvsU16["p4"]);
+    check("asked to release buttons", saw("release all buttons"));
+    check("asked for every key", saw("press  UP")&&saw("press  OK"));
+    check("keys learned although two pins are held by the board",
+      simNvsU16["p0"]==21&&simNvsU16["p1"]==20&&simNvsU16["p2"]==5&&simNvsU16["p3"]==1&&simNvsU16["p4"]==0);
+    check("polarity detected as 3V3", simNvsU16["a0"]==1&&simNvsU16["a4"]==1);
+    check("library reached", saw("MiniArcade"));
+} else if(scenario=="wizard"){
+    check("asked to release buttons", saw("release all buttons"));
+    check("asked for every key", saw("press  UP")&&saw("press  DOWN")&&saw("press  LEFT")&&saw("press  RIGHT")&&saw("press  OK"));
+    printf("      learned UP=%u DOWN=%u LEFT=%u RIGHT=%u OK=%u  polarity %u\n",
+      simNvsU16["p0"],simNvsU16["p1"],simNvsU16["p2"],simNvsU16["p3"],simNvsU16["p4"],simNvsU16["a0"]);
+    check("pins learned", simNvsU16["p0"]==21&&simNvsU16["p1"]==20&&simNvsU16["p2"]==10&&simNvsU16["p3"]==1&&simNvsU16["p4"]==0);
+    check("polarity detected as 3V3", simNvsU16["a0"]==1&&simNvsU16["a4"]==1);
+    check("library reached", saw("MiniArcade"));
+    check("sound wizard ran", saw("SOUND")&&saw("do you hear a beep?"));
+    printf("      sound pin stored: %u\n", simNvsU16["snd"]);
+    check("buzzer pin stored", simNvsU16["snd"]!=255);
+    check("learned OK starts a game", saw("TETRIS"));
+  }
+  printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+  return fails?1:0;
+}
