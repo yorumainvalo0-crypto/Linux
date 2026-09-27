@@ -21,11 +21,13 @@ Dino, Breakout, Rocks, Racer, Frogger and Connect Four.
              key or by the buzzer.
 
 Same games as the Arduino sketch, but without the Arduino core and without
-U8g2. `main/MiniArcade.ino` is byte identical to the Arduino version - the
-Arduino API is provided by the thin platform layer in `main/arcade.cpp`.
+U8g2. The Arduino API is provided by the thin platform layer in
+`main/arcade.cpp`. `main/MiniArcade.ino` still builds in the Arduino IDE;
+the WLAN page only exists in this build, because it needs `main/net.h`.
 
-    main/MiniArcade.ino   the games (unchanged)
+    main/MiniArcade.ino   the games
     main/arcade.cpp       SSD1306 driver, GPIO, timing, NVS
+    main/net.cpp          WLAN, setup hotspot, update page, GitHub updates
     main/U8g2lib.h        1 bit framebuffer with the U8g2 method names
     main/Arduino.h        millis / delay / pinMode / digitalRead / random
     main/Preferences.h    high scores + Mine world, backed by NVS
@@ -38,11 +40,56 @@ Arduino API is provided by the thin platform layer in `main/arcade.cpp`.
     idf.py -p COM5 erase-flash     # only needed once, clears old data
     idf.py -p COM5 flash monitor   # Linux/macOS: /dev/ttyACM0 or /dev/cu.usbmodem*
 
+## WLAN and updates
+
+Settings -> "wlan and update...". The radio is only on while this page is
+open, and it needs a cpu clock of at least 80 MHz (the page offers to switch).
+
+    connect            joins the saved network; the display shows the
+                       address of the update page, e.g. http://192.168.1.23
+    set up with phone  opens the hotspot "MiniArcade-XXXX". Join it with the
+                       phone, the setup page opens by itself (otherwise go
+                       to 192.168.4.1), pick the network, enter the password.
+    check for update   asks GitHub for the latest release, OK again installs it
+    forget network     deletes the stored network
+
+The update page in the browser can do the same: check GitHub, or upload a
+`miniarcade.bin` from a release or from `build/` and press "flash". No extra
+software needed. A new image that crashes before the menu appears is rolled
+back to the previous one automatically.
+
+### First flash (once, by cable)
+
+The updates need a new partition table with two app slots, so the first
+flash after v9.1 has to go over USB:
+
+    idf.py -p COM5 flash           # keeps high scores and settings
+
+or, on a fresh board, `miniarcade-full.bin` from a release at address 0x0
+(this one also clears high scores and settings):
+
+    esptool.py --chip esp32c3 write_flash 0x0 miniarcade-full.bin
+
+### Publishing an update
+
+The workflow `.github/workflows/miniarcade.yml` builds every push. To
+publish a version, either
+
+* GitHub -> Actions -> "MiniArcade firmware" -> "Run workflow", enter e.g. `9.3`, or
+* push a tag: `git tag v9.3 && git push origin v9.3`
+
+The release then holds `miniarcade.bin` (for updates), `miniarcade-full.bin`
+(for the first flash) and `version.txt`. The boards look at the repository
+set in `CONFIG_ARCADE_GITHUB_REPO` (menuconfig -> MiniArcade); the GitHub
+build fills in its own repository. The repository must be public.
+
 ## Size
 
-    ESP-IDF 6.1-beta1   157 kB firmware
-    ESP-IDF 5.3.2       168 kB firmware
+    ESP-IDF 6.1-beta1   157 kB firmware  (v9.1, without WLAN)
+    ESP-IDF 5.3.2       168 kB firmware  (v9.1, without WLAN)
     Arduino             358 kB firmware
+    ESP-IDF 5.3.2       760 kB firmware  with WLAN, TLS and updates -
+                                         each update slot holds 1.9 MB
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 

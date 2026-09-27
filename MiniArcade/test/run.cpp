@@ -179,6 +179,7 @@ void simFrameSent(const uint8_t* d, size_t n){
 
 #include "Arduino.h"
 #include <time.h>
+#include "net.h"             // pretend network, before the sketch finds main/net.h
 #include "MiniArcade.ino"
 
 static bool saw(const char*s){ for(auto&t:seenTexts) if(t.find(s)!=std::string::npos) return true; return false; }
@@ -296,6 +297,15 @@ int main(int argc,char**argv){
       script.push_back({10800,1}); script.push_back({10860,0});
       script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
       captureAt={1000,1700};
+  } else if(scenario=="wlan"){ simEnd=12000; downs(14,1300,250);
+      script.push_back({5000,16}); script.push_back({5060,0});     // open settings
+      for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
+      script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
+      script.push_back({8200,2});  script.push_back({8260,0});     // down to the update line
+      script.push_back({8500,2});  script.push_back({8560,0});
+      script.push_back({9000,16}); script.push_back({9060,0});     // check for update
+      script.push_back({9500,16}); script.push_back({9560,0});     // install it
+      captureAt={1000,1100};
   } else if(scenario=="wizard2"){ simEnd=20000;
       /* like "wizard", but the board holds GPIO2 and GPIO10 high through
          external pull-ups - this used to make key detection impossible */
@@ -487,6 +497,11 @@ int main(int argc,char**argv){
       script.push_back({10800,1}); script.push_back({10860,0});
       script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
       captureAt={1000,1700};
+  } else if(scenario=="wlan"){
+    check("settings list the wlan page", saw("wlan and update..."));
+    check("address of the update page shown", saw("http://192.168.1.50"));
+    check("newer release offered", saw("install 9.3"));
+    check("update written, restart announced", saw("done - restarting"));
   } else if(scenario=="wizard2"){
     printf("      learned UP=%u DOWN=%u LEFT=%u RIGHT=%u OK=%u\n",
       simNvsU16["p0"],simNvsU16["p1"],simNvsU16["p2"],simNvsU16["p3"],simNvsU16["p4"]);

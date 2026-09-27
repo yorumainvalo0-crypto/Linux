@@ -626,10 +626,145 @@ void batDetect() {
 }
 
 // =========================================================
+//  WLAN   (ESP-IDF build only - the Arduino IDE has no net.h)
+// =========================================================
+/* Joins the saved network and serves the update page, opens the
+   "MiniArcade-XXXX" hotspot to set the network up from a phone and
+   installs new firmware from the GitHub releases. The radio is only on
+   while this page is open.                                              */
+#if __has_include("net.h")
+#include "net.h"
+#define HAVE_NET 1
+
+static void wlanTitle(const char *t) {
+  oled.setFont(FONT_B);
+  oled.drawStr(2, 12, t);
+  oled.drawHLine(0, TOP_H - 1, SCR_W);
+  oled.setFont(FONT);
+}
+
+static void wlanNeedsClock() {           // the radio does not run below 80 MHz
+  btnClear();
+  while (poll()) {
+    wlanTitle("WLAN");
+    centerStr(30, "WLAN needs 80 MHz+");
+    centerStr(44, "OK = switch to 80 MHz");
+    centerStr(54, "and restart");
+    oled.sendBuffer();
+    if (btn(B_OK)) { cfgClock = 80; saveCfg(); netRestart(); }
+  }
+}
+
+static void wlanProgress(NetJob jb) {
+  wlanTitle("UPDATE");
+  centerStr(30, jb == JOB_DONE ? "done - restarting" : "installing...");
+  oled.drawFrame(10, 36, 108, 8);
+  oled.drawBox(12, 38, (int16_t)(104 * netProgress() / 100), 4);
+  centerStr(60, "do not switch off");
+}
+
+static void wlanSetupHelp() {
+  wlanTitle("WLAN SETUP");
+  centerStr(25, "on the phone join");
+  oled.setFont(FONT_B);
+  centerStr(37, netApName());
+  oled.setFont(FONT);
+  centerStr(47, "the setup page opens,");
+  centerStr(56, "else go to 192.168.4.1");
+  centerStr(64, "hold OK = leave");
+}
+
+void wlanRun() {
+  if (runClock < 80) { wlanNeedsClock(); return; }
+  uint8_t sel = 0;
+  bool leaving = false;
+  if (netHasConfig()) netConnect();
+  btnClear();
+  for (;;) {
+    bool alive = poll();
+    lastInput = millis();                  // no deep sleep while the radio is on
+    netTick();
+    NetState st = netState();
+    NetJob   jb = netJob();
+    bool locked = (jb == JOB_UPDATING || jb == JOB_DONE);   // an update is being written
+    if (!alive) {                          // hold OK = back
+      leaving = true;
+      oled.clearBuffer();
+      oled.setFont(FONT);
+    }
+    if (leaving && !locked && jb != JOB_CHECKING) break;    // let a GitHub check finish
+    if (locked) { wlanProgress(jb); oled.sendBuffer(); continue; }
+    if (st == NET_SETUP) { wlanSetupHelp(); oled.sendBuffer(); continue; }
+
+    bool on = (st == NET_CONNECTING || st == NET_ONLINE);
+    if (btn(B_UP)   && sel)     { sel--; sfx(700, 15); }
+    if (btn(B_DOWN) && sel < 4) { sel++; sfx(700, 15); }
+    if (btn(B_OK)) {
+      sfx(1200, 50);
+      if (sel == 0) {
+        if (on) netStop();
+        else if (netHasConfig()) netConnect();
+        else netSetup();
+      } else if (sel == 1) {
+        netSetup();
+      } else if (sel == 2) {
+        if (st != NET_ONLINE)       sfx(300, 120);
+        else if (jb == JOB_NEWER)   netInstallUpdate();
+        else if (jb != JOB_CHECKING) netCheckUpdate();
+      } else if (sel == 3) {
+        netForget();
+      } else leaving = true;
+      btnClear();
+      continue;
+    }
+
+    char info[26], item[5][26];
+    if (jb == JOB_ERROR)            snprintf(info, sizeof(info), "%s", netError());
+    else if (st == NET_ONLINE)      snprintf(info, sizeof(info), "http://%s", netAddress());
+    else if (st == NET_CONNECTING)  snprintf(info, sizeof(info), "joining %s", netSsid());
+    else if (st == NET_FAILED)      snprintf(info, sizeof(info), "can't join %s", netSsid());
+    else if (netHasConfig())        snprintf(info, sizeof(info), "network %s", netSsid());
+    else                            snprintf(info, sizeof(info), "no network saved");
+    snprintf(item[0], 26, on ? "disconnect" : "connect");
+    snprintf(item[1], 26, "set up with phone");
+    if (jb == JOB_CHECKING)         snprintf(item[2], 26, "asking GitHub...");
+    else if (jb == JOB_NEWER)       snprintf(item[2], 26, "install %s", netRemoteVersion());
+    else if (jb == JOB_UPTODATE)    snprintf(item[2], 26, "up to date");
+    else                            snprintf(item[2], 26, "check for update");
+    snprintf(item[3], 26, "forget network");
+    snprintf(item[4], 26, "back");
+
+    wlanTitle("WLAN");
+    {
+      char v[16];
+      snprintf(v, sizeof(v), "v%s", netVersion());
+      rightStr(12, v);
+    }
+    oled.drawStr(2, 23, info);
+    for (uint8_t i = 0; i < 5; i++) {
+      uint8_t y = 25 + i * 8;
+      if (i == sel) { oled.drawBox(0, y, SCR_W, 8); oled.setDrawColor(0); }
+      oled.drawStr(3, y + 7, item[i]);
+      oled.setDrawColor(1);
+    }
+    oled.sendBuffer();
+  }
+  netStop();
+}
+#endif
+
+// =========================================================
 //  SETTINGS
 // =========================================================
 /* One page with everything adjustable. LEFT/RIGHT changes the value of the
    selected line, OK runs the wizards, holding OK leaves.                 */
+#ifdef HAVE_NET
+#define SET_N 8                     // one more line: WLAN
+#else
+#define SET_N 7
+#endif
+#define SET_ROWS 7                  // lines that fit below the title
+
 void settingsRun() {
   static const uint8_t CLOCKS[3] = { 40, 80, 160 };
   uint8_t sel = 0;
@@ -637,7 +772,7 @@ void settingsRun() {
   while (poll()) {
     bool left = btn(B_LEFT), right = btn(B_RIGHT);
     if (btn(B_UP)   && sel)     { sel--; sfx(700, 15); }
-    if (btn(B_DOWN) && sel < 6) { sel++; sfx(700, 15); }
+    if (btn(B_DOWN) && sel < SET_N - 1) { sel++; sfx(700, 15); }
 
     if (left || right) {
       sfx(800, 15);
@@ -666,12 +801,15 @@ void settingsRun() {
       if      (sel == 3) learnKeys();
       else if (sel == 4) soundSetup();
       else if (sel == 5) batterySetup();
-      else if (sel == 6) return;                        // back to the library
+#ifdef HAVE_NET
+      else if (sel == 6) wlanRun();
+#endif
+      else if (sel == SET_N - 1) return;                // back to the library
       applyCfg();
       btnClear();
     }
 
-    char line[7][26];
+    char line[SET_N][26];
     snprintf(line[0], 26, "brightness   %u%%", (cfgBright * 100) / 255);
     snprintf(line[1], 26, "cpu clock    %u MHz%s", cfgClock,
              (cfgClock == runClock) ? "" : "*");        // * = after a restart
@@ -680,16 +818,20 @@ void settingsRun() {
     snprintf(line[3], 26, "set up keys...");
     snprintf(line[4], 26, "set up sound...");
     snprintf(line[5], 26, "set up battery...");
-    snprintf(line[6], 26, "back to the games");
+#ifdef HAVE_NET
+    snprintf(line[6], 26, "wlan and update...");
+#endif
+    snprintf(line[SET_N - 1], 26, "back to the games");
 
     oled.setFont(FONT_B);
     oled.drawStr(2, 12, "SETTINGS");
     oled.drawHLine(0, TOP_H - 1, SCR_W);
     oled.setFont(FONT);
-    for (uint8_t i = 0; i < 7; i++) {
-      uint8_t y = TOP_H + i * 7;
-      if (i == sel) { oled.drawBox(0, y, SCR_W, 7); oled.setDrawColor(0); }
-      oled.drawStr(3, y + 6, line[i]);
+    uint8_t top = (sel >= SET_ROWS) ? sel - SET_ROWS + 1 : 0;   // scroll
+    for (uint8_t i = 0; i < SET_ROWS && top + i < SET_N; i++) {
+      uint8_t y = TOP_H + i * 7, idx = top + i;
+      if (idx == sel) { oled.drawBox(0, y, SCR_W, 7); oled.setDrawColor(0); }
+      oled.drawStr(3, y + 6, line[idx]);
       oled.setDrawColor(1);
     }
     oled.sendBuffer();

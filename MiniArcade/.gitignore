@@ -1,0 +1,6 @@
+build/
+sdkconfig
+sdkconfig.old
+test/idfsim
+test/frames/
+test/screens.png

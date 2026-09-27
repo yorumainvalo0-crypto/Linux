@@ -1,0 +1,9 @@
+menu "MiniArcade"
+    config ARCADE_GITHUB_REPO
+        string "GitHub repository that publishes the firmware releases"
+        default "yorumainvalo0-crypto/Linux"
+        help
+            owner/name of the repository. The board downloads
+            releases/latest/download/version.txt and miniarcade.bin from it.
+            The GitHub build sets this to the repository it runs in.
+endmenu
