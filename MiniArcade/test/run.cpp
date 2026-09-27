@@ -393,6 +393,11 @@ int main(int argc,char**argv){
       script.push_back({9000,16}); script.push_back({9060,0});     // check for update
       script.push_back({9500,16}); script.push_back({9560,0});     // install it
       captureAt={1000,1100};
+  } else if(scenario=="wlanfail"){ simEnd=16000; ups(1,1300,220); simNoNet=true;
+      script.push_back({5000,16}); script.push_back({5060,0});     // open settings
+      for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
+      script.push_back({7500,16}); script.push_back({7560,0});     // wlan page: joins, but in vain
+      captureAt={1600,2800};
   } else if(scenario=="versions"){ simEnd=8000;
       simTwoSlots=true;                                             // fresh update, nothing pressed
       script.push_back({6000,2}); script.push_back({6060,0});      // first key press in the menu
@@ -967,8 +972,13 @@ int main(int argc,char**argv){
   } else if(scenario=="wlan"){
     check("settings list the wlan page", saw("wlan and update..."));
     check("address of the update page shown", saw("http://192.168.1.50"));
+    check("online state shown, disconnect offered", saw("online")&&saw("disconnect"));
     check("newer release offered", saw("install 9.3"));
     check("update written, restart announced", saw("done - restarting"));
+  } else if(scenario=="wlanfail"){
+    check("while joining: state shown, no disconnect offered", saw("joining")&&saw("stop joining"));
+    check("after failing: failed, connect offered", saw("failed")&&saw("can't join HomeNet")&&saw("connect"));
+    check("never claims to be connected", !saw("disconnect")&&!saw("online"));
   } else if(scenario=="versions"){
     check("version choice shown at start", saw("VERSION")&&saw("previous")&&saw("new"));
     check("countdown shown", saw("3s")&&saw("1s"));
