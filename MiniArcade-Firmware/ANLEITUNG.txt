@@ -1,0 +1,14 @@
+MiniArcade - Firmware fuer den ESP32-C3 SuperMini (Version: siehe Dateiname)
+
+miniarcade-full.bin   Erstes Flashen per USB-Kabel (Adresse 0x0).
+                      Loescht Highscores und Einstellungen.
+miniarcade.bin        Nur fuer Updates: auf der Update-Seite der Konsole
+                      hochladen (Einstellungen -> wlan and update...).
+
+Erstes Flashen im Browser (Chrome oder Edge):
+ 1. https://espressif.github.io/esptool-js/ oeffnen
+ 2. ESP32 per USB anstecken, "Connect" druecken, den Port waehlen
+    (klappt es nicht: BOOT-Taste halten, dabei RESET kurz druecken)
+ 3. Flash Address: 0x0   File: miniarcade-full.bin
+ 4. "Program" druecken, warten bis "Leaving..." erscheint
+ 5. RESET druecken - die Konsole startet
