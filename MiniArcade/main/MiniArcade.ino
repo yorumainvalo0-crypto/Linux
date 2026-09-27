@@ -761,7 +761,7 @@ void wlanRun() {
     }
     oled.drawStr(2, 23, info);
     for (uint8_t i = 0; i < 5; i++) {
-      uint8_t y = 25 + i * 8;
+      uint8_t y = 24 + i * 8;                // last baseline: row 63
       if (i == sel) { oled.drawBox(0, y, SCR_W, 8); oled.setDrawColor(0); }
       oled.drawStr(3, y + 7, item[i]);
       oled.setDrawColor(1);
@@ -865,7 +865,7 @@ void versionRun(bool atBoot) {
 #else
 #define SET_N 7
 #endif
-#define SET_ROWS 7                  // lines that fit below the title
+#define SET_ROWS 6                  // 8 px lines that fit below the title
 
 void settingsRun() {
   static const uint8_t CLOCKS[3] = { 40, 80, 160 };
@@ -933,9 +933,9 @@ void settingsRun() {
     oled.setFont(FONT);
     uint8_t top = (sel >= SET_ROWS) ? sel - SET_ROWS + 1 : 0;   // scroll
     for (uint8_t i = 0; i < SET_ROWS && top + i < SET_N; i++) {
-      uint8_t y = TOP_H + i * 7, idx = top + i;
-      if (idx == sel) { oled.drawBox(0, y, SCR_W, 7); oled.setDrawColor(0); }
-      oled.drawStr(3, y + 6, line[idx]);
+      uint8_t y = TOP_H + i * 8, idx = top + i;       // last baseline: row 63
+      if (idx == sel) { oled.drawBox(0, y, SCR_W, 8); oled.setDrawColor(0); }
+      oled.drawStr(3, y + 7, line[idx]);
       oled.setDrawColor(1);
     }
     oled.sendBuffer();
