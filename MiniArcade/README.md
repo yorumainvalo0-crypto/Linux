@@ -1,7 +1,8 @@
 # MiniArcade - ESP-IDF version
 
-14 games: Tetris, Snake, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders,
-Dino, Breakout, Rocks, Racer, Frogger and Connect Four.
+15 games: Tetris, Snake, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders,
+Dino, Breakout, Rocks, Racer, Frogger, Connect Four and Tic Tac Toe -
+the last two also against a second console nearby (Multiplayer).
 
 ## Optional hardware
 
@@ -28,6 +29,8 @@ the WLAN page only exists in this build, because it needs `main/net.h`.
     main/MiniArcade.ino   the games
     main/arcade.cpp       SSD1306 driver, GPIO, timing, NVS
     main/net.cpp          WLAN, setup hotspot, update page, GitHub updates
+    main/linkcore.h       multiplayer protocol (no hardware, tested on the PC)
+    main/link.cpp         multiplayer radio: ESP-NOW, name and friends in flash
     main/U8g2lib.h        1 bit framebuffer with the U8g2 method names
     main/Arduino.h        millis / delay / pinMode / digitalRead / random
     main/Preferences.h    high scores + Mine world, backed by NVS
@@ -90,13 +93,42 @@ or, on a fresh board, `miniarcade-full.bin` from a release at address 0x0
 
     esptool.py --chip esp32c3 write_flash 0x0 miniarcade-full.bin
 
-### Publishing an update
+## Multiplayer
 
-The workflow `.github/workflows/miniarcade.yml` builds every push. To
-publish a version, either
+Library -> "Multiplayer". Every console with this page open appears in the
+list of the others, with its name and a 4 letter code taken from the chip
+(e.g. `ANNA  K7F2  free`), sorted by signal strength. No router is needed:
+the consoles talk directly over ESP-NOW (channel 1), typically 50-200 m.
 
-* GitHub -> Actions -> "MiniArcade firmware" -> "Run workflow", enter e.g. `9.3`, or
-* push a tag: `git tag v9.3 && git push origin v9.3`
+    first line   your own name and code - OK = change the name
+    UP / DOWN    choose a player
+    OK           challenge: pick 4 wins or Tic Tac Toe
+    RIGHT        mark as friend (*) - friends are listed first
+    hold OK      back to the games
+
+A challenge waits 30 s: the other console shows "wants to play ..." with
+OK = yes, LEFT = no. Challenges only reach consoles that have the
+multiplayer page open - nobody is disturbed in the middle of another game,
+and the radio is off everywhere else. A coin decides who begins; in
+Tic Tac Toe that player is X. Holding OK during a game gives up, and a
+console that is switched off is noticed after 15 s.
+
+Every move is repeated until the other console confirms it, so lost radio
+packets do not matter; `test/linktest.cpp` plays whole games with 50 %
+packet loss.
+
+### Version numbers and publishing an update
+
+Every update has a number in `MiniArcade/version.txt` (9.3, 9.4, ...).
+Raise it in the pull request; when the pull request is merged into main,
+the workflow `.github/workflows/miniarcade.yml` publishes the release
+"MiniArcade 9.4" with the tag `v9.4` by itself, and the consoles offer it
+under "check for update". Pushes that keep the number only build.
+
+Other ways to publish:
+
+* GitHub -> Actions -> "MiniArcade firmware" -> "Run workflow", enter e.g. `9.4`
+* push a tag: `git tag v9.4 && git push origin v9.4`
 
 "Run workflow" publishes from `main` only. The release then holds
 `miniarcade.bin` (for updates), `miniarcade-full.bin` (for the first flash)
@@ -110,7 +142,7 @@ build fills in its own repository. The repository must be public.
     ESP-IDF 6.1-beta1   157 kB firmware  (v9.1, without WLAN)
     ESP-IDF 5.3.2       168 kB firmware  (v9.1, without WLAN)
     Arduino             358 kB firmware
-    ESP-IDF 5.3.2       760 kB firmware  with WLAN, TLS and updates -
+    ESP-IDF 5.3.2       785 kB firmware  9.3: WLAN, TLS, updates and multiplayer -
                                          each update slot holds 1.9 MB
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.

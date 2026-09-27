@@ -181,6 +181,7 @@ void simFrameSent(const uint8_t* d, size_t n){
 #include "Arduino.h"
 #include <time.h>
 #include "net.h"             // pretend network, before the sketch finds main/net.h
+#include "link.h"            // multiplayer with a bot next door
 #include "MiniArcade.ino"
 
 static bool saw(const char*s){ for(auto&t:seenTexts) if(t.find(s)!=std::string::npos) return true; return false; }
@@ -206,7 +207,7 @@ int main(int argc,char**argv){
     for(int i=0;i<5;i++){ simNvsU16["p"+std::to_string(i)]=3+i; simNvsU16["a"+std::to_string(i)]=1; }
   }
 
-  if(scenario=="menu"){        simEnd=10000; downs(15,1300,300); captureAt={30,300,700};
+  if(scenario=="menu"){        simEnd=10000; downs(16,1300,300); captureAt={30,300,700};
   } else if(scenario=="tetris"){ simEnd=60000; script={{1300,16},{1360,0}}; autoplay=true; captureAt={200,900};
   } else if(scenario=="snake"){  simEnd=20000; downs(1);
       script.push_back({1500,16}); script.push_back({1560,0});
@@ -276,10 +277,18 @@ int main(int argc,char**argv){
         if(k%2){ script.push_back({t+140,dir}); script.push_back({t+230,0}); }
         script.push_back({t+400,16});     script.push_back({t+480,0}); }
       captureAt={790,1400};
+  } else if(scenario=="ttt"){      simEnd=60000; downs(14,1300,180);
+      script.push_back({4200,16}); script.push_back({4260,0});     // open tic tac toe
+      script.push_back({4600,16}); script.push_back({4660,0});     // "1P easy"
+      for(uint32_t t=5200;t<58000;t+=260){                       // wander and place
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
+        script.push_back({t+130,16}); script.push_back({t+190,0}); }
+      captureAt={};
   } else if(scenario=="sleep"){   simEnd=90000;
       simNvsU16["slp"]=1;                       // one minute, then nothing happens
       captureAt={200};
-  } else if(scenario=="settings"){ simEnd=26000; downs(14,1300,250);
+  } else if(scenario=="settings"){ simEnd=26000; downs(16,1300,250);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
       script.push_back({5900,4});  script.push_back({5960,0});
@@ -298,7 +307,7 @@ int main(int argc,char**argv){
       script.push_back({10800,1}); script.push_back({10860,0});
       script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
       captureAt={1000,1700};
-  } else if(scenario=="wlan"){ simEnd=12000; downs(14,1300,250);
+  } else if(scenario=="wlan"){ simEnd=12000; downs(16,1300,250);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
       script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
@@ -318,11 +327,39 @@ int main(int argc,char**argv){
       captureAt={250};
   } else if(scenario=="versions3"){ simEnd=90000;
       simTwoSlots=true; simNvsU16["slp"]=1;                        // fresh update, sleep after 1 min
-  } else if(scenario=="upload"){ simEnd=9000; downs(14,1300,250); simUpload=true;
+  } else if(scenario=="upload"){ simEnd=9000; downs(16,1300,250); simUpload=true;
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
       script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
       script.push_back({8300,16}); script.push_back({8360,0});     // OK on the question
+  } else if(scenario=="mp4"||scenario=="mpno"||scenario=="mpwait"||scenario=="mpleft"){
+      simEnd = (scenario=="mpwait") ? 45000 : 40000;
+      if(scenario=="mpno")   simBotAnswer=0;
+      if(scenario=="mpwait") simBotAnswer=-1;
+      if(scenario=="mpleft") simBotLeaveAfter=2;
+      downs(15,1300,180);
+      script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
+      script.push_back({6500,2});  script.push_back({6560,0});     // ANNA's row
+      script.push_back({6900,16}); script.push_back({6960,0});     // challenge ...
+      script.push_back({7400,16}); script.push_back({7460,0});     // ... to 4 wins
+      if(scenario!="mpwait") for(uint32_t t=10000;t<36000;t+=450){   // play: move and drop
+        script.push_back({t,(uint8_t)((rand()%2)?4:8)}); script.push_back({t+60,0});
+        script.push_back({t+200,16}); script.push_back({t+260,0}); }
+  } else if(scenario=="mpin"){ simEnd=40000;
+      simBotInviteAt=7000; simBotGame=LKG_TTT;
+      downs(15,1300,180);
+      script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
+      script.push_back({9000,16}); script.push_back({9060,0});     // accept the challenge
+      for(uint32_t t=11000;t<36000;t+=400){                       // wander and place
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
+        script.push_back({t+180,16}); script.push_back({t+240,0}); }
+  } else if(scenario=="mpname"){ simEnd=9000;
+      downs(15,1300,180);
+      script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
+      script.push_back({6000,16}); script.push_back({6060,0});     // own row: rename
+      script.push_back({6500,1});  script.push_back({6560,0});     // P -> Q
+      script.push_back({7000,16}); script.push_back({7060,0});     // save
   } else if(scenario=="wizard2"){ simEnd=20000;
       /* like "wizard", but the board holds GPIO2 and GPIO10 high through
          external pull-ups - this used to make key detection impossible */
@@ -394,6 +431,110 @@ int main(int argc,char**argv){
     return ok ? 0 : 1;
   }
 
+  if(scenario=="frogroll"){
+    /* Rolls lanes for every difficulty and level and checks them: objects
+       never overlap, every gap has the promised size, the road always
+       leaves room for the frog, and neighbouring lanes move opposite ways. */
+    int bad=0, rolls=0;
+    for(uint8_t diff=0; diff<3; diff++)
+      for(int round=0; round<3000; round++){
+        randomSeed(7+round*3+diff);
+        frRollAll(diff, round%12);
+        for(uint8_t l=0;l<FR_LANES;l++,rolls++){
+          const FrLane &L=frL[l];
+          bool water=frWater(l);
+          int glo = water ? 6 : (diff==0 ? 22 : 16);
+          int ghi = water ? (diff==0 ? 22 : (diff==1 ? 28 : 34)) : 999;
+          if(L.n<2||L.n>FR_MAXO){ bad++; continue; }
+          int used=0; for(int k=0;k<L.n;k++) used+=L.w[k];
+          for(int k=0;k<L.n;k++){                    // gap after object k, around the ring
+            int a=L.x[k]/FR_Q, b=L.x[(k+1)%L.n]/FR_Q;
+            int gap=((b-a+SCR_W)%SCR_W) - L.w[k];
+            if(L.n==1) gap=SCR_W-L.w[k];
+            if(gap<glo||gap>ghi){ bad++; if(bad<5) printf("      diff %u lane %u: gap %d not in %d..%d\n",diff,l,gap,glo,ghi); }
+          }
+          if(!L.spd) bad++;
+          if(l && (L.spd>0)==(frL[l-1].spd>0)) bad++;
+        }
+      }
+    printf("      %d lanes rolled\n", rolls);
+    check("lanes always valid (gaps, room for the frog, directions)", bad==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="tttbench"){
+    /* Every possible way to play against "hard", both with the player and
+       with the machine starting, several seeds: it must never lose.     */
+    long games=0; int lost=0, easyLost=0;
+    std::vector<uint8_t> stack;
+    for(int seed=0; seed<8; seed++){
+      randomSeed(100+seed);
+      for(uint8_t starter=1; starter<=2; starter++){
+        // depth first over all player moves, the machine answers each position
+        struct F { uint8_t b[9]; };
+        std::vector<F> todo; F f0; memset(f0.b,0,9);
+        if(starter==2){ memcpy(tt,f0.b,9); tt[ttThink(2,2)]=2; memcpy(f0.b,tt,9); }
+        todo.push_back(f0);
+        while(!todo.empty()){
+          F f=todo.back(); todo.pop_back();
+          for(uint8_t i=0;i<9;i++){
+            if(f.b[i]) continue;
+            memcpy(tt,f.b,9); tt[i]=1;
+            if(ttLine(1)>=0){ lost++; games++; continue; }
+            if(ttFull()){ games++; continue; }
+            tt[ttThink(2,2)]=2;
+            if(ttLine(2)>=0||ttFull()){ games++; continue; }
+            F g; memcpy(g.b,tt,9); todo.push_back(g);
+          }
+        }
+      }
+    }
+    for(int g=0; g<500; g++){                   // easy against a random player
+      randomSeed(9000+g); memset(tt,0,9); uint8_t turn=1+(g&1);
+      while(ttLine(1)<0&&ttLine(2)<0&&!ttFull()){
+        if(turn==2) tt[ttThink(0,2)]=2;
+        else { uint8_t fr[9],n=0; for(uint8_t i=0;i<9;i++) if(!tt[i]) fr[n++]=i; tt[fr[random(n)]]=1; }
+        turn=3-turn;
+      }
+      if(ttLine(1)>=0) easyLost++;
+    }
+    printf("      %ld games against hard, %d lost; easy lost %d of 500 to a random player\n", games, lost, easyLost);
+    check("hard never loses", lost==0);
+    check("easy can be beaten", easyLost>20);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="racerfair"){
+    /* Plays the real car spawning at every speed and keeps the set of all
+       positions the player could be in. If that set ever runs empty, the
+       road was closed - an impossible situation.                        */
+    dInitSin();
+    int stuck=0; long steps=0;
+    for(int g=0; g<400; g++){
+      randomSeed(1000+g);
+      rcStart();
+      static bool can[SCR_W], nx[SCR_W];
+      memset(can,0,sizeof(can)); can[rcMid(0,RC_CARY)-3]=true;
+      for(int t=0;t<6000;t++,steps++){
+        memset(nx,0,sizeof(nx));
+        for(int x=0;x<SCR_W;x++) if(can[x]){
+          nx[x]=true;
+          if(x>2) nx[x-RC_STEP]=true;
+          if(x<SCR_W-9) nx[x+RC_STEP]=true;
+        }
+        rcAdvance();
+        bool any=false;
+        for(int x=0;x<SCR_W;x++){ if(nx[x]&&rcCrash(x)) nx[x]=false; any|=nx[x]; }
+        if(!any){ stuck++; printf("      game %d: no way through after %d steps at speed %u\n",g,t,rc.spd); break; }
+        memcpy(can,nx,sizeof(can));
+      }
+    }
+    printf("      %ld steps checked\n", steps);
+    check("road never closes up (400 games up to top speed)", stuck==0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+
   try { setup(); for(;;) loop(); } catch(SimEnd&){}
 
   printf("scenario %s: %ld panel updates, %u ms simulated\n", scenario.c_str(), frames, (unsigned)(clockUs/1000));
@@ -401,7 +542,7 @@ int main(int argc,char**argv){
 
   if(scenario=="menu"){
     check("library drawn", saw("MiniArcade"));
-    check("all games listed", saw("Tetris")&&saw("Snake")&&saw("Pong")&&saw("Doom")&&saw("Mine")&&saw("Tunnel 3D")&&saw("Flappy")&&saw("Invaders")&&saw("Dino")&&saw("Breakout")&&saw("Rocks")&&saw("Racer")&&saw("Frogger")&&saw("4 wins"));
+    check("all games listed", saw("Tetris")&&saw("Snake")&&saw("Pong")&&saw("Doom")&&saw("Mine")&&saw("Tunnel 3D")&&saw("Flappy")&&saw("Invaders")&&saw("Dino")&&saw("Breakout")&&saw("Rocks")&&saw("Racer")&&saw("Frogger")&&saw("4 wins")&&saw("Tic Tac Toe")&&saw("Multiplayer"));
     check("list scrolls to the last entry", saw("Settings"));
     printf("      tones played: %ld, last %d Hz\n", toneCount, lastTone);
     check("menu clicks are audible", toneCount>0);
@@ -486,6 +627,14 @@ int main(int argc,char**argv){
     check("game over reached", saw("GAME OVER")||saw("NEW RECORD!"));
     printf("      score %u, stored hs12 %u\n", maxScore("SCORE "), simNvsU16["hs12"]);
     check("high score consistent", simNvsU16["hs12"]==maxScore("SCORE "));
+  } else if(scenario=="ttt"){
+    check("tic tac toe drawn", saw("TIC TAC"));
+    check("modes offered", saw("1P hard")&&saw("2 players"));
+    check("a round ended", saw("YOU WIN")||saw("CPU WINS")||saw("DRAW"));
+    check("the machine lost at least once to key mashing", saw("YOU WIN")||saw("DRAW"));
+    check("game over after a loss", saw("GAME OVER")||saw("NEW RECORD!"));
+    printf("      score %u, stored hs14 %u\n", maxScore("SCORE "), simNvsU16["hs14"]);
+    check("high score consistent", simNvsU16["hs14"]==maxScore("SCORE "));
   } else if(scenario=="c4"){
     check("connect four drawn", saw("4 WINS"));
     check("hint shown", saw("OK=drop"));
@@ -495,7 +644,7 @@ int main(int argc,char**argv){
   } else if(scenario=="sleep"){   simEnd=90000;
       simNvsU16["slp"]=1;                       // one minute, then nothing happens
       captureAt={200};
-  } else if(scenario=="settings"){ simEnd=26000; downs(14,1300,250);
+  } else if(scenario=="settings"){ simEnd=26000; downs(16,1300,250);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
       script.push_back({5900,4});  script.push_back({5960,0});
@@ -535,6 +684,27 @@ int main(int argc,char**argv){
     check("upload question shown on the device", saw("install firmware")&&saw("v9.4"));
     check("confirmed with OK", simAnswer==1);
     check("update written, restart announced", saw("done - restarting"));
+  } else if(scenario=="mp4"){
+    check("multiplayer page lists ANNA", saw("LOBBY")&&saw("ANNA"));
+    check("challenge sent", saw("waiting for ANNA"));
+    check("game against ANNA shown", saw("vs ANNA"));
+    check("a game was decided", saw("YOU WIN")||saw("LOST")||saw("DRAW"));
+    check("the bot saw the same end", simBotGames>=1);
+  } else if(scenario=="mpno"){
+    check("decline reported", saw("ANNA said no"));
+  } else if(scenario=="mpwait"){
+    check("challenge counts down", saw("29s")&&saw("1s"));
+    check("no answer after 30 s", saw("no answer from ANNA"));
+  } else if(scenario=="mpleft"){
+    check("opponent leaving reported", saw("ANNA left the game"));
+  } else if(scenario=="mpin"){
+    check("incoming challenge shown", saw("CHALLENGE!")&&saw("wants to play Tic Tac Toe"));
+    check("game against ANNA shown", saw("vs ANNA"));
+    check("a game was decided", saw("YOU WIN")||saw("LOST")||saw("DRAW"));
+    check("the bot saw the same end", simBotGames>=1);
+  } else if(scenario=="mpname"){
+    check("name editor shown", saw("YOUR NAME"));
+    check("new name kept", !strcmp(linkName(),"QLAYER"));
   } else if(scenario=="wizard2"){
     printf("      learned UP=%u DOWN=%u LEFT=%u RIGHT=%u OK=%u\n",
       simNvsU16["p0"],simNvsU16["p1"],simNvsU16["p2"],simNvsU16["p3"],simNvsU16["p4"]);

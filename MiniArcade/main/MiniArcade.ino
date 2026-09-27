@@ -279,10 +279,13 @@ void saveSound() {
 /* Every game is written as:  while (poll()) { ...draw...; oled.sendBuffer(); }
    poll() feeds the buttons, clears the buffer and returns false as soon as
    the player holds OK to get back to the library.                        */
+static void (*pollHook)() = NULL;          // extra work on every frame (multiplayer radio)
+
 bool poll() {
   delay(5);
   btnUpdate();
   sfxUpdate();
+  if (pollHook) pollHook();
   sleepCheck();
   if (wantExit) { wantExit = false; return false; }
   oled.clearBuffer();
@@ -307,8 +310,10 @@ void statusBar(const char *title, uint16_t score, uint16_t best) {
   oled.setFont(FONT);
   snprintf(b, sizeof(b), "%u", score);
   oled.drawStr(x, 12, b);
+  uint8_t end = x + oled.getStrWidth(b) + 4;             // first free column
   snprintf(b, sizeof(b), "BEST %u", best);
-  rightStr(12, b);
+  if (SCR_W - 2 - oled.getStrWidth(b) < end) snprintf(b, sizeof(b), "HI %u", best);
+  if (SCR_W - 2 - oled.getStrWidth(b) >= end) rightStr(12, b);   // long title: drop it
   oled.drawHLine(0, TOP_H - 1, SCR_W);
 }
 
@@ -1031,12 +1036,12 @@ void tetrisRun() {
         while (!tHit(p, r, px, py + 1)) py++;
         drop = true;
       }
-      if (btnHeld(B_DOWN)) nextFall = 0;                 // soft drop
+      if (btnHeld(B_DOWN) && nextFall > millis() + 40) nextFall = millis() + 40;   // soft drop
 
       // ---- gravity ----
       uint32_t now = millis();
       if (drop || now >= nextFall) {
-        uint16_t step = 500 - (uint16_t)level * 40;
+        int16_t step = 500 - (int16_t)level * 40;       // signed: level 13+ went negative
         if (step < 100) step = 100;
         if (!drop && !tHit(p, r, px, py + 1)) {
           py++;
@@ -1104,7 +1109,11 @@ void snakeRun() {
 
       uint32_t now = millis();
       if (now >= nextStep) {
-        nextStep = now + (btnHeld(B_OK) ? stepMs / 3 : stepMs);   // OK = boost
+        // boost: keep holding the key of the current direction (holding OK
+        // would mean "back to the menu")
+        bool boost = (dx > 0 && btnHeld(B_RIGHT)) || (dx < 0 && btnHeld(B_LEFT)) ||
+                     (dy > 0 && btnHeld(B_DOWN))  || (dy < 0 && btnHeld(B_UP));
+        nextStep = now + (boost ? stepMs / 3 : stepMs);
         dx = ndx; dy = ndy;
         int8_t hx = (int8_t)(body[0] >> 8) + dx;
         int8_t hy = (int8_t)(body[0] & 0xFF) + dy;
@@ -1124,8 +1133,8 @@ void snakeRun() {
           while (true) {                                          // respawn food
             fx = random(S_W); fy = random(S_H);
             uint16_t f = ((uint16_t)fx << 8) | fy;
-            bool bad = false;
-            for (uint16_t i = 0; i < len; i++) if (body[i] == f) { bad = true; break; }
+            bool bad = (f == head);                               // the head moves there now
+            for (uint16_t i = 0; i + 1 < len && !bad; i++) if (body[i] == f) bad = true;
             if (!bad) break;
           }
         }
@@ -1173,6 +1182,7 @@ void pongRun() {
         uint8_t sp = 2 + score / 20; if (sp > 4) sp = 4;
         if (bt > at + 1 && ay < P_BOT - P_PH) ay += sp;
         if (bt < at - 1 && ay > P_TOP)        ay -= sp;
+        if (ay < P_TOP) ay = P_TOP;                      // not into the status bar
 
         bx += vx; by += vy;
         if (by < (P_TOP << 4))       { by = P_TOP << 4;       vy = -vy; }
@@ -1187,6 +1197,7 @@ void pongRun() {
             vy += ((int16_t)(byp - (py + P_PH / 2))) * 2;        // angle from hit point
             if (vy >  24) vy =  24;
             if (vy < -24) vy = -24;
+            if (vy > -3 && vy < 3) vy = random(2) ? 5 : -5;     // never perfectly flat
             sfx(750, 30);
             score++;
           }
@@ -1265,6 +1276,31 @@ static uint16_t dCast(int32_t px, int32_t py, uint8_t ra, uint8_t *side) {
   return (uint16_t)perp;
 }
 
+/* steps from every free cell to the player, so monsters walk around walls
+   instead of through them (breadth first search over the 16x16 maze)     */
+static uint8_t dDist[16][16];
+
+static void dFlow(int32_t px, int32_t py) {
+  static const int8_t DIR[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+  uint8_t q[256];
+  uint16_t head = 0, tail = 0;
+  memset(dDist, 255, sizeof(dDist));
+  uint8_t sx = px >> 8, sy = py >> 8;
+  dDist[sy][sx] = 0;
+  q[tail++] = sy * 16 + sx;
+  while (head < tail) {
+    uint8_t c = q[head++];
+    int8_t cx = c & 15, cy = c >> 4;
+    for (uint8_t k = 0; k < 4; k++) {
+      int8_t nx = cx + DIR[k][0], ny = cy + DIR[k][1];
+      if (nx < 0 || nx > 15 || ny < 0 || ny > 15 || ((D_MAP[ny] >> nx) & 1)) continue;
+      if (dDist[ny][nx] != 255) continue;
+      dDist[ny][nx] = dDist[cy][cx] + 1;
+      q[tail++] = ny * 16 + nx;
+    }
+  }
+}
+
 struct DMon { int32_t x, y; bool alive; };
 static DMon dMon[D_MON];          // global: keeps the .ino auto prototypes happy
 
@@ -1314,10 +1350,22 @@ void doomRun() {
           if (!dWall(px, ny)) py = ny;
         }
 
+        dFlow(px, py);
         for (uint8_t i = 0; i < D_MON; i++) {
           if (!dMon[i].alive) { dSpawn(i, px, py); continue; }
-          dMon[i].x += (px > dMon[i].x) ? 6 : -6;
-          dMon[i].y += (py > dMon[i].y) ? 6 : -6;
+          int8_t  mcx = dMon[i].x >> 8, mcy = dMon[i].y >> 8;
+          int32_t tx = px, ty = py;                  // same cell: straight at you
+          uint8_t best = dDist[mcy][mcx];
+          static const int8_t DIR[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+          for (uint8_t k = 0; k < 4; k++) {          // otherwise to the next cell on the way
+            int8_t nx = mcx + DIR[k][0], ny = mcy + DIR[k][1];
+            if (nx < 0 || nx > 15 || ny < 0 || ny > 15) continue;
+            if (dDist[ny][nx] < best) { best = dDist[ny][nx]; tx = nx * 256 + 128; ty = ny * 256 + 128; }
+          }
+          int32_t mx = dMon[i].x + constrain(tx - dMon[i].x, -6, 6);
+          int32_t my = dMon[i].y + constrain(ty - dMon[i].y, -6, 6);
+          if (!dWall(mx, dMon[i].y)) dMon[i].x = mx;
+          if (!dWall(dMon[i].x, my)) dMon[i].y = my;
           if (abs(px - dMon[i].x) + abs(py - dMon[i].y) < 90) {   // it got you
             hp--;
             dMon[i].alive = false;
@@ -1444,9 +1492,12 @@ static void tuLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
 
 /* Every third ring carries a barrier that blocks half of the opening, so
    you have to move out of the way instead of coasting down the middle.  */
+static uint32_t tuSeed;                      // new barrier order every run
+
 static uint8_t tuBar(int32_t idx) {          // 0 = free, 1..4 = blocked side
   if (idx < 6 || idx % 4) return 0;          // a few free rings to settle in
-  return 1 + (uint8_t)((idx * 7 + (idx >> 2)) & 3);
+  uint32_t h = (uint32_t)idx * 2654435761u + tuSeed;
+  return 1 + (uint8_t)((h >> 13) & 3);
 }
 
 /* centre of ring number idx; the tube bends with two slow sine waves */
@@ -1467,6 +1518,7 @@ void tunnelRun() {
     uint16_t score = 0;
     uint8_t  speed = 10;
     uint32_t next = 0;
+    tuSeed = random(0x7FFFFFFF);
     btnClear();
 
     while (poll()) {
@@ -1477,7 +1529,6 @@ void tunnelRun() {
         if (btnHeld(B_RIGHT)) shipX += 3;
         if (btnHeld(B_UP))    shipY -= 3;
         if (btnHeld(B_DOWN))  shipY += 3;
-        if (btnHeld(B_OK) && speed < 40) speed++;      // boost
         if (shipX >  60) shipX =  60;
         if (shipX < -60) shipX = -60;
         if (shipY >  40) shipY =  40;
@@ -1537,10 +1588,13 @@ void tunnelRun() {
           if (bar == 2) x0 = cx + edge;               // right side closed
           if (bar == 3) y1 = cy - edge;               // top closed
           if (bar == 4) y0 = cy + edge;               // bottom closed
+          if (x0 < 0) x0 = 0;                         // near rings are huge: clip first
+          if (x1 > SCR_W - 1) x1 = SCR_W - 1;
+          if (y0 < TOP_H) y0 = TOP_H;
+          if (y1 > SCR_H - 1) y1 = SCR_H - 1;
           for (int16_t yy = y0; yy <= y1; yy++)
             for (int16_t xx = x0; xx <= x1; xx++)
-              if (xx >= 0 && xx < SCR_W && yy >= TOP_H && yy < SCR_H && dInk(xx, yy, lvl))
-                oled.drawPixel(xx, yy);
+              if (dInk(xx, yy, lvl)) oled.drawPixel(xx, yy);
         }
         if (psz > 0 && i <= 6) {                      // struts along the tube
           tuLine(pcx - psz, pcy - psz, cx - sz, cy - sz);
@@ -1566,7 +1620,9 @@ void tunnelRun() {
 // =========================================================
 #define F_TOP  (TOP_H + 1)
 #define F_BOT  (SCR_H - 1)
-#define F_GAP  22
+#define F_GAP  22             // gap at the start ...
+#define F_GAPMIN 17            // ... shrinks by one every 10 points down to this
+#define F_SHIFT 20             // next gap at most this far from the last one
 #define F_PIPES 3
 #define F_BX   24              // bird x position
 
@@ -1576,10 +1632,15 @@ void flappyRun() {
     again = false;
     int16_t by = ((F_TOP + F_BOT) / 2) << 4, vy = 0;   // bird y / speed, Q4
     int16_t fx[F_PIPES];
-    uint8_t fg[F_PIPES];
+    uint8_t fg[F_PIPES], fh[F_PIPES];              // gap top and gap height per pipe
+    uint8_t last = (F_TOP + F_BOT - F_GAP) / 2;
     for (uint8_t i = 0; i < F_PIPES; i++) {
       fx[i] = SCR_W + i * 44;
+      fh[i] = F_GAP;
       fg[i] = F_TOP + 4 + random(F_BOT - F_TOP - F_GAP - 8);
+      if (fg[i] > last + F_SHIFT) fg[i] = last + F_SHIFT;
+      if (fg[i] + F_SHIFT < last) fg[i] = last - F_SHIFT;
+      last = fg[i];
     }
     uint16_t score = 0;
     uint32_t next = 0;
@@ -1603,11 +1664,17 @@ void flappyRun() {
           if (old + 8 > F_BX && fx[i] + 8 <= F_BX) { score++; sfx(1200, 40); }   // passed
           if (fx[i] < -8) {
             fx[i] += F_PIPES * 44;
-            fg[i] = F_TOP + 4 + random(F_BOT - F_TOP - F_GAP - 8);
+            uint8_t h = F_GAP - score / 10;
+            if (h < F_GAPMIN || h > F_GAP) h = F_GAPMIN;
+            uint8_t prev = fg[(i + F_PIPES - 1) % F_PIPES];         // the pipe before it
+            fh[i] = h;
+            fg[i] = F_TOP + 4 + random(F_BOT - F_TOP - h - 8);
+            if (fg[i] > prev + F_SHIFT) fg[i] = prev + F_SHIFT;
+            if (fg[i] + F_SHIFT < prev) fg[i] = prev - F_SHIFT;
           }
           int16_t bt = by >> 4, bb = bt + 5;                       // bird box
           if (fx[i] < F_BX + 6 && fx[i] + 8 > F_BX &&
-              (bt < fg[i] || bb > fg[i] + F_GAP)) dead = true;
+              (bt < fg[i] || bb > fg[i] + fh[i])) dead = true;
         }
         if (dead) { again = gameOver(score); break; }
       }
@@ -1619,7 +1686,7 @@ void flappyRun() {
         uint8_t w = 8 - (x - fx[i]);
         if (x + w > SCR_W) w = SCR_W - x;
         oled.drawFrame(x, F_TOP, w, fg[i] - F_TOP);
-        oled.drawFrame(x, fg[i] + F_GAP, w, F_BOT - fg[i] - F_GAP + 1);
+        oled.drawFrame(x, fg[i] + fh[i], w, F_BOT - fg[i] - fh[i] + 1);
       }
       oled.drawBox(F_BX, by >> 4, 6, 5);                           // bird
       oled.setDrawColor(0);
@@ -1646,7 +1713,7 @@ void invadersRun() {
   while (again) {
     again = false;
     uint16_t score = 0;
-    uint8_t  lives = 3, wave = 0, ship = 60, stepMs = 90;
+    uint8_t  lives = 3, wave = 0, ship = 60, stepMs = 90, baseMs = 90;
     int16_t  ax = 2, ay = V_TOP;
     int8_t   adir = 1;
     int16_t  shotX = -1, shotY = 0;
@@ -1657,12 +1724,12 @@ void invadersRun() {
 
     while (poll()) {
       uint32_t now = millis();
-      if (btnHeld(B_LEFT)  && ship > 1)           ship -= 2;
-      if (btnHeld(B_RIGHT) && ship < SCR_W - 10)  ship += 2;
       if (btnTap(B_OK) && shotX < 0) { shotX = ship + 4; shotY = SCR_H - 8; sfx(280, 30); }
 
       if (now >= nextFrame) {                       // bullets run smoothly
         nextFrame = now + 25;
+        if (btnHeld(B_LEFT)  && ship > 1)           ship -= 2;   // same speed at any frame rate
+        if (btnHeld(B_RIGHT) && ship < SCR_W - 10)  ship += 2;
         if (shotX >= 0) { shotY -= 4; if (shotY < TOP_H) shotX = -1; }
         for (uint8_t b = 0; b < 3; b++)
           if (bombX[b] >= 0) {
@@ -1694,7 +1761,9 @@ void invadersRun() {
         next = now + stepMs;
         ax += adir * 2;
         if (ax < 1 || ax + V_COLS * V_CW > SCR_W - 1) { adir = -adir; ay += 3; }
-        if (ay + V_ROWS * V_CH >= SCR_H - 6) { again = gameOver(score); break; }
+        int8_t low = V_ROWS - 1;                    // lowest row that still has aliens
+        while (low > 0 && !vAlive[low]) low--;
+        if (ay + (low + 1) * V_CH >= SCR_H - 6) { again = gameOver(score); break; }
 
         for (uint8_t b = 0; b < 3; b++)             // drop a bomb
           if (bombX[b] < 0 && random(100) < 12) {
@@ -1715,9 +1784,10 @@ void invadersRun() {
           wave++;
           score += 50;
           ay = V_TOP; ax = 2; adir = 1;
-          if (stepMs > 40) stepMs -= 10;
+          if (baseMs > 50) baseMs -= 10;           // each wave a little faster
+          stepMs = baseMs;
           for (uint8_t r = 0; r < V_ROWS; r++) vAlive[r] = (1 << V_COLS) - 1;
-        } else if (left < 6 && stepMs > 40) stepMs = 45;
+        } else stepMs = (left < 6 && baseMs > 45) ? 45 : baseMs;   // last few rush
       }
 
       statusBar("INVADERS", score, curHigh);
@@ -1848,7 +1918,8 @@ void mineRun() {
         if (actD) { tx = px / M_TS;                        ty = ((py >> 4) + 8) / M_TS; }
         else      { tx = (px + (face > 0 ? 4 : -1)) / M_TS; ty = ((py >> 4) + 3) / M_TS; }
         uint8_t t = mGet(tx, ty);
-        if (t && ty < M_H)      { mSet(tx, ty, 0); inv++; score++; sfx(320, 25); }   // dig
+        bool inside = tx >= 0 && tx < M_W && ty >= 0 && ty < M_H;   // the edge is not diggable
+        if (t && inside)        { mSet(tx, ty, 0); inv++; score++; sfx(320, 25); }   // dig
         else if (!t && inv)     { mSet(tx, ty, 1); inv--; }            // build
       }
     }
@@ -1868,7 +1939,7 @@ void mineRun() {
         uint16_t tex = M_TEX[t];
         for (uint8_t r = 0; r < 4; r++)
           for (uint8_t c = 0; c < 4; c++)
-            if (tex & (0x8000 >> (r * 4 + c)))
+            if ((tex & (0x8000 >> (r * 4 + c))) && ty * M_TS + r - camY >= 0)   // not into the bar
               oled.drawPixel(tx * M_TS + c - camX, ty * M_TS + r - camY + TOP_H);
       }
     int16_t sx = px - camX, sy = (py >> 4) - camY + TOP_H;
@@ -1904,6 +1975,20 @@ void mineRun() {
 static uint8_t dnWidth(uint8_t t)  { return (t == 1) ? 13 : (t == 2 ? 9 : (t == 3 ? 9 : 6)); }
 static uint8_t dnHeight(uint8_t t) { return (t == 2) ? 13 : (t == 3 ? 6 : 9); }
 
+/* Low birds must be jumped over, middle ones ducked under, high ones fly
+   past. Before, the middle one flew over a standing dino - ducking was
+   never needed.                                                          */
+static int16_t dnBirdY(uint8_t h) { return (h == 0) ? DN_GY - 12 : (h == 1 ? DN_GY - 17 : DN_GY - 28); }
+
+/* Smallest distance between two obstacles that can always be cleared at
+   this speed - found by trying every jump / dive / duck timing on a PC.
+   With a fixed 45 px some pairs could not be passed from speed 5 on.   */
+static int16_t dnGap(uint16_t spd) {
+  static const uint8_t g[9] = { 45, 45, 45, 45, 45, 51, 57, 69, 77 };
+  uint8_t v = spd / 8;
+  return g[v > 8 ? 8 : v];
+}
+
 void dinoRun() {
   bool again = true;
   while (again) {
@@ -1911,7 +1996,8 @@ void dinoRun() {
     int16_t  y = 0, vy = 0;                    // height above ground, Q4
     int16_t  ox[DN_OBS], cx[DN_CLOUDS];
     uint8_t  ot[DN_OBS], oh[DN_OBS], cy[DN_CLOUDS];
-    uint16_t score = 0, dist = 0, spd = 26, blink = 0, nextBlink = 100;
+    uint16_t score = 0, spd = 26, blink = 0, nextBlink = 100;
+    uint32_t dist = 0;                         // 16 bit wrapped: score stopped at 818
     bool     night = false;
     uint32_t next = 0;
     for (uint8_t i = 0; i < DN_OBS; i++) {
@@ -1934,7 +2020,7 @@ void dinoRun() {
         y += vy;
         if (y > 0) { y = 0; vy = 0; }
         dist += spd;
-        score = dist / 80;
+        score = (dist / 80 > 65535) ? 65535 : (uint16_t)(dist / 80);
         if (spd < 64) spd = 26 + score / 5;
         if (score >= nextBlink) { nextBlink += 100; blink = 30; sfx(1150, 120); }
         if (blink) blink--;
@@ -1947,12 +2033,12 @@ void dinoRun() {
           if (ox[i] < -16) {                              // recycle behind the screen
             int16_t far = ox[0];
             for (uint8_t k = 1; k < DN_OBS; k++) if (ox[k] > far) far = ox[k];
-            ox[i] = far + 45 + random(50);
+            ox[i] = far + dnGap(spd) + random(50);
             ot[i] = (score > 30 && random(4) == 0) ? 3 : random(3);
             oh[i] = (ot[i] == 3) ? random(3) : 0;         // three flight heights
           }
           int16_t ow = dnWidth(ot[i]), ohh = dnHeight(ot[i]);
-          int16_t oy = (ot[i] == 3) ? (DN_GY - 12 - oh[i] * 8) : (DN_GY - ohh);
+          int16_t oy = (ot[i] == 3) ? dnBirdY(oh[i]) : (DN_GY - ohh);
           if (ox[i] < DN_X + (duck ? 12 : 8) && ox[i] + ow > DN_X + 1 &&
               oy < dt + dh && oy + ohh > dt) {
             again = gameOver(score);
@@ -2014,7 +2100,7 @@ void dinoRun() {
       for (uint8_t i = 0; i < DN_OBS; i++) {              // obstacles
         if (ox[i] > SCR_W || ox[i] < -16) continue;
         if (ot[i] == 3) {                                 // pterodactyl
-          int16_t by = DN_GY - 12 - oh[i] * 8;
+          int16_t by = dnBirdY(oh[i]);
           oled.drawBox(ox[i] + 2, by + 2, 5, 3);
           oled.drawPixel(ox[i] + 7, by + 2);
           bool up = (dist / 50) & 1;
@@ -2104,6 +2190,7 @@ void breakoutRun() {
             vy = -vy;
             sfx(850, 25);
             score += 10 * (level + 1);
+            break;                                     // one brick per step: no tunnelling
           }
         }
         uint8_t left = 0;
@@ -2125,7 +2212,7 @@ void breakoutRun() {
             oled.drawBox(c * BR_BW + 1, BR_TOP + r * (BR_BH + 2), BR_BW - 2, BR_BH);
       oled.drawBox(pad, 61, 25, 3);
       oled.drawBox(bx >> 4, by >> 4, 3, 3);
-      for (uint8_t i = 1; i < lives; i++) oled.drawBox(SCR_W - i * 5, 18, 3, 3);
+      for (uint8_t i = 1; i < lives; i++) oled.drawBox(SCR_W - i * 5, 52, 3, 3);   // below the bricks
       oled.sendBuffer();
     }
   }
@@ -2148,6 +2235,19 @@ static void asWrap(int16_t *x, int16_t *y) {
   if (*y >= (SCR_H << 4))  *y -= (SCR_H - AS_TOP) << 4;
 }
 
+static void asSpawn(uint8_t i, int16_t x, int16_t y, uint8_t size);
+
+// a random place for a new rock that is not on top of the ship
+static void asSpawnFar(uint8_t i, int16_t sx, int16_t sy) {
+  int16_t x, y;
+  for (uint8_t tries = 0; tries < 30; tries++) {
+    x = random(SCR_W); y = AS_TOP + random(SCR_H - AS_TOP);
+    int16_t dx = x - (sx >> 4), dy = y - (sy >> 4);
+    if (dx * dx + dy * dy > 28 * 28) break;
+  }
+  asSpawn(i, x << 4, y << 4, 3);
+}
+
 static void asSpawn(uint8_t i, int16_t x, int16_t y, uint8_t size) {
   asX[i] = x; asY[i] = y; asSize[i] = size;
   asVX[i] = (int16_t)random(-6, 7);
@@ -2161,15 +2261,14 @@ void asteroidsRun() {
   while (again) {
     again = false;
     int16_t sx = (SCR_W / 2) << 4, sy = ((AS_TOP + SCR_H) / 2) << 4, svx = 0, svy = 0;
-    uint8_t ang = 192, lives = 3, wave = 1;
+    uint8_t ang = 192, lives = 3, wave = 1, safe = 50;   // safe: steps without collisions
     int16_t shx[AS_SHOTS], shy[AS_SHOTS], shvx[AS_SHOTS], shvy[AS_SHOTS];
     uint8_t shl[AS_SHOTS];
     uint16_t score = 0;
     uint32_t next = 0;
     for (uint8_t i = 0; i < AS_SHOTS; i++) shl[i] = 0;
     for (uint8_t i = 0; i < AS_N; i++) asSize[i] = 0;
-    for (uint8_t i = 0; i < 4; i++)
-      asSpawn(i, random(SCR_W) << 4, (AS_TOP + random(SCR_H - AS_TOP)) << 4, 3);
+    for (uint8_t i = 0; i < 4; i++) asSpawnFar(i, sx, sy);
     btnClear();
 
     while (poll()) {
@@ -2225,22 +2324,22 @@ void asteroidsRun() {
           asWrap(&asX[a], &asY[a]);
           int16_t dx = (sx - asX[a]) >> 4, dy = (sy - asY[a]) >> 4;
           int16_t r = asSize[a] * 3 + 2;
-          if (dx * dx + dy * dy < r * r) {                     // ship hit
+          if (!safe && dx * dx + dy * dy < r * r) {            // ship hit
             if (--lives == 0) { again = gameOver(score); goto astDone; }
             sx = (SCR_W / 2) << 4; sy = ((AS_TOP + SCR_H) / 2) << 4;
             svx = svy = 0;
             asSize[a] = 0;
+            safe = 50;                                         // 1.5 s to get going
           }
         }
+        if (safe) safe--;
         if (!alive) {                                          // next wave
           wave++;
           score += 50;
-          for (uint8_t i = 0; i < 3 + (wave > 3 ? 2 : wave / 2); i++)
-            asSpawn(i, random(SCR_W) << 4, (AS_TOP + random(SCR_H - AS_TOP)) << 4, 3);
+          for (uint8_t i = 0; i < 3 + (wave > 3 ? 2 : wave / 2); i++) asSpawnFar(i, sx, sy);
         }
       }
 
-      statusBar("ROCKS", score, curHigh);
       for (uint8_t a = 0; a < AS_N; a++) {                     // rocks as polygons
         if (!asSize[a]) continue;
         int16_t cx = asX[a] >> 4, cy = asY[a] >> 4, r = asSize[a] * 3;
@@ -2258,13 +2357,19 @@ void asteroidsRun() {
         int16_t nx = cx + ((DCOS(ang) * 5) >> 10),      ny = cy + ((DSIN(ang) * 5) >> 10);
         int16_t lx = cx + ((DCOS(ang + 100) * 4) >> 10), ly = cy + ((DSIN(ang + 100) * 4) >> 10);
         int16_t rx = cx + ((DCOS(ang - 100) * 4) >> 10), ry = cy + ((DSIN(ang - 100) * 4) >> 10);
-        oled.drawLine(nx, ny, lx, ly);
-        oled.drawLine(nx, ny, rx, ry);
-        oled.drawLine(lx, ly, rx, ry);
+        if (!safe || (safe / 4) & 1) {                         // blinks while safe
+          oled.drawLine(nx, ny, lx, ly);
+          oled.drawLine(nx, ny, rx, ry);
+          oled.drawLine(lx, ly, rx, ry);
+        }
       }
       for (uint8_t i = 0; i < AS_SHOTS; i++)
         if (shl[i]) oled.drawBox(shx[i] >> 4, shy[i] >> 4, 2, 2);
       for (uint8_t i = 1; i < lives; i++) oled.drawBox(SCR_W - i * 5, 18, 3, 3);
+      oled.setDrawColor(0);                                    // rocks near the top edge
+      oled.drawBox(0, 0, SCR_W, TOP_H);                        // must not cover the bar
+      oled.setDrawColor(1);
+      statusBar("ROCKS", score, curHigh);
       oled.sendBuffer();
     }
     astDone: ;
@@ -2274,13 +2379,114 @@ void asteroidsRun() {
 // =========================================================
 //  RACER   (endless road seen from above)
 // =========================================================
+/* The other cars drive in three lanes and come in rows. A row blocks at most
+   two lanes, and the distance to the row before is chosen from the current
+   speed so that a free lane can always be reached in time - the road never
+   closes up. How far apart the rows are is random beyond that minimum.    */
 #define RC_TOP  TOP_H
 #define RC_CARY 52            // player car y
 #define RC_OPP   3
 #define RC_HALF 26            // half road width
+#define RC_LANE 17            // lane centres at -17, 0, +17 from the middle
+#define RC_STEP  3            // sideways pixels per step
+
+struct RcState {
+  uint8_t  spd, curve;
+  uint32_t dist;                       // 16 bit ran over after ~4 minutes
+  int16_t  opx[RC_OPP], opy[RC_OPP];   // x relative to the road middle, y on screen
+  int16_t  topY, prevY;                // newest row of cars and the one below it
+  uint8_t  topMask, prevMask;          // lanes they block (bit 0 = left lane)
+};
+static RcState rc;
 
 static int16_t rcMid(uint8_t curve, int16_t row) {      // road centre for a row
   return SCR_W / 2 + ((DSIN((uint8_t)(curve + row)) * 18) >> 10);
+}
+
+// worst case number of lanes to cross from a free lane of one row to the next
+static uint8_t rcNeed(uint8_t from, uint8_t to) {
+  uint8_t worst = 0;
+  for (int8_t a = 0; a < 3; a++) {
+    if (from >> a & 1) continue;
+    uint8_t best = 3;
+    for (int8_t b = 0; b < 3; b++)
+      if (!(to >> b & 1)) { uint8_t d = abs(a - b); if (d < best) best = d; }
+    if (best > worst) worst = best;
+  }
+  return worst;
+}
+
+// rows must be this far apart (car tops) for the player to switch lanes
+static int16_t rcGap(uint8_t lanes, uint8_t spd) {
+  int16_t steps = (lanes * RC_LANE + RC_STEP - 1) / RC_STEP + 3;   // + reaction and curve
+  return 18 + steps * spd;                                         // 18 = two car lengths
+}
+
+static void rcPlace(uint8_t i, uint8_t lane) {
+  rc.opx[i] = (lane - 1) * RC_LANE - 3 + random(-1, 2);
+}
+
+// moves car i above the screen, in a row that keeps the road passable
+static void rcSpawn(uint8_t i) {
+  // join the newest row as its second car - only while it is still hidden
+  if (rc.topMask && rc.topY < RC_TOP - 12 && __builtin_popcount(rc.topMask) == 1 &&
+      random(100) < 20 + rc.spd * 4) {
+    uint8_t ok[3], n = 0;
+    for (uint8_t l = 0; l < 3; l++) {
+      if (rc.topMask >> l & 1) continue;
+      uint8_t m = rc.topMask | (1 << l);
+      if (rc.prevY - rc.topY >= rcGap(rcNeed(rc.prevMask, m), rc.spd)) ok[n++] = l;
+    }
+    if (n) {
+      uint8_t l = ok[random(n)];
+      rc.topMask |= 1 << l;
+      rc.opy[i] = rc.topY;
+      rcPlace(i, l);
+      return;
+    }
+  }
+  // otherwise a new row with one car
+  uint8_t l = random(3), m = 1 << l;
+  int16_t y = rc.topY - rcGap(rcNeed(rc.topMask, m), rc.spd) - random(0, 36);
+  if (y > RC_TOP - 12) y = RC_TOP - 12;         // always appear from above
+  rc.prevY = rc.topY;  rc.prevMask = rc.topMask;
+  rc.topY  = y;        rc.topMask  = m;
+  rc.opy[i] = y;
+  rcPlace(i, l);
+}
+
+static void rcStart() {
+  rc.spd = 3; rc.curve = 0; rc.dist = 0;
+  rc.topY = rc.prevY = RC_CARY;                 // an empty row where the player is
+  rc.topMask = rc.prevMask = 0;
+  for (uint8_t i = 0; i < RC_OPP; i++) rcSpawn(i);
+}
+
+// one 30 ms step of the road and the other cars; true when it got faster
+static bool rcAdvance() {
+  bool faster = false;
+  rc.curve += 1;
+  rc.dist += rc.spd;
+  if (rc.spd < 8 && rc.dist / 20 > (uint32_t)rc.spd * 40) { rc.spd++; faster = true; }
+  rc.topY += rc.spd;
+  rc.prevY += rc.spd;
+  for (uint8_t i = 0; i < RC_OPP; i++) {
+    rc.opy[i] += rc.spd;
+    if (rc.opy[i] > SCR_H) rcSpawn(i);
+  }
+  return faster;
+}
+
+// the player car at carx is off the road or touches another car
+static bool rcCrash(int16_t carx) {
+  int16_t mid = rcMid(rc.curve, RC_CARY);
+  if (carx + 3 < mid - RC_HALF || carx + 4 > mid + RC_HALF) return true;
+  for (uint8_t i = 0; i < RC_OPP; i++) {
+    int16_t ox = rcMid(rc.curve, rc.opy[i]) + rc.opx[i];
+    if (rc.opy[i] + 9 > RC_CARY && rc.opy[i] < RC_CARY + 9 && ox + 7 > carx && ox < carx + 7)
+      return true;
+  }
+  return false;
 }
 
 void racerRun() {
@@ -2288,59 +2494,35 @@ void racerRun() {
   bool again = true;
   while (again) {
     again = false;
-    uint16_t score = 0, dist = 0;
-    uint8_t  spd = 3, curve = 0;
-    int16_t  carx = rcMid(0, RC_CARY) - 3, opx[RC_OPP], opy[RC_OPP];
+    uint16_t score = 0;
+    rcStart();
+    int16_t  carx = rcMid(0, RC_CARY) - 3;
     uint32_t next = 0;
-    for (uint8_t i = 0; i < RC_OPP; i++) {              // well spaced, off to the side
-      opy[i] = RC_TOP - 30 - i * 60;
-      opx[i] = random(-RC_HALF + 6, RC_HALF - 12);
-    }
     btnClear();
 
     while (poll()) {
       uint32_t now = millis();
       if (now >= next) {
         next = now + 30;
-        if (btnHeld(B_LEFT)  && carx > 2)          carx -= 3;
-        if (btnHeld(B_RIGHT) && carx < SCR_W - 9)  carx += 3;
-        curve += 1;
-        dist += spd;
-        score = dist / 20;
-        if (spd < 8 && score > (uint16_t)spd * 40) { spd++; sfx(1000, 60); }
-
-        int16_t mid = rcMid(curve, RC_CARY);
-        if (carx + 3 < mid - RC_HALF || carx + 4 > mid + RC_HALF) {   // off road
-          again = gameOver(score);
-          break;
-        }
-        for (uint8_t i = 0; i < RC_OPP; i++) {
-          opy[i] += spd;
-          if (opy[i] > SCR_H) {
-            opy[i] = RC_TOP - 20 - random(70);
-            opx[i] = random(-RC_HALF + 6, RC_HALF - 12);
-          }
-          int16_t ox = rcMid(curve, opy[i]) + opx[i];
-          if (opy[i] + 9 > RC_CARY && opy[i] < RC_CARY + 9 &&
-              ox + 7 > carx && ox < carx + 7) {
-            again = gameOver(score);
-            goto racerDone;
-          }
-        }
+        if (btnHeld(B_LEFT)  && carx > 2)          carx -= RC_STEP;
+        if (btnHeld(B_RIGHT) && carx < SCR_W - 9)  carx += RC_STEP;
+        if (rcAdvance()) sfx(1000, 60);
+        score = (rc.dist / 20 > 65535) ? 65535 : (uint16_t)(rc.dist / 20);
+        if (rcCrash(carx)) { again = gameOver(score); break; }
       }
 
       statusBar("RACER", score, curHigh);
       for (int16_t y = RC_TOP; y < SCR_H; y++) {               // road edges
-        int16_t mid = rcMid(curve, y);
+        int16_t mid = rcMid(rc.curve, y);
         oled.drawPixel(mid - RC_HALF, y);
         oled.drawPixel(mid + RC_HALF, y);
-        if (((y + dist / 2) % 12) < 5) oled.drawPixel(mid, y);  // centre line
+        if (((y + rc.dist / 2) % 12) < 5) oled.drawPixel(mid, y);  // centre line
       }
       for (uint8_t i = 0; i < RC_OPP; i++) {
-        if (opy[i] < RC_TOP - 9 || opy[i] > SCR_H) continue;
-        int16_t ox = rcMid(curve, opy[i]) + opx[i];
-        oled.drawFrame(ox, opy[i], 7, 9);
-        oled.drawHLine(ox + 1, opy[i] + 3, 5);
+        if (rc.opy[i] < RC_TOP - 9 || rc.opy[i] > SCR_H) continue;
+        int16_t ox = rcMid(rc.curve, rc.opy[i]) + rc.opx[i];
+        oled.drawFrame(ox, rc.opy[i], 7, 9);
+        oled.drawHLine(ox + 1, rc.opy[i] + 3, 5);
       }
       oled.drawBox(carx, RC_CARY, 7, 9);
       oled.setDrawColor(0);
@@ -2348,85 +2530,158 @@ void racerRun() {
       oled.setDrawColor(1);
       oled.sendBuffer();
     }
-    racerDone: ;
   }
 }
 
 // =========================================================
 //  FROGGER
 // =========================================================
+/* Every lane gets its own random mix of object sizes, gaps and speed, and
+   the whole river and road are rolled again after each crossing - a little
+   faster every time. Neighbouring lanes always move in opposite
+   directions, so a log to jump on comes by sooner or later.            */
 #define FR_ROWH  6            // one lane is 6 px high
 #define FR_ROWS  8            // 48 px viewport = 8 lanes
 #define FR_LANES 6            // lanes 1..6 are traffic and water
+#define FR_MAXO  5            // objects per lane
+#define FR_Q     8            // positions and speeds in 1/8 px
+#define FR_RING  (SCR_W * FR_Q)
 
-static int16_t frOff[FR_LANES];        // scroll offset per lane
+struct FrLane {
+  uint8_t n;
+  int16_t x[FR_MAXO];         // left edge, 0..FR_RING-1
+  uint8_t w[FR_MAXO];         // width in px
+  int8_t  spd;                // 1/8 px per 40 ms step
+};
+static FrLane frL[FR_LANES];
+
+static bool frWater(uint8_t l) { return l < 3; }
+
+/* n gaps between min and max that add up to exactly free */
+static bool frGaps(uint8_t *g, uint8_t n, int16_t free, uint8_t lo, uint8_t hi) {
+  if (free < n * lo || free > n * hi) return false;
+  int16_t extra = free - n * lo;
+  for (uint8_t k = 0; k < n; k++) g[k] = lo;
+  while (extra > 0) {                             // hand out the rest in random bits
+    uint8_t k = random(n);
+    int16_t room = hi - g[k];
+    if (room <= 0) continue;
+    int16_t add = 1 + random(room < extra ? room : extra);
+    g[k] += add;
+    extra -= add;
+  }
+  return true;
+}
+
+static void frRoll(uint8_t l, uint8_t diff, uint8_t level, int8_t dir) {
+  FrLane &L = frL[l];
+  bool water = frWater(l);
+  uint8_t wlo, whi, glo, ghi;
+  if (water) {                                    // logs: shorter and further apart when harder
+    wlo = (diff == 0) ? 26 : (diff == 1 ? 18 : 14);
+    whi = wlo + 14;
+    glo = 6;
+    ghi = (diff == 0) ? 22 : (diff == 1 ? 28 : 34);
+  } else {                                        // cars, now and then a truck
+    wlo = (diff == 0) ? 8 : (diff == 1 ? 10 : 12);
+    whi = wlo + 6;
+    glo = (diff == 0) ? 22 : 16;
+    ghi = 60;
+  }
+  uint8_t g[FR_MAXO];
+  for (uint8_t tries = 0; tries < 40; tries++) {
+    uint8_t n = 2 + random(FR_MAXO - 1);          // 2..5 objects
+    int16_t used = 0;
+    for (uint8_t k = 0; k < n; k++) {
+      L.w[k] = random(wlo, whi + 1);
+      if (!water && diff && random(100) < 20) L.w[k] += 10;   // truck
+      used += L.w[k];
+    }
+    if (frGaps(g, n, SCR_W - used, glo, ghi)) { L.n = n; break; }
+    L.n = 0;
+  }
+  if (!L.n) {                                     // cannot happen with the ranges above
+    L.n = 2; L.w[0] = L.w[1] = wlo; g[0] = g[1] = (SCR_W - 2 * wlo) / 2;
+  }
+  int16_t x = random(SCR_W);
+  for (uint8_t k = 0; k < L.n; k++) {
+    L.x[k] = (x % SCR_W) * FR_Q;
+    x += L.w[k] + g[k];
+  }
+  uint8_t lo = (diff == 0) ? 8 : (diff == 1 ? 11 : 15);
+  uint8_t hi = (diff == 0) ? 14 : (diff == 1 ? 20 : 28);
+  int16_t v = random(lo, hi + 1);
+  v = v * (100 + (level < 10 ? level : 10) * 6) / 100;       // +6 % per crossing
+  L.spd = (int8_t)(dir * (v > 60 ? 60 : v));
+}
+
+static void frRollAll(uint8_t diff, uint8_t level) {
+  int8_t dir = random(2) ? 1 : -1;
+  for (uint8_t l = 0; l < FR_LANES; l++) { frRoll(l, diff, level, dir); dir = -dir; }
+}
+
+// is the frog (px x .. x+4) on something in lane l?
+static bool frTouch(uint8_t l, int16_t fx) {
+  const FrLane &L = frL[l];
+  for (uint8_t k = 0; k < L.n; k++) {
+    int16_t ox = L.x[k] / FR_Q, ow = L.w[k];
+    if (fx + 4 > ox && fx < ox + ow) return true;
+    if (ox + ow > SCR_W && fx < ox + ow - SCR_W) return true;   // wrapped around
+  }
+  return false;
+}
 
 void froggerRun() {
   static const char *const lvl[3] = { "easy", "normal", "hard" };
   uint8_t diff = chooseMode("FROGGER", lvl, 3);
   if (diff == 255) return;
-  const uint8_t objs = (diff == 2) ? 4 : 3;          // objects per lane
-  const uint8_t logW = (diff == 0) ? 34 : (diff == 1 ? 26 : 20);
-  const uint8_t carW = (diff == 0) ? 10 : (diff == 1 ? 14 : 17);
-  const uint8_t gap  = SCR_W / objs;
-  const int8_t  scale = (diff == 0) ? 70 : (diff == 1 ? 100 : 145);
 
   bool again = true;
   while (again) {
     again = false;
-    int8_t   fx = 60, fy = FR_ROWS - 1;
-    uint8_t  lives = 3;
+    int16_t  fq = 60 * FR_Q;                          // frog x in 1/8 px
+    int8_t   fy = FR_ROWS - 1;
+    uint8_t  lives = 3, level = 0;
     uint16_t score = 0;
     uint32_t next = 0, step = 0;
-    static const int8_t frBase[FR_LANES] = { 2, -3, 2, -2, 3, -2 };
-    int8_t frSpd[FR_LANES];
-    for (uint8_t i = 0; i < FR_LANES; i++) {
-      frSpd[i] = (int8_t)((int16_t)frBase[i] * scale / 100);
-      if (!frSpd[i]) frSpd[i] = (frBase[i] > 0) ? 1 : -1;
-      frOff[i] = random(gap);
-    }
+    frRollAll(diff, level);
     btnClear();
 
     while (poll()) {
       uint32_t now = millis();
+      int16_t fx = fq / FR_Q;
       if (now >= step) {                              // hopping
         step = now + 90;
-        if (btn(B_LEFT)  && fx > 1)            { fx -= 6; sfx(600, 20); }
-        if (btn(B_RIGHT) && fx < SCR_W - 7)    { fx += 6; sfx(600, 20); }
+        if (btn(B_LEFT)  && fx > 1)            { fq -= 6 * FR_Q; sfx(600, 20); }
+        if (btn(B_RIGHT) && fx < SCR_W - 7)    { fq += 6 * FR_Q; sfx(600, 20); }
         if (btn(B_UP)    && fy > 0)            { fy--;    sfx(800, 20); }
         if (btn(B_DOWN)  && fy < FR_ROWS - 1)  { fy++;    sfx(500, 20); }
       }
 
       if (now >= next) {
         next = now + 40;
-        for (uint8_t i = 0; i < FR_LANES; i++) {
-          frOff[i] += frSpd[i];
-          if (frOff[i] >  SCR_W) frOff[i] -= SCR_W;
-          if (frOff[i] < -SCR_W) frOff[i] += SCR_W;
-        }
+        for (uint8_t l = 0; l < FR_LANES; l++)
+          for (uint8_t k = 0; k < frL[l].n; k++)
+            frL[l].x[k] = ((frL[l].x[k] + frL[l].spd) % FR_RING + FR_RING) % FR_RING;
 
         if (fy == 0) {                                // reached the far bank
           score += 50;
           sfx(1400, 150);
+          if (level < 255) level++;
+          frRollAll(diff, level);                     // a new river and road
           fy = FR_ROWS - 1;
-          fx = 60;
+          fq = 60 * FR_Q;
         } else if (fy >= 1 && fy <= FR_LANES) {
           uint8_t l = fy - 1;
-          bool water = (l < 3);
-          bool onIt = false;
-          for (uint8_t k = 0; k < objs; k++) {
-            int16_t ox = ((frOff[l] + k * gap) % SCR_W + SCR_W) % SCR_W;
-            int16_t ow = water ? logW : carW;
-            if (fx + 4 > ox && fx < ox + ow) onIt = true;
-            if (ox + ow > SCR_W && fx < ox + ow - SCR_W) onIt = true;   // wrapped
-          }
-          bool dead = water ? !onIt : onIt;
-          if (water && onIt) fx += frSpd[l];           // ride the log
-          if (fx < 0 || fx > SCR_W - 5) dead = true;
+          bool onIt = frTouch(l, fq / FR_Q);
+          bool dead = frWater(l) ? !onIt : onIt;
+          if (frWater(l) && onIt) fq += frL[l].spd;  // ride the log
+          fx = fq / FR_Q;
+          if (fq < 0 || fx > SCR_W - 5) dead = true;
           if (dead) {
             sfx(150, 200);
             if (--lives == 0) { again = gameOver(score); break; }
-            fy = FR_ROWS - 1; fx = 60;
+            fy = FR_ROWS - 1; fq = 60 * FR_Q;
           }
         }
       }
@@ -2434,11 +2689,10 @@ void froggerRun() {
       statusBar("FROGGER", score, curHigh);
       for (uint8_t l = 0; l < FR_LANES; l++) {
         int16_t ly = TOP_H + (l + 1) * FR_ROWH;
-        bool water = (l < 3);
-        for (uint8_t k = 0; k < objs; k++) {
-          int16_t ox = ((frOff[l] + k * gap) % SCR_W + SCR_W) % SCR_W;
-          uint8_t w = water ? logW : carW;
-          if (water) {
+        for (uint8_t k = 0; k < frL[l].n; k++) {
+          int16_t ox = frL[l].x[k] / FR_Q;
+          uint8_t w = frL[l].w[k];
+          if (frWater(l)) {
             oled.drawFrame(ox, ly, w, FR_ROWH - 1);
             if (ox + w > SCR_W) oled.drawFrame(ox - SCR_W, ly, w, FR_ROWH - 1);
           } else {
@@ -2447,6 +2701,7 @@ void froggerRun() {
           }
         }
       }
+      fx = fq / FR_Q;
       oled.drawHLine(0, TOP_H + FR_ROWH - 1, SCR_W);
       oled.drawHLine(0, TOP_H + (FR_LANES + 1) * FR_ROWH - 1, SCR_W);
       oled.setDrawColor(0);
@@ -2577,8 +2832,14 @@ static uint8_t c4Think(uint8_t level) {
   return n ? best[random(n)] : 0;
 }
 
+static const char *c4Vs = NULL;          // "vs NAME" in a multiplayer game
+
 static void c4Draw(uint8_t sel, const char *msg, uint16_t score) {
-  statusBar("4 WINS", score, curHigh);
+  if (c4Vs) {
+    oled.setFont(FONT_B); oled.drawStr(2, 12, "4 WINS"); oled.setFont(FONT);
+    rightStr(12, c4Vs);
+    oled.drawHLine(0, TOP_H - 1, SCR_W);
+  } else statusBar("4 WINS", score, curHigh);
   oled.drawFrame(C4_X - 2, C4_Y - 1, C4_W * C4_CELL + 4, C4_H * C4_CELL + 2);
   for (uint8_t r = 0; r < C4_H; r++)
     for (uint8_t c = 0; c < C4_W; c++) {
@@ -2632,8 +2893,16 @@ void connect4Run() {
             uint8_t c = c4Think(mode);
             c4Drop(c, 2);
             sfx(350, 40);
-            if (c4Wins(2)) { again = gameOver(score); break; }
-            if (c4Full()) { memset(c4, 0, sizeof(c4)); }
+            if (c4Wins(2)) {                     // let the player see how it happened
+              sfx(200, 250);
+              for (uint8_t i = 0; i < 45 && poll(); i++) c4Draw(sel, "CPU WINS", score);
+              again = gameOver(score);
+              break;
+            }
+            if (c4Full()) {
+              for (uint8_t i = 0; i < 30 && poll(); i++) c4Draw(sel, "DRAW", score);
+              memset(c4, 0, sizeof(c4));
+            }
           }
         }
       }
@@ -2641,6 +2910,535 @@ void connect4Run() {
     }
   }
 }
+
+// =========================================================
+//  TIC TAC TOE   (against the ESP32 or two players)
+// =========================================================
+/* The machine looks at every possible game (there are few enough), so on
+   "hard" it never loses. The easier levels mix in random moves. Starting
+   alternates between the rounds. A win is worth 100, a draw 20.         */
+#define TT_CELL 15
+#define TT_X    4
+#define TT_Y    (TOP_H + 1)
+
+static uint8_t tt[9];                   // 0 empty, 1 = X (player one), 2 = O
+
+static const uint8_t TT_LINES[8][3] = {
+  {0,1,2},{3,4,5},{6,7,8},{0,3,6},{1,4,7},{2,5,8},{0,4,8},{2,4,6}
+};
+
+static int8_t ttLine(uint8_t who) {     // index of a completed line, or -1
+  for (uint8_t i = 0; i < 8; i++)
+    if (tt[TT_LINES[i][0]] == who && tt[TT_LINES[i][1]] == who && tt[TT_LINES[i][2]] == who)
+      return i;
+  return -1;
+}
+
+static bool ttFull() {
+  for (uint8_t i = 0; i < 9; i++) if (!tt[i]) return false;
+  return true;
+}
+
+// score from the view of "me": +10 win (earlier is better), -10 loss, 0 draw
+static int8_t ttMinimax(uint8_t me, uint8_t turn, uint8_t depth) {
+  if (ttLine(me) >= 0)     return 10 - depth;
+  if (ttLine(3 - me) >= 0) return depth - 10;
+  if (ttFull())            return 0;
+  int8_t best = (turn == me) ? -100 : 100;
+  for (uint8_t i = 0; i < 9; i++) {
+    if (tt[i]) continue;
+    tt[i] = turn;
+    int8_t v = ttMinimax(me, 3 - turn, depth + 1);
+    tt[i] = 0;
+    if (turn == me ? v > best : v < best) best = v;
+  }
+  return best;
+}
+
+/* level 0 = easy, 1 = normal, 2 = hard; "me" is the side to move */
+static uint8_t ttThink(uint8_t level, uint8_t me) {
+  uint8_t free[9], n = 0;
+  for (uint8_t i = 0; i < 9; i++) if (!tt[i]) free[n++] = i;
+  if (n == 9) {                                 // empty board: every start draws
+    static const uint8_t first[5] = { 0, 2, 4, 6, 8 };
+    return first[random(5)];
+  }
+  for (uint8_t k = 0; k < n; k++) {             // a win in one is always taken
+    tt[free[k]] = me;
+    bool win = ttLine(me) >= 0;
+    tt[free[k]] = 0;
+    if (win) return free[k];
+  }
+  uint8_t chance = (level == 0) ? 60 : (level == 1 ? 20 : 0);
+  if (random(100) < chance) return free[random(n)];
+  int8_t bestV = -100;
+  uint8_t best[9], m = 0;
+  for (uint8_t k = 0; k < n; k++) {
+    tt[free[k]] = me;
+    int8_t v = ttMinimax(me, 3 - me, 1);
+    tt[free[k]] = 0;
+    if (v > bestV) { bestV = v; m = 0; }
+    if (v == bestV) best[m++] = free[k];
+  }
+  return best[random(m)];                       // equal moves: pick any
+}
+
+static const char *ttVs = NULL;          // "vs NAME" in a multiplayer game
+
+static void ttDraw(uint8_t cur, int8_t line, const char *msg, const char *who, uint16_t score) {
+  if (ttVs) {
+    oled.setFont(FONT_B); oled.drawStr(2, 12, "TIC TAC"); oled.setFont(FONT);
+    rightStr(12, ttVs);
+    oled.drawHLine(0, TOP_H - 1, SCR_W);
+  } else statusBar("TIC TAC", score, curHigh);  // short: room for "BEST 1000"
+  for (uint8_t i = 1; i < 3; i++) {             // the grid
+    oled.drawVLine(TT_X + i * TT_CELL, TT_Y, 3 * TT_CELL);
+    oled.drawHLine(TT_X, TT_Y + i * TT_CELL, 3 * TT_CELL);
+  }
+  for (uint8_t i = 0; i < 9; i++) {
+    int16_t x = TT_X + (i % 3) * TT_CELL, y = TT_Y + (i / 3) * TT_CELL;
+    if (tt[i] == 1) {                           // X
+      oled.drawLine(x + 4, y + 4, x + 11, y + 11);
+      oled.drawLine(x + 11, y + 4, x + 4, y + 11);
+      oled.drawLine(x + 5, y + 4, x + 11, y + 10);
+      oled.drawLine(x + 10, y + 4, x + 4, y + 10);
+    } else if (tt[i] == 2) {                    // O as a small octagon
+      oled.drawHLine(x + 6, y + 3, 4);  oled.drawHLine(x + 6, y + 12, 4);
+      oled.drawVLine(x + 3, y + 6, 4);  oled.drawVLine(x + 12, y + 6, 4);
+      oled.drawLine(x + 4, y + 5, x + 5, y + 4);   oled.drawLine(x + 10, y + 4, x + 11, y + 5);
+      oled.drawLine(x + 4, y + 10, x + 5, y + 11); oled.drawLine(x + 10, y + 11, x + 11, y + 10);
+    }
+  }
+  if (cur < 9) {                                // cursor: corner marks
+    int16_t x = TT_X + (cur % 3) * TT_CELL + 1, y = TT_Y + (cur / 3) * TT_CELL + 1;
+    uint8_t e = TT_CELL - 3;
+    oled.drawHLine(x, y, 3);         oled.drawVLine(x, y, 3);
+    oled.drawHLine(x + e - 2, y, 3); oled.drawVLine(x + e, y, 3);
+    oled.drawHLine(x, y + e, 3);     oled.drawVLine(x, y + e - 2, 3);
+    oled.drawHLine(x + e - 2, y + e, 3); oled.drawVLine(x + e, y + e - 2, 3);
+  }
+  if (line >= 0) {                              // strike through the winning row
+    const uint8_t *L = TT_LINES[line];
+    int16_t c = TT_CELL / 2;
+    int16_t x0 = TT_X + (L[0] % 3) * TT_CELL + c, y0 = TT_Y + (L[0] / 3) * TT_CELL + c;
+    int16_t x1 = TT_X + (L[2] % 3) * TT_CELL + c, y1 = TT_Y + (L[2] / 3) * TT_CELL + c;
+    oled.drawLine(x0, y0, x1, y1);
+    if (y0 == y1) oled.drawLine(x0, y0 + 1, x1, y1 + 1);   // two pixels thick
+    else          oled.drawLine(x0 + 1, y0, x1 + 1, y1);
+  }
+  if (who) oled.drawStr(58, 30, who);
+  if (msg) {
+    oled.setFont(FONT_B);
+    oled.drawStr(58, 48, msg);
+    oled.setFont(FONT);
+  }
+  oled.sendBuffer();
+}
+
+void tictactoeRun() {
+  static const char *const modes[4] = { "1P easy", "1P normal", "1P hard", "2 players" };
+  uint8_t mode = chooseMode("TIC TAC TOE", modes, 4);
+  if (mode == 255) return;
+  bool twoPlayers = (mode == 3);
+
+  bool again = true;
+  while (again) {
+    again = false;
+    uint16_t score = 0;
+    uint8_t  starter = 1, cur = 4;
+    bool     over = false;
+    while (!over) {                              // one round after the other
+      memset(tt, 0, sizeof(tt));
+      uint8_t turn = starter;
+      int8_t  line = -1;
+      const char *msg = NULL;
+      btnClear();
+      while (true) {
+        if (!twoPlayers && turn == 2) {         // the machine moves
+          for (uint8_t i = 0; i < 6 && poll(); i++) ttDraw(9, -1, NULL, "thinking...", score);
+          tt[ttThink(mode, 2)] = 2;
+          sfx(350, 40);
+        } else {
+          if (!poll()) return;                  // hold OK = back to the library
+          if (btn(B_LEFT)  && cur % 3)  { cur--;    sfx(700, 15); }
+          if (btn(B_RIGHT) && cur % 3 < 2) { cur++; sfx(700, 15); }
+          if (btn(B_UP)    && cur > 2)  { cur -= 3; sfx(700, 15); }
+          if (btn(B_DOWN)  && cur < 6)  { cur += 3; sfx(700, 15); }
+          const char *who = twoPlayers ? (turn == 1 ? "player X" : "player O") : "you: X";
+          bool ok = btn(B_OK);
+          if (ok && tt[cur]) sfx(300, 60);        // taken already
+          if (!ok || tt[cur]) { ttDraw(cur, -1, NULL, who, score); continue; }
+          tt[cur] = turn;
+          sfx(500, 40);
+        }
+        if ((line = ttLine(turn)) >= 0) {
+          if (twoPlayers) msg = (turn == 1) ? "X WINS" : "O WINS";
+          else            msg = (turn == 1) ? "YOU WIN" : "CPU WINS";
+          if (turn == 1 || twoPlayers) score += 100;
+          sfx(turn == 1 ? 1400 : 200, 250);
+          break;
+        }
+        if (ttFull()) { msg = "DRAW"; score += 20; break; }
+        turn = 3 - turn;
+      }
+      for (uint8_t i = 0; i < 70 && poll(); i++) ttDraw(9, line, msg, NULL, score);
+      if (!twoPlayers && line >= 0 && tt[TT_LINES[line][0]] == 2) {   // lost against the machine
+        again = gameOver(score);
+        over = true;
+      }
+      starter = 3 - starter;                    // the other side begins next round
+    }
+  }
+}
+
+// =========================================================
+//  MULTIPLAYER   (ESP-IDF build only: two consoles nearby over ESP-NOW)
+// =========================================================
+/* Everybody who has this page open shows up in the list of the others,
+   with a name and a 4 letter code taken from the chip. A challenge waits
+   30 s for an answer. The radio is only on while this page is open, so
+   nobody gets challenged in the middle of a game of Tetris.             */
+#if defined(HAVE_NET) && __has_include("link.h")
+#include "link.h"
+#define HAVE_LINK 1
+
+static const char *mpGameName(uint8_t g) { return g == LKG_C4 ? "4 wins" : "Tic Tac Toe"; }
+
+static void mpHook() { linkTick(); lastInput = millis(); }  // radio on: no deep sleep
+
+static void mpTitle(const char *t, const char *right) {
+  oled.setFont(FONT_B);
+  oled.drawStr(2, 12, t);
+  oled.drawHLine(0, TOP_H - 1, SCR_W);
+  oled.setFont(FONT);
+  if (right) rightStr(12, right);
+}
+
+static int mpSecondsLeft() {
+  int32_t ms = (int32_t)(linkCore().deadline - linkNow());
+  return ms > 0 ? (int)(ms + 999) / 1000 : 0;
+}
+
+// a short message; OK or 3 s go on
+static void mpNote(const char *l1, const char *l2) {
+  uint32_t t0 = millis();
+  btnClear();
+  while (millis() - t0 < 3000) {
+    if (!poll() || btn(B_OK)) break;
+    mpTitle("MULTIPLAYER", NULL);
+    centerStr(34, l1);
+    if (l2) centerStr(46, l2);
+    oled.sendBuffer();
+  }
+}
+
+// ---------------- own name ----------------
+static void mpName() {
+  static const char CH[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const uint8_t NCH = sizeof(CH) - 1;
+  char n[LK_NAME + 1];
+  memset(n, ' ', LK_NAME);
+  n[LK_NAME] = 0;
+  const char *cur = linkName();
+  for (uint8_t i = 0; i < LK_NAME && cur[i]; i++) n[i] = cur[i];
+  uint8_t pos = 0;
+  btnClear();
+  while (poll()) {
+    const char *f = strchr(CH, n[pos]);
+    uint8_t k = f ? (uint8_t)(f - CH) : 0;
+    if (btn(B_UP))                         { n[pos] = CH[(k + 1) % NCH];       sfx(700, 15); }
+    if (btn(B_DOWN))                       { n[pos] = CH[(k + NCH - 1) % NCH]; sfx(700, 15); }
+    if (btn(B_LEFT)  && pos)               { pos--; sfx(600, 15); }
+    if (btn(B_RIGHT) && pos < LK_NAME - 1) { pos++; sfx(600, 15); }
+    if (btn(B_OK)) {
+      uint8_t e = LK_NAME;
+      while (e && n[e - 1] == ' ') e--;                 // trailing blanks go
+      n[e] = 0;
+      const char *start = n;
+      while (*start == ' ') start++;
+      if (*start) linkSetName(start);                   // an empty name keeps the old one
+      sfx(1200, 50);
+      return;
+    }
+    mpTitle("YOUR NAME", linkCore().code());
+    oled.setFont(FONT_B);
+    for (uint8_t i = 0; i < LK_NAME; i++) {
+      char c[2] = { n[i], 0 };
+      int16_t x = 22 + i * 14;
+      oled.drawStr(x, 38, c);
+      if (i == pos) oled.drawHLine(x - 1, 41, 9);        // cursor
+      else          oled.drawPixel(x + 3, 41);
+    }
+    oled.setFont(FONT);
+    centerStr(54, "UP/DOWN letter  OK=save");
+    oled.sendBuffer();
+  }
+}
+
+// ---------------- the games ----------------
+/* After the deciding move: show the board, keep resending until the other
+   side has the last move (at most a few seconds), then back to the list. */
+static void mpFinish(void (*draw)(const char *), const char *msg) {
+  LinkCore &L = linkCore();
+  L.finish();
+  uint32_t t0 = millis();
+  btnClear();
+  while (millis() - t0 < 3000 || (!L.delivered() && millis() - t0 < 8000)) {
+    if (!poll() || (btn(B_OK) && millis() - t0 > 800)) break;
+    draw(msg);
+  }
+  L.toLobby();
+}
+
+static uint8_t mpSel;                                   // for the draw callbacks
+static void mpC4Draw(const char *msg) { c4Draw(mpSel, msg, 0); }
+static void mpTtDraw(const char *msg) { ttDraw(9, ttLine(1) >= 0 ? ttLine(1) : ttLine(2), msg, NULL, 0); }
+
+/* 0 = decided or the other one left, 1 = we gave up, 2 = broken (already said) */
+static uint8_t mpC4() {
+  LinkCore &L = linkCore();
+  char vs[16];
+  snprintf(vs, sizeof(vs), "vs %.6s", L.opp.name);
+  c4Vs = vs;
+  memset(c4, 0, sizeof(c4));
+  mpSel = 3;
+  bool mine = L.iStart;
+  const char *end = NULL;
+  uint8_t ret = 0;
+  btnClear();
+  while (!end) {
+    if (!poll()) { L.cancel(); ret = 1; break; }        // hold OK = give up
+    if (L.state != LK_PLAYING) break;                   // the other one left
+    if (mine) {
+      if (btn(B_LEFT)  && mpSel > 0)        { mpSel--; sfx(700, 15); }
+      if (btn(B_RIGHT) && mpSel < C4_W - 1) { mpSel++; sfx(700, 15); }
+      if ((btn(B_OK) || btn(B_DOWN)) && c4Drop(mpSel, 1) >= 0) {
+        L.sendMove(mpSel, linkNow());
+        sfx(500, 40);
+        mine = false;
+        if (c4Wins(1)) end = "YOU WIN";
+        else if (c4Full()) end = "DRAW";
+      }
+      c4Draw(mpSel, "your go", 0);
+    } else {
+      uint8_t m;
+      if (L.moveIn(&m)) {
+        if (m >= C4_W || c4Drop(m, 2) < 0) { L.cancel(); mpNote("connection error", NULL); ret = 2; break; }
+        sfx(350, 40);
+        mine = true;
+        if (c4Wins(2)) end = "LOST";
+        else if (c4Full()) end = "DRAW";
+      }
+      c4Draw(mpSel, L.opp.name, 0);                     // whose turn it is
+    }
+  }
+  if (end) { sfx(strcmp(end, "LOST") ? 1400 : 200, 250); mpFinish(mpC4Draw, end); }
+  c4Vs = NULL;
+  return ret;
+}
+
+static uint8_t mpTTT() {
+  LinkCore &L = linkCore();
+  char vs[16], you[12], them[12];
+  snprintf(vs, sizeof(vs), "vs %.6s", L.opp.name);
+  ttVs = vs;
+  uint8_t me = L.iStart ? 1 : 2, cur = 4;               // whoever begins plays X
+  snprintf(you, sizeof(you), "you: %c", me == 1 ? 'X' : 'O');
+  snprintf(them, sizeof(them), "%.6s...", L.opp.name);
+  memset(tt, 0, sizeof(tt));
+  bool mine = L.iStart;
+  const char *end = NULL;
+  uint8_t ret = 0;
+  btnClear();
+  while (!end) {
+    if (!poll()) { L.cancel(); ret = 1; break; }
+    if (L.state != LK_PLAYING) break;
+    if (mine) {
+      if (btn(B_LEFT)  && cur % 3)     { cur--;    sfx(700, 15); }
+      if (btn(B_RIGHT) && cur % 3 < 2) { cur++;    sfx(700, 15); }
+      if (btn(B_UP)    && cur > 2)     { cur -= 3; sfx(700, 15); }
+      if (btn(B_DOWN)  && cur < 6)     { cur += 3; sfx(700, 15); }
+      if (btn(B_OK)) {
+        if (tt[cur]) sfx(300, 60);                      // taken already
+        else {
+          tt[cur] = me;
+          L.sendMove(cur, linkNow());
+          sfx(500, 40);
+          mine = false;
+          if (ttLine(me) >= 0) end = "YOU WIN";
+          else if (ttFull()) end = "DRAW";
+        }
+      }
+      ttDraw(cur, -1, NULL, you, 0);
+    } else {
+      uint8_t m;
+      if (L.moveIn(&m)) {
+        if (m > 8 || tt[m]) { L.cancel(); mpNote("connection error", NULL); ret = 2; break; }
+        tt[m] = 3 - me;
+        sfx(350, 40);
+        mine = true;
+        if (ttLine(3 - me) >= 0) end = "LOST";
+        else if (ttFull()) end = "DRAW";
+      }
+      ttDraw(9, -1, NULL, them, 0);
+    }
+  }
+  if (end) { sfx(strcmp(end, "LOST") ? 1400 : 200, 250); mpFinish(mpTtDraw, end); }
+  ttVs = NULL;
+  return ret;
+}
+
+// ---------------- the list ----------------
+static void mpBars(int16_t x, int16_t y, int8_t rssi) {   // signal strength
+  uint8_t n = rssi > -55 ? 4 : (rssi > -65 ? 3 : (rssi > -75 ? 2 : 1));
+  for (uint8_t i = 0; i < 4; i++) {
+    uint8_t h = 2 + i * 2;
+    if (i < n) oled.drawBox(x + i * 3, y - h, 2, h);
+    else       oled.drawPixel(x + i * 3, y - 1);
+  }
+}
+
+// why a challenge or a game ended, from the state it was in before
+static void mpEnded(LkState before) {
+  LinkCore &L = linkCore();
+  char b[26];
+  const char *n = L.opp.name;
+  switch (L.why) {
+  case LKE_DECLINED: snprintf(b, sizeof(b), "%.6s said no", n); break;
+  case LKE_BUSY:     snprintf(b, sizeof(b), "%.6s is busy", n); break;
+  case LKE_TIMEOUT:
+    if (before == LK_INVITING) snprintf(b, sizeof(b), "no answer from %.6s", n);
+    else snprintf(b, sizeof(b), "time is up");
+    break;
+  case LKE_GONE:     snprintf(b, sizeof(b), "%.6s is gone", n); break;
+  case LKE_LEFT:
+    if (before == LK_INVITED) snprintf(b, sizeof(b), "%.6s took it back", n);
+    else snprintf(b, sizeof(b), "%.6s left the game", n);
+    break;
+  default: b[0] = 0; break;
+  }
+  if (b[0]) mpNote(b, NULL);
+}
+
+void multiplayerRun() {
+  if (runClock < 80) { wlanNeedsClock(); return; }     // the radio needs 80 MHz+
+  if (!linkOpen()) { mpNote("radio did not start", NULL); return; }
+  pollHook = mpHook;
+  LinkCore &L = linkCore();
+  char selCode[5] = "";                                 // "" = own row
+  uint8_t  top = 0;
+  uint32_t nextBeep = 0;
+  LkState  before = LK_LOBBY;
+  uint8_t  gameEnd = 0;                                 // what mpC4 / mpTTT reported
+  btnClear();
+  for (;;) {
+    bool alive = poll();
+    LkState st = L.state;
+
+    if (st == LK_OVER) {                                // challenge or game is over
+      if (gameEnd == 1) mpNote("you left the game", NULL);
+      else if (gameEnd == 0) mpEnded(before);
+      gameEnd = 0;
+      L.toLobby();
+      before = LK_LOBBY;
+      btnClear();
+      continue;
+    }
+    before = st;
+
+    if (st == LK_PLAYING) {
+      gameEnd = (L.game == LKG_C4) ? mpC4() : mpTTT();
+      btnClear();
+      continue;
+    }
+
+    if (st == LK_INVITED) {                             // somebody challenges us
+      if (L.game != LKG_C4 && L.game != LKG_TTT) { L.answer(false, linkNow()); continue; }
+      if (millis() >= nextBeep) { nextBeep = millis() + 2000; sfx(1500, 90); }
+      if (btn(B_OK))                      { L.answer(true, linkNow()); sfx(1200, 60); btnClear(); continue; }
+      if (btn(B_LEFT) || btn(B_RIGHT) || !alive) { L.answer(false, linkNow()); sfx(300, 80); btnClear(); continue; }
+      char t[8], b[32];
+      snprintf(t, sizeof(t), "%ds", mpSecondsLeft());
+      mpTitle("CHALLENGE!", t);
+      snprintf(b, sizeof(b), "%.6s %.4s", L.opp.name, L.opp.code);
+      oled.setFont(FONT_B);
+      centerStr(33, b);
+      oled.setFont(FONT);
+      snprintf(b, sizeof(b), "wants to play %.11s", mpGameName(L.game));
+      centerStr(45, b);
+      centerStr(60, "OK = yes   LEFT = no");
+      oled.sendBuffer();
+      continue;
+    }
+
+    if (st == LK_INVITING) {                            // waiting for an answer
+      if (btn(B_LEFT) || !alive) { L.cancel(); btnClear(); continue; }
+      char t[8], b[32];
+      snprintf(t, sizeof(t), "%ds", mpSecondsLeft());
+      mpTitle("CHALLENGE", t);
+      snprintf(b, sizeof(b), "waiting for %.6s %.4s", L.opp.name, L.opp.code);
+      centerStr(32, b);
+      centerStr(44, mpGameName(L.game));
+      centerStr(60, "LEFT = take back");
+      oled.sendBuffer();
+      continue;
+    }
+
+    // ---- the list of consoles around ----
+    if (!alive) break;                                  // hold OK = back to the games
+    uint8_t idx[LK_PEERS];
+    uint8_t n = linkList(idx, LK_PEERS);
+    int8_t sel = 0;                                     // 0 = own row, 1.. = peers
+    for (uint8_t i = 0; i < n; i++) if (selCode[0] && !strcmp(L.peer(idx[i]).code, selCode)) sel = i + 1;
+    if (btn(B_UP)   && sel > 0) { sel--; sfx(700, 15); }
+    if (btn(B_DOWN) && sel < n) { sel++; sfx(700, 15); }
+    if (sel) strcpy(selCode, L.peer(idx[sel - 1]).code); else selCode[0] = 0;
+
+    if (sel && btn(B_RIGHT)) { linkToggleFriend(selCode); sfx(900, 30); }
+    if (btn(B_OK)) {
+      sfx(1200, 50);
+      if (!sel) mpName();
+      else if (L.peer(idx[sel - 1]).busy) sfx(300, 120);
+      else {
+        static const char *const games[2] = { "4 wins", "Tic Tac Toe" };
+        uint8_t g = chooseMode("CHALLENGE", games, 2);
+        if (g != 255) {
+          for (uint8_t i = 0; i < L.peerCount(); i++)   // the list may have changed meanwhile
+            if (!strcmp(L.peer(i).code, selCode)) { L.invite(i, g == 0 ? LKG_C4 : LKG_TTT, linkNow()); break; }
+        }
+      }
+      btnClear();
+      continue;
+    }
+
+    mpTitle("LOBBY", sel ? "OK=play >=friend" : "OK=rename");
+    const uint8_t ROWS_MP = 6;
+    if (sel < top) top = sel;
+    if (sel >= top + ROWS_MP) top = sel - ROWS_MP + 1;
+    for (uint8_t r = 0; r < ROWS_MP; r++) {
+      uint8_t row = top + r, y = TOP_H + r * 8;
+      if (row > n) {
+        if (!n && row == 1) oled.drawStr(3, y + 7, "searching...");
+        break;
+      }
+      char b[32];
+      if (row == 0) snprintf(b, sizeof(b), " you: %.6s %.4s", linkName(), L.code());
+      else {
+        const LkPeer &p = L.peer(idx[row - 1]);
+        snprintf(b, sizeof(b), "%c%-6.6s %.4s %s", linkIsFriend(p.code) ? '*' : ' ',
+                 p.name, p.code, p.busy ? "busy" : "free");
+      }
+      if (row == sel) { oled.drawBox(0, y, SCR_W, 8); oled.setDrawColor(0); }
+      oled.drawStr(1, y + 7, b);
+      if (row) mpBars(SCR_W - 12, y + 7, L.peer(idx[row - 1]).rssi);
+      oled.setDrawColor(1);
+    }
+    oled.sendBuffer();
+  }
+  pollHook = NULL;
+  linkClose();
+}
+#endif
 
 // =========================================================
 //  GAME LIBRARY
@@ -2663,11 +3461,19 @@ static const Game GAMES[] = {
   { "Racer",      racerRun    },
   { "Frogger",    froggerRun  },
   { "4 wins",     connect4Run },
+  { "Tic Tac Toe", tictactoeRun },
   // add new games here:  { "Breakout", breakoutRun },
+#ifdef HAVE_LINK
+  { "Multiplayer", multiplayerRun },  // no high score either
+#endif
   { "Settings",   settingsRun }      // must stay last: no high score
 };
 static const uint8_t GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
+#ifdef HAVE_LINK
+#define REAL_GAMES (GAME_COUNT - 2)
+#else
 #define REAL_GAMES (GAME_COUNT - 1)
+#endif
 #define ROWS 4                       // visible menu rows
 
 void menu() {
@@ -2712,7 +3518,8 @@ void menu() {
         snprintf(b, sizeof(b), "BEST %u", loadHigh(idx));
         oled.drawStr(SCR_W - oled.getStrWidth(b) - 3, y + 8, b);
       } else {
-        oled.drawStr(SCR_W - oled.getStrWidth("setup") - 3, y + 8, "setup");
+        const char *tag = (GAMES[idx].run == settingsRun) ? "setup" : "2P";
+        oled.drawStr(SCR_W - oled.getStrWidth(tag) - 3, y + 8, tag);
       }
 
       oled.setDrawColor(1);

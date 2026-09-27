@@ -609,6 +609,20 @@ static void txPower() {
 }
 
 // ---------------- public ----------------
+/* Radio for the multiplayer page: station mode on a fixed channel without
+   joining a network, so ESP-NOW reaches the other consoles directly.     */
+bool netRadioLink(uint8_t channel) {
+  if (busy()) return false;
+  dnsStop();
+  stopServer();
+  state = NET_OFF;                                // no reconnects from the event handler
+  radioOn(WIFI_MODE_STA);
+  if (esp_wifi_start() != ESP_OK) return false;
+  txPower();
+  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+  return true;
+}
+
 void netConnect() {
   loadCfg();
   if (!ssid[0]) { state = NET_FAILED; return; }

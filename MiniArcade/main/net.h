@@ -30,6 +30,7 @@ void        netSetup();           // open the setup hotspot
 void        netStop();            // web page and radio off
 void        netForget();          // drop the stored WLAN
 void        netTick();            // call from the UI loop: deferred work
+bool        netRadioLink(uint8_t channel);   // radio only, for ESP-NOW (multiplayer)
 void        netRestart();
 NetState    netState();
 const char *netAddress();         // IP of the web page, "" while unknown
