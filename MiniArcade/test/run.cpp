@@ -181,6 +181,7 @@ void simFrameSent(const uint8_t* d, size_t n){
 #include "Arduino.h"
 #include <time.h>
 #include "net.h"             // pretend network, before the sketch finds main/net.h
+#include "link.h"            // multiplayer with a bot next door
 #include "MiniArcade.ino"
 
 static bool saw(const char*s){ for(auto&t:seenTexts) if(t.find(s)!=std::string::npos) return true; return false; }
@@ -206,7 +207,7 @@ int main(int argc,char**argv){
     for(int i=0;i<5;i++){ simNvsU16["p"+std::to_string(i)]=3+i; simNvsU16["a"+std::to_string(i)]=1; }
   }
 
-  if(scenario=="menu"){        simEnd=10000; downs(15,1300,300); captureAt={30,300,700};
+  if(scenario=="menu"){        simEnd=10000; downs(16,1300,300); captureAt={30,300,700};
   } else if(scenario=="tetris"){ simEnd=60000; script={{1300,16},{1360,0}}; autoplay=true; captureAt={200,900};
   } else if(scenario=="snake"){  simEnd=20000; downs(1);
       script.push_back({1500,16}); script.push_back({1560,0});
@@ -287,7 +288,7 @@ int main(int argc,char**argv){
   } else if(scenario=="sleep"){   simEnd=90000;
       simNvsU16["slp"]=1;                       // one minute, then nothing happens
       captureAt={200};
-  } else if(scenario=="settings"){ simEnd=26000; downs(15,1300,250);
+  } else if(scenario=="settings"){ simEnd=26000; downs(16,1300,250);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
       script.push_back({5900,4});  script.push_back({5960,0});
@@ -306,7 +307,7 @@ int main(int argc,char**argv){
       script.push_back({10800,1}); script.push_back({10860,0});
       script.push_back({11200,16});script.push_back({11260,0});    // pick GPIO0
       captureAt={1000,1700};
-  } else if(scenario=="wlan"){ simEnd=12000; downs(15,1300,250);
+  } else if(scenario=="wlan"){ simEnd=12000; downs(16,1300,250);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
       script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
@@ -326,11 +327,39 @@ int main(int argc,char**argv){
       captureAt={250};
   } else if(scenario=="versions3"){ simEnd=90000;
       simTwoSlots=true; simNvsU16["slp"]=1;                        // fresh update, sleep after 1 min
-  } else if(scenario=="upload"){ simEnd=9000; downs(15,1300,250); simUpload=true;
+  } else if(scenario=="upload"){ simEnd=9000; downs(16,1300,250); simUpload=true;
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
       script.push_back({7500,16}); script.push_back({7560,0});     // wlan page, joins
       script.push_back({8300,16}); script.push_back({8360,0});     // OK on the question
+  } else if(scenario=="mp4"||scenario=="mpno"||scenario=="mpwait"||scenario=="mpleft"){
+      simEnd = (scenario=="mpwait") ? 45000 : 40000;
+      if(scenario=="mpno")   simBotAnswer=0;
+      if(scenario=="mpwait") simBotAnswer=-1;
+      if(scenario=="mpleft") simBotLeaveAfter=2;
+      downs(15,1300,180);
+      script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
+      script.push_back({6500,2});  script.push_back({6560,0});     // ANNA's row
+      script.push_back({6900,16}); script.push_back({6960,0});     // challenge ...
+      script.push_back({7400,16}); script.push_back({7460,0});     // ... to 4 wins
+      if(scenario!="mpwait") for(uint32_t t=10000;t<36000;t+=450){   // play: move and drop
+        script.push_back({t,(uint8_t)((rand()%2)?4:8)}); script.push_back({t+60,0});
+        script.push_back({t+200,16}); script.push_back({t+260,0}); }
+  } else if(scenario=="mpin"){ simEnd=40000;
+      simBotInviteAt=7000; simBotGame=LKG_TTT;
+      downs(15,1300,180);
+      script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
+      script.push_back({9000,16}); script.push_back({9060,0});     // accept the challenge
+      for(uint32_t t=11000;t<36000;t+=400){                       // wander and place
+        static const uint8_t keys[4]={1,2,4,8};
+        script.push_back({t,keys[rand()%4]}); script.push_back({t+60,0});
+        script.push_back({t+180,16}); script.push_back({t+240,0}); }
+  } else if(scenario=="mpname"){ simEnd=9000;
+      downs(15,1300,180);
+      script.push_back({4300,16}); script.push_back({4360,0});     // open multiplayer
+      script.push_back({6000,16}); script.push_back({6060,0});     // own row: rename
+      script.push_back({6500,1});  script.push_back({6560,0});     // P -> Q
+      script.push_back({7000,16}); script.push_back({7060,0});     // save
   } else if(scenario=="wizard2"){ simEnd=20000;
       /* like "wizard", but the board holds GPIO2 and GPIO10 high through
          external pull-ups - this used to make key detection impossible */
@@ -513,7 +542,7 @@ int main(int argc,char**argv){
 
   if(scenario=="menu"){
     check("library drawn", saw("MiniArcade"));
-    check("all games listed", saw("Tetris")&&saw("Snake")&&saw("Pong")&&saw("Doom")&&saw("Mine")&&saw("Tunnel 3D")&&saw("Flappy")&&saw("Invaders")&&saw("Dino")&&saw("Breakout")&&saw("Rocks")&&saw("Racer")&&saw("Frogger")&&saw("4 wins"));
+    check("all games listed", saw("Tetris")&&saw("Snake")&&saw("Pong")&&saw("Doom")&&saw("Mine")&&saw("Tunnel 3D")&&saw("Flappy")&&saw("Invaders")&&saw("Dino")&&saw("Breakout")&&saw("Rocks")&&saw("Racer")&&saw("Frogger")&&saw("4 wins")&&saw("Tic Tac Toe")&&saw("Multiplayer"));
     check("list scrolls to the last entry", saw("Settings"));
     printf("      tones played: %ld, last %d Hz\n", toneCount, lastTone);
     check("menu clicks are audible", toneCount>0);
@@ -615,7 +644,7 @@ int main(int argc,char**argv){
   } else if(scenario=="sleep"){   simEnd=90000;
       simNvsU16["slp"]=1;                       // one minute, then nothing happens
       captureAt={200};
-  } else if(scenario=="settings"){ simEnd=26000; downs(15,1300,250);
+  } else if(scenario=="settings"){ simEnd=26000; downs(16,1300,250);
       script.push_back({5000,16}); script.push_back({5060,0});     // open settings
       script.push_back({5600,4});  script.push_back({5660,0});     // brightness down
       script.push_back({5900,4});  script.push_back({5960,0});
@@ -655,6 +684,27 @@ int main(int argc,char**argv){
     check("upload question shown on the device", saw("install firmware")&&saw("v9.4"));
     check("confirmed with OK", simAnswer==1);
     check("update written, restart announced", saw("done - restarting"));
+  } else if(scenario=="mp4"){
+    check("multiplayer page lists ANNA", saw("LOBBY")&&saw("ANNA"));
+    check("challenge sent", saw("waiting for ANNA"));
+    check("game against ANNA shown", saw("vs ANNA"));
+    check("a game was decided", saw("YOU WIN")||saw("LOST")||saw("DRAW"));
+    check("the bot saw the same end", simBotGames>=1);
+  } else if(scenario=="mpno"){
+    check("decline reported", saw("ANNA said no"));
+  } else if(scenario=="mpwait"){
+    check("challenge counts down", saw("29s")&&saw("1s"));
+    check("no answer after 30 s", saw("no answer from ANNA"));
+  } else if(scenario=="mpleft"){
+    check("opponent leaving reported", saw("ANNA left the game"));
+  } else if(scenario=="mpin"){
+    check("incoming challenge shown", saw("CHALLENGE!")&&saw("wants to play Tic Tac Toe"));
+    check("game against ANNA shown", saw("vs ANNA"));
+    check("a game was decided", saw("YOU WIN")||saw("LOST")||saw("DRAW"));
+    check("the bot saw the same end", simBotGames>=1);
+  } else if(scenario=="mpname"){
+    check("name editor shown", saw("YOUR NAME"));
+    check("new name kept", !strcmp(linkName(),"QLAYER"));
   } else if(scenario=="wizard2"){
     printf("      learned UP=%u DOWN=%u LEFT=%u RIGHT=%u OK=%u\n",
       simNvsU16["p0"],simNvsU16["p1"],simNvsU16["p2"],simNvsU16["p3"],simNvsU16["p4"]);
