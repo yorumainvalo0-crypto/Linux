@@ -60,6 +60,8 @@ static void applyMask(uint8_t m){ for(int i=0;i<5;i++) pinPress[WIRED[i]] = (m>>
 static bool simSlept = false;
 void simDeepSleep(){ simSlept = true; printf("      board went to deep sleep\n"); throw SimEnd{}; }
 
+static void (*simTimeHook)(uint32_t ms) = NULL;   // a scenario's own events (every ms)
+
 void simDelayMs(uint32_t ms){
   for(uint32_t i=0;i<ms;i++){
     clockUs += 1000;
@@ -67,6 +69,7 @@ void simDelayMs(uint32_t ms){
     for(auto&e:script)    if(e.first==t) applyMask(e.second);
     for(auto&e:pinScript) if(e.t==t)     pinPress[e.pin]=e.on;
     if(autoplay && t>2000 && t%200==0){ static const uint8_t o[]={0,0,4,8,1,2}; applyMask(o[rand()%6]); }
+    if(simTimeHook) simTimeHook(t);
   }
   if(clockUs/1000 > simEnd) throw SimEnd{};
 }
@@ -184,6 +187,7 @@ void simFrameSent(const uint8_t* d, size_t n){
 #include "link.h"            // multiplayer with a bot next door
 #include "MiniArcade.ino"
 #include "sksolve.h"
+#include "backupfmt.h"
 
 static bool saw(const char*s){ for(auto&t:seenTexts) if(t.find(s)!=std::string::npos) return true; return false; }
 static uint16_t maxScore(const char*p){
@@ -411,6 +415,18 @@ int main(int argc,char**argv){
       for(int i=0;i<6;i++){ script.push_back({5600+i*300,2}); script.push_back({5660+i*300,0}); }
       script.push_back({7500,16}); script.push_back({7560,0});     // wlan page: joins, but in vain
       captureAt={1600,2800};
+  } else if(scenario=="wlanstay"){ simEnd=16000; ups(1,1300,220);
+      auto tap=[&](uint32_t t,uint8_t k){ script.push_back({t,k}); script.push_back({t+60,0}); };
+      tap(5000,16);                                                // open settings
+      for(int i=0;i<6;i++) tap(5600+i*300,2);
+      tap(7500,16);                                                // wlan page, joins
+      for(int i=0;i<4;i++) tap(8000+i*250,2);                      // down to "stay online"
+      tap(9200,16);                                                // -> yes
+      simTimeHook=[](uint32_t t){ if(t==10000) simRestoreAsk=true; };   // a backup comes in
+      tap(10800,16);                                               // OK on the question
+      tap(11500,2); tap(11800,16);                                 // "back"
+      script.push_back({12500,16}); script.push_back({13400,0});   // hold OK: settings -> menu
+      captureAt={2150,2600};
   } else if(scenario=="versions"){ simEnd=8000;
       simTwoSlots=true;                                             // fresh update, nothing pressed
       script.push_back({6000,2}); script.push_back({6060,0});      // first key press in the menu
@@ -550,6 +566,68 @@ int main(int argc,char**argv){
     return ok ? 0 : 1;
   }
 
+  if(scenario=="phoneapi"){
+    /* what the phone pages get from the console (phone.cpp only adds HTTP) */
+    simEnd=0x7fffffff;
+    static char out[6144];
+    int n=appStats(out,sizeof(out));
+    int games=0; for(char*p=out;(p=strstr(p,"\"b\":"));p++) games++;
+    check("stats: every game and award in valid-looking JSON",
+          n>100&&out[0]=='{'&&out[n-1]=='}'&&strstr(out,"\"n\":\"Tetris\"")&&strstr(out,"\"n\":\"Battleship\"")
+          &&strstr(out,"RECORD BREAKER")&&games==realGames());
+    appSettings(out,sizeof(out));
+    printf("      settings %s\n", out);
+    check("settings: name and values", strstr(out,"\"name\":\"PLAYER\"")&&strstr(out,"\"sleep\":5"));
+    check("brightness set and saved", !appSet("bright","50")&&cfgBright==127&&simNvsU16["bri"]==127);
+    check("wrong values refused", appSet("bright","0")&&appSet("sleep","99")&&appSet("clock","100")&&appSet("nope","1"));
+    check("clock kept for the next start", !appSet("clock","80")&&simNvsU16["clk"]==80);
+    long t0=toneCount; appSet("sound","0"); sfx(1000,10);
+    bool silent = toneCount==t0 && cfgMute && simNvsU16["mut"]==1;
+    appSet("sound","1");
+    check("sound off is silent, on beeps", silent && toneCount>t0 && !cfgMute);
+    check("player name cleaned up", !appSet("name","anna!")&&!strcmp(linkName(),"ANNA")&&appSet("name","!!"));
+    oled.clearBuffer(); oled.drawBox(0,0,8,8);
+    uint8_t scr[1024]; appScreen(scr);
+    check("screen copy in panel order", scr[0]==0xFF&&scr[7]==0xFF&&scr[8]==0&&scr[128]==0);
+    appKey(B_DOWN,true); bool held=rawPressed(B_DOWN);
+    simDelayMs(800);
+    check("phone key held, then lets go by itself", held&&!rawPressed(B_DOWN));
+    appKey(B_UP,true); appKey(B_UP,false);
+    check("phone key released at once", !rawPressed(B_UP));
+    const char *lvl="#####|#@$.#|#####";
+    check("own level kept", !appLevel(0,lvl)&&appLevelGet(0,out,sizeof(out))&&!strcmp(out,lvl)&&skOpen(SK_N)&&!skOpen(SK_N+1));
+    check("own level playable", skLoad(SK_N)&&skStep(3)==2&&skSolved());
+    check("bad levels refused", appLevel(1,"#####|#@$ #|#####")&&appLevel(1,"#@$.#")&&appLevel(1,"######|#@$.@#|######")
+          &&appLevel(1,"#####|#@$x#|#####")&&appLevel(3,lvl));
+    printf("      e.g. \"%s\"\n", appLevel(1,"#@$.#"));
+    check("slot emptied", !appLevel(0,"")&&!skOpen(SK_N));
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+  if(scenario=="bkformat"){
+    char line[2000]; static uint8_t buf[1100], blob[1024];
+    for(int i=0;i<1024;i++) blob[i]=(uint8_t)(i*7+3);
+    int bad=0;
+    for(int len : {0,1,2,3,4,5,201,1024}){
+      int n=bkLine(line,sizeof(line),"arcade","world",BK_BLOB,blob,len);
+      BkEntry e; if(n<0||line[n-1]!='\n'||!bkParse(line,e,buf,sizeof(buf))||e.type!=BK_BLOB||e.len!=len||memcmp(buf,blob,len)) bad++;
+    }
+    for(unsigned v : {0u,1u,65535u}){
+      uint16_t x=(uint16_t)v; bkLine(line,sizeof(line),"arcade","hs3",BK_U16,&x,2);
+      BkEntry e; if(!bkParse(line,e,buf,sizeof(buf))||e.type!=BK_U16||e.u16!=v||strcmp(e.key,"hs3")) bad++;
+    }
+    bkLine(line,sizeof(line),"link","name",BK_STR,"AN NA",0);
+    { BkEntry e; if(!bkParse(line,e,buf,sizeof(buf))||e.type!=BK_STR||strcmp(e.text,"AN NA")||strcmp(e.ns,"link")) bad++; }
+    check("u16, text and blobs come back unchanged", bad==0);
+    const char *wrong[]={"arcade hs0 u16 70000","arcade hs0 u32 1","arcade  u16 1","arcade hs0 blob @@@",
+                         "arcade averyveryverylongkey u16 1","arcade hs0 u16","arcade hs0 u16 12x"};
+    int taken=0; for(const char*w:wrong){ strcpy(line,w); BkEntry e; if(bkParse(line,e,buf,sizeof(buf))) taken++; }
+    check("broken lines refused", taken==0);
+    check("names with spaces or too long refused", bkLine(line,sizeof(line),"ar cade","x",BK_STR,"1",0)<0
+          && bkLine(line,sizeof(line),"arcade","x",BK_STR,"two\nlines",0)<0);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
   if(scenario=="g2logic"){
     struct Case { uint8_t in[4]; uint8_t out[4]; uint32_t gain; };
     static const Case C[] = {                          // one row, moved left (exponents)
@@ -997,6 +1075,14 @@ int main(int argc,char**argv){
     check("online state shown, disconnect offered", saw("online")&&saw("disconnect"));
     check("newer release offered", saw("install 9.3"));
     check("update written, restart announced", saw("done - restarting"));
+  } else if(scenario=="wlanstay"){
+    check("stay online offered and switched on", saw("stay online: no")&&saw("stay online: yes"));
+    check("restore question shown and answered on the console", saw("restore the backup")&&simRestoreAnswer==1);
+    check("WLAN stays on after leaving the page", phoneLink&&pollHook==phoneHook&&simNet==NET_ONLINE);
+    bool shown=false; for(auto&t:seenTexts) if(t.rfind("WLAN ",0)==0&&t.find('%')!=std::string::npos) shown=true;
+    check("menu shows that the WLAN is on", shown);
+    phoneLinkOff();
+    check("multiplayer (or anyone) can switch it off", !phoneLink&&!pollHook&&simNet==NET_OFF);
   } else if(scenario=="wlanfail"){
     check("while joining: state shown, no disconnect offered", saw("joining")&&saw("stop joining"));
     check("after failing: failed, connect offered", saw("failed")&&saw("can't join HomeNet")&&saw("connect"));

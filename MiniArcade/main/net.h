@@ -46,6 +46,27 @@ const char *netError();
 const char *netAskVersion();      // version of the uploaded file while JOB_ASKING
 void        netAnswer(bool yes);  // the player's decision on the device
 
+void        netRestartLater();    // restart in a moment (after a page went out)
+
+// ---------------- pages for a phone (phone.cpp) ----------------
+/* With the console in a WLAN, a phone in the same network gets: stats and
+   awards, settings, a live picture of the screen, a controller, a Sokoban
+   level editor and backups. The sketch answers the app...() calls; all but
+   appKey run in the UI loop (from netTick), so they may use the game state. */
+int         appStats(char *out, int max);                    // JSON
+int         appSettings(char *out, int max);                 // JSON
+const char *appSet(const char *key, const char *val);        // NULL = done, else why not
+void        appScreen(uint8_t *out);                         // 1024 bytes, SSD1306 page order
+const char *appLevel(uint8_t slot, const char *text);        // NULL = saved, else why not
+int         appLevelGet(uint8_t slot, char *out, int max);   // "" when the slot is free
+void        appKey(uint8_t key, bool down);                  // runs in the web task
+
+bool        phoneAsking();        // a backup came in: restore it? (answered on the WLAN page)
+void        phoneAnswer(bool yes);
+void        phoneTick();          // from netTick: answers the waiting page
+void        phoneRegister(void *server);   // the phone pages, from net.cpp
+extern const char PHONE_LINKS[];  // part of the main page
+
 // ---------------- firmware slots ----------------
 /* Two app slots: the running firmware and the one before (or the one just
    downloaded). A new firmware counts as "pending" until fwConfirm(); if the

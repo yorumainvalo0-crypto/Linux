@@ -424,6 +424,7 @@ static void mpEnded(LkState before) {
 
 void multiplayerRun() {
   if (runClock < 80) { wlanNeedsClock(); return; }     // the radio needs 80 MHz+
+  phoneLinkOff();                                       // the radio is ours now, not the WLAN's
   if (!linkOpen()) { mpNote("radio did not start", NULL); return; }
   pollHook = mpHook;
   LinkCore &L = linkCore();

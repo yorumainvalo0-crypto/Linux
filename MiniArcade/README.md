@@ -125,6 +125,33 @@ or, on a fresh board, `miniarcade-full.bin` from a release at address 0x0
 
     esptool.py --chip esp32c3 write_flash 0x0 miniarcade-full.bin
 
+## On the phone
+
+With the console in your WLAN (Settings -> "wlan and update..." -> connect),
+open the address it shows in the phone's browser. Below the update part the
+page has:
+
+    Stats and awards   best score, times played and play time of every game,
+                       all awards with what they need
+    Settings           player name, brightness, sleep time, sound on/off,
+                       cpu clock (from the next start on)
+    Screen             live picture of the display, "save a picture" = PNG
+    Controller         the screen plus big keys - play with the phone
+                       (a computer's arrow keys and Enter work too)
+    Sokoban editor     draw up to 3 own levels; on the console they come
+                       after the last built-in level ("OWN 1".."OWN 3")
+    Backup             download all saves as a text file (scores, stats,
+                       awards, Mine world, own levels, name, friends,
+                       settings - not the WLAN password) and restore it:
+                       the WLAN page on the console asks first, then the
+                       console restarts
+
+Screen and controller while playing: set "stay online: yes" on the WLAN page
+and leave it - the WLAN stays on (the menu shows "WLAN" top right) and the
+console answers the phone between frames. The multiplayer page switches it
+off again, as it needs the radio itself. The pages only exist in your own
+WLAN, never on the open setup hotspot.
+
 ## Multiplayer
 
 Library -> "Multiplayer". Every console with this page open appears in the
