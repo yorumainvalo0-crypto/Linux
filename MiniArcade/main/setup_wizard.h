@@ -202,70 +202,155 @@ void soundSetup() {
   saveSound();
 }
 
-/* Live view of the five ADC pins so a wired divider can be spotted, plus
-   manual selection when the automatic guess picks the wrong pin.        */
+/* Tests one ADC pin for the battery divider. A stable reading alone is not
+   enough: a floating pin can hold a charge for a while. With the internal
+   pull-down (about 45k) switched on, a floating pin falls to 0 V, while the
+   divider keeps it clearly up.                                          */
+enum BatProbe : uint8_t { BP_USED, BP_NONE, BP_BAT, BP_HIGH };
+
+static bool batPinUsed(uint8_t p) {
+  if (p == sndPin) return true;
+  for (uint8_t b = 0; b < B_COUNT; b++) if (BTN_PIN[b] == p) return true;
+  return false;
+}
+
+BatProbe batProbe(uint8_t p, uint16_t *pinMv) {
+  if (pinMv) *pinMv = 0;
+  if (p > 4 || batPinUsed(p)) return BP_USED;      // only GPIO0..4 have ADC1
+  pinMode(p, INPUT);
+  delay(2);
+  uint32_t sum = 0;
+  uint16_t lo = 0xFFFF, hi = 0;
+  for (uint8_t i = 0; i < 8; i++) {
+    uint16_t v = (uint16_t)analogReadMilliVolts(p);
+    sum += v;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+    delay(3);
+  }
+  uint16_t avg = (uint16_t)(sum / 8);
+  if (pinMv) *pinMv = avg;
+  pinMode(p, INPUT_PULLDOWN);
+  delay(2);
+  uint32_t down = 0;
+  for (uint8_t i = 0; i < 4; i++) down += analogReadMilliVolts(p);
+  down /= 4;
+  pinMode(p, INPUT);
+  if (hi - lo > 80) return BP_NONE;                 // drifts
+  if (down < 100 || down < avg / 8) return BP_NONE; // nothing holds it up
+  if (avg >= 2350) return BP_HIGH;                  // more than a Li-ion cell: 5 V side?
+  if (avg >= 1300) return BP_BAT;                   // cell 2.6 .. 4.7 V
+  return BP_NONE;
+}
+
+// the first pin that looks like the battery, 255 = none (*high = a pin that sees 5 V)
+uint8_t batSearch(uint8_t *high) {
+  uint8_t found = 255;
+  if (high) *high = 255;
+  for (uint8_t p = 0; p <= 4; p++) {
+    BatProbe r = batProbe(p, NULL);
+    if (r == BP_BAT && found == 255) found = p;
+    if (r == BP_HIGH && high && *high == 255) *high = p;
+  }
+  return found;
+}
+
+/* At every start until a battery was found or "no battery" was picked by
+   hand, so wiring it up later needs no menu at all.                     */
+void batDetect() {
+  if (batPin <= 4 || batPin == BAT_NONE_SET) return;
+  uint8_t p = batSearch(NULL);
+  uint8_t was = batPin;
+  batPin = (p <= 4) ? p : 255;
+  if (batPin != was) saveBat();
+  batReset();
+}
+
+/* Live view of the five ADC pins; RIGHT searches the battery by itself,
+   UP/DOWN + OK picks a pin by hand.                                    */
 void batterySetup() {
   uint8_t sel = (batPin < 5) ? batPin : 5;
+  BatProbe res[5];
+  for (uint8_t p = 0; p < 5; p++) res[p] = batProbe(p, NULL);
+  applyPinModes();
   btnClear();
   while (poll()) {
     if (btn(B_UP)   && sel)     { sel--; sfx(700, 15); }
-    if (btn(B_DOWN) && sel < 6) { sel++; sfx(700, 15); }
+    if (btn(B_DOWN) && sel < 5) { sel++; sfx(700, 15); }
     if (btn(B_OK)) {
-      batPin = (sel < 5) ? sel : 255;
+      batPin = (sel < 5) ? sel : BAT_NONE_SET;
       saveBat();
+      batReset();
       sfx(1200, 80);
       return;
+    }
+    if (btn(B_RIGHT)) {                    // search by itself
+      uint8_t high = 255;
+      uint8_t p = batSearch(&high);
+      for (uint8_t q = 0; q < 5; q++) res[q] = batProbe(q, NULL);
+      applyPinModes();
+      oled.clearBuffer();
+      oled.setFont(FONT_B);
+      oled.drawStr(2, 12, "BATTERY");
+      oled.drawHLine(0, TOP_H - 1, SCR_W);
+      oled.setFont(FONT);
+      char b[26];
+      if (p <= 4) {
+        batPin = p;
+        saveBat();
+        batReset();
+        sel = p;
+        uint16_t mv = batSmoothMv();
+        snprintf(b, sizeof(b), "found on GPIO%u", p);
+        centerStr(32, b);
+        snprintf(b, sizeof(b), "%u.%02u V  %u%%", mv / 1000, (mv % 1000) / 10, batPercent());
+        centerStr(44, b);
+        sfx(1200, 120);
+      } else {
+        centerStr(28, "no battery found");
+        if (high <= 4) {
+          snprintf(b, sizeof(b), "GPIO%u sees 5 V:", high);
+          centerStr(40, b);
+          centerStr(50, "move the resistor");
+          centerStr(60, "to BAT+ (not OUT)");
+        } else {
+          centerStr(42, "2 equal resistors:");
+          centerStr(52, "BAT+ - pin - GND");
+          centerStr(62, "pin = GPIO0..4");
+        }
+        sfx(300, 150);
+      }
+      oled.sendBuffer();
+      delay(2500);
+      btnClear();
+      continue;
     }
 
     oled.setFont(FONT_B);
     oled.drawStr(2, 12, "BATTERY");
-    oled.drawHLine(0, TOP_H - 1, SCR_W);
     oled.setFont(FONT);
+    rightStr(10, "RIGHT=find");
+    oled.drawHLine(0, TOP_H - 1, SCR_W);
     for (uint8_t p = 0; p < 6; p++) {
       char line[26];
       uint8_t y = TOP_H + p * 8;
-      if (p == 5) snprintf(line, sizeof(line), "no battery (show USB)");
+      if (p == 5) snprintf(line, sizeof(line), "%sno battery (show USB)", batPin > 4 ? "*" : " ");
+      else if (res[p] == BP_USED)
+        snprintf(line, sizeof(line), " GPIO%u  used by %s", p, p == sndPin ? "buzzer" : "a key");
       else {
-        const char *why = NULL;
-        for (uint8_t b = 0; b < B_COUNT; b++) if (BTN_PIN[b] == p) why = "used by a key";
-        if (p == sndPin) why = "used by the buzzer";
-
-        if (why) snprintf(line, sizeof(line), "GPIO%u  %s", p, why);
-        else {
-          pinMode(p, INPUT);
-          uint16_t pv = (uint16_t)analogReadMilliVolts(p);
-          uint16_t mv = pv * 2;
-          snprintf(line, sizeof(line), "%u:%u.%02u>%u.%02u%s%s", p,
-                   pv / 1000, (pv % 1000) / 10, mv / 1000, (mv % 1000) / 10,
-                   (mv > 2700 && mv < 4600) ? " ok" : "",
-                   (p == 2) ? " strap" : "");
-        }
+        pinMode(p, INPUT);
+        uint16_t pv = (uint16_t)analogReadMilliVolts(p);
+        uint16_t mv = pv * 2;
+        snprintf(line, sizeof(line), "%s%u:%u.%02u>%u.%02u%s%s", p == batPin ? "*" : " ", p,
+                 pv / 1000, (pv % 1000) / 10, mv / 1000, (mv % 1000) / 10,
+                 res[p] == BP_BAT ? " bat" : res[p] == BP_HIGH ? " 5V?" : "",
+                 (p == 2) ? " strap" : "");
       }
       if (p == sel) { oled.drawBox(0, y, SCR_W, 8); oled.setDrawColor(0); }
-      oled.drawStr(3, y + 7, line);
+      oled.drawStr(1, y + 7, line);
       oled.setDrawColor(1);
     }
     oled.sendBuffer();
     applyPinModes();                       // give the key pins their pull back
-  }
-}
-
-/* Looks for two resistors from the battery to a free ADC pin. A pin left
-   floating drifts, so only a stable reading in the plausible window counts. */
-void batDetect() {
-  if (batPin != 254) return;                 // the player already decided
-  batPin = 255;
-  for (uint8_t i = 0; i < CAND_N; i++) {
-    uint8_t p = CAND[i];
-    if (p > 4) continue;                              // only GPIO0..4 have ADC1
-    bool used = (p == sndPin);
-    for (uint8_t b = 0; b < B_COUNT; b++) if (BTN_PIN[b] == p) used = true;
-    if (used) continue;
-    pinMode(p, INPUT);
-    uint16_t a = analogReadMilliVolts(p);
-    delay(20);
-    uint16_t c = analogReadMilliVolts(p);
-    uint16_t d = (a > c) ? a - c : c - a;
-    if (a > 1300 && a < 2450 && d < 90) { batPin = p; saveBat(); return; }
   }
 }
