@@ -238,7 +238,7 @@ BatProbe batProbe(uint8_t p, uint16_t *pinMv) {
   pinMode(p, INPUT);
   if (hi - lo > 80) return BP_NONE;                 // drifts
   if (down < 100 || down < avg / 8) return BP_NONE; // nothing holds it up
-  if (avg >= 2350) return BP_HIGH;                  // more than a Li-ion cell: 5 V side?
+  if (avg >= 2350) return BP_HIGH;                  // more than half a Li-ion cell: 5 V or a pull-up
   if (avg >= 1300) return BP_BAT;                   // cell 2.6 .. 4.7 V
   return BP_NONE;
 }
@@ -294,7 +294,7 @@ void batterySetup() {
       oled.drawStr(2, 12, "BATTERY");
       oled.drawHLine(0, TOP_H - 1, SCR_W);
       oled.setFont(FONT);
-      char b[26];
+      char b[40];
       if (p <= 4) {
         batPin = p;
         saveBat();
@@ -308,11 +308,21 @@ void batterySetup() {
         sfx(1200, 120);
       } else {
         centerStr(28, "no battery found");
-        if (high <= 4) {
-          snprintf(b, sizeof(b), "GPIO%u sees 5 V:", high);
-          centerStr(40, b);
-          centerStr(50, "move the resistor");
-          centerStr(60, "to BAT+ (not OUT)");
+        if (high <= 4) {                   // a divider, but too much voltage
+          uint16_t pv = 0;
+          batProbe(high, &pv);
+          applyPinModes();
+          snprintf(b, sizeof(b), "GPIO%u %u.%02u V: too high", high, pv / 1000, (pv % 1000) / 10);
+          centerStr(37, b);
+          centerStr(46, "top resistor on 5 V, or");
+          centerStr(55, "the board pulls it up:");
+          uint8_t alt[2], na = 0;          // other free ADC pins, strap pin last
+          for (uint8_t q = 0; q <= 4 && na < 2; q++)
+            if (q != high && q != 2 && !batPinUsed(q)) alt[na++] = q;
+          if (na == 2)      snprintf(b, sizeof(b), "BAT+, or GPIO%u / GPIO%u", alt[0], alt[1]);
+          else if (na == 1) snprintf(b, sizeof(b), "BAT+, or use GPIO%u", alt[0]);
+          else              snprintf(b, sizeof(b), "move it to BAT+");
+          centerStr(63, b);
         } else {
           centerStr(42, "2 equal resistors:");
           centerStr(52, "BAT+ - pin - GND");
@@ -343,7 +353,7 @@ void batterySetup() {
         uint16_t mv = pv * 2;
         snprintf(line, sizeof(line), "%s%u:%u.%02u>%u.%02u%s%s", p == batPin ? "*" : " ", p,
                  pv / 1000, (pv % 1000) / 10, mv / 1000, (mv % 1000) / 10,
-                 res[p] == BP_BAT ? " bat" : res[p] == BP_HIGH ? " 5V?" : "",
+                 res[p] == BP_BAT ? " bat" : res[p] == BP_HIGH ? " high" : "",
                  (p == 2) ? " strap" : "");
       }
       if (p == sel) { oled.drawBox(0, y, SCR_W, 8); oled.setDrawColor(0); }

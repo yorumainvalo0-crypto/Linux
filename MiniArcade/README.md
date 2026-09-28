@@ -41,7 +41,10 @@ release have `MiniArcade-<version>.zip` with a German how-to.
              it by itself at every start until one is found. On the
              "set up battery" page RIGHT searches again (e.g. after
              rewiring), "bat" marks the pin that looks like the battery
-             and "5V?" a pin wired to the booster output instead of BAT+.
+             and "high" a pin with too much voltage: the upper resistor
+             sits on the 5 V booster output instead of BAT+, or the board
+             pulls that pin up (GPIO2 is a strapping pin - GPIO3 or 4 is
+             the safer choice).
              UP/DOWN + OK picks a pin by hand, "no battery" stops the
              search. A floating pin is told apart with the internal
              pull-down: it falls to 0 V, the divider keeps the pin up.
@@ -247,6 +250,7 @@ build fills in its own repository. The repository must be public.
                                          controller, Sokoban editor, backup)
     ESP-IDF 5.3.2       820 kB firmware  9.8: + phone hotspot
     ESP-IDF 5.3.2       820 kB firmware  9.9: battery found by itself, smoothed percentage
+    ESP-IDF 5.3.2       820 kB firmware  9.10: fix: the pull-down test of the battery search
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 

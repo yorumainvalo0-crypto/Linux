@@ -1162,7 +1162,8 @@ int main(int argc,char**argv){
     check("menu shows percent", saw("%"));
   } else if(scenario=="bat5v"){
     check("nothing taken as battery", batPin>4);
-    check("5 V divider explained", saw("no battery found")&&saw("GPIO1 sees 5 V:")&&saw("to BAT+ (not OUT)"));
+    check("too high explained, other pins offered", saw("no battery found")&&saw("GPIO1 2.50 V: too high")&&saw("the board pulls it up:")&&saw("BAT+, or use GPIO0"));
+    check("marked on the list", saw(" high"));
   } else if(scenario=="batnone"){
     check("no battery chosen by hand is kept", simNvsU16["bat"]==253&&batPin==253);
     batDetect();
