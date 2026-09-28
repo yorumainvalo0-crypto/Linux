@@ -420,13 +420,25 @@ int main(int argc,char**argv){
       tap(5000,16);                                                // open settings
       for(int i=0;i<6;i++) tap(5600+i*300,2);
       tap(7500,16);                                                // wlan page, joins
-      for(int i=0;i<4;i++) tap(8000+i*250,2);                      // down to "stay online"
+      for(int i=0;i<5;i++) tap(8000+i*250,2);                      // down to "stay online"
       tap(9200,16);                                                // -> yes
       simTimeHook=[](uint32_t t){ if(t==10000) simRestoreAsk=true; };   // a backup comes in
       tap(10800,16);                                               // OK on the question
       tap(11500,2); tap(11800,16);                                 // "back"
       script.push_back({12500,16}); script.push_back({13400,0});   // hold OK: settings -> menu
       captureAt={2150,2600};
+  } else if(scenario=="wlanplay"){ simEnd=14000; ups(1,1300,220);
+      auto tap=[&](uint32_t t,uint8_t k){ script.push_back({t,k}); script.push_back({t+60,0}); };
+      tap(5000,16);                                                // open settings
+      for(int i=0;i<6;i++) tap(5600+i*300,2);
+      tap(7500,16);                                                // wlan page, joins
+      for(int i=0;i<3;i++) tap(8000+i*250,2);                      // down to "phone hotspot"
+      tap(9000,16);                                                // open it
+      tap(9800,4);                                                 // LEFT: new password
+      tap(10500,8);                                                // RIGHT: no password
+      tap(11200,8);                                                // RIGHT: password again
+      tap(11900,16);                                               // OK: stop
+      captureAt={2400,2600};
   } else if(scenario=="versions"){ simEnd=8000;
       simTwoSlots=true;                                             // fresh update, nothing pressed
       script.push_back({6000,2}); script.push_back({6060,0});      // first key press in the menu
@@ -1084,6 +1096,12 @@ int main(int argc,char**argv){
     check("menu shows that the WLAN is on", shown);
     phoneLinkOff();
     check("multiplayer (or anyone) can switch it off", !phoneLink&&!pollHook&&simNet==NET_OFF);
+  } else if(scenario=="wlanplay"){
+    check("hotspot offered on the wlan page", saw("phone hotspot"));
+    check("name, password and address shown", saw("PHONE HOTSPOT")&&saw("join  MiniArcade-AB12")&&saw("pass  12345678")&&saw("open  http://192.168.4.1"));
+    check("LEFT makes a new password", saw("pass  87654321"));
+    check("RIGHT switches the password off and on", saw("no password - open!")&&!simApOpen);
+    check("OK stops the hotspot", simNet==NET_OFF||simNet==NET_ONLINE);
   } else if(scenario=="wlanfail"){
     check("while joining: state shown, no disconnect offered", saw("joining")&&saw("stop joining"));
     check("after failing: failed, connect offered", saw("failed")&&saw("can't join HomeNet")&&saw("connect"));

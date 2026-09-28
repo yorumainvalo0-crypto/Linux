@@ -79,10 +79,11 @@ static esp_err_t text(httpd_req_t *r, const char *status, const char *t) {
   return httpd_resp_sendstr(r, t);
 }
 
-// the phone pages only exist in the own WLAN, not on the open setup hotspot
+// the phone pages exist in the own WLAN and on the phone hotspot, never on
+// the setup hotspot
 static bool allowed(httpd_req_t *r) {
-  if (netState() == NET_ONLINE) return true;
-  text(r, "403 Forbidden", "only in your own WLAN");
+  if (netState() == NET_ONLINE || netState() == NET_PLAY) return true;
+  text(r, "403 Forbidden", "only in your own WLAN or on the phone hotspot");
   return false;
 }
 
@@ -169,7 +170,13 @@ static const char P_SETTINGS[] =
   "<label>Sleep after minutes without a key (0 = never)<input id=sl type=number min=0 max=60></label>"
   "<label><input id=so type=checkbox style=width:auto> Sound</label>"
   "<label>CPU clock<select id=ck><option value=160>160 MHz<option value=80>80 MHz (the battery lasts longer)</select></label>"
-  "<p class=m>The clock is used from the next start on.</p><p id=msg class=m></p><script>"
+  "<p class=m>The clock is used from the next start on.</p>"
+  "<h1>Phone hotspot</h1><label>Password (8 or more characters, empty = no password)"
+  "<input id=hp maxlength=63 autocomplete=off></label><button onclick=\"set('hpw',$('hp').value)\">save the password</button>"
+  "<p class=m>Used from the next start of the hotspot (console: WLAN page, \"phone hotspot\"). "
+  "There, LEFT makes a new random password and RIGHT switches the password off and on.</p>"
+  "<p id=msg class=m></p><script>"
+  "fetch('/api/hotspot').then(function(r){return r.json()}).then(function(h){$('hp').value=h.pw});"
   "function set(k,v){fetch('/api/set?k='+k+'&v='+encodeURIComponent(v),{method:'POST'})"
   ".then(function(r){return r.text()}).then(function(t){$('msg').textContent=t})}"
   "fetch('/api/settings').then(function(r){return r.json()}).then(function(s){$('nm').value=s.name;"
@@ -300,15 +307,36 @@ static esp_err_t settingsGet(httpd_req_t *r) { return json(r, UI_SETTINGS); }
 
 static esp_err_t setPost(httpd_req_t *r) {
   if (!allowed(r)) return ESP_OK;
-  char q[128], k[16], v[48];
+  char q[256], k[16], v[200];                     // v: a hotspot password, URL-encoded
   if (httpd_req_get_url_query_str(r, q, sizeof(q)) != ESP_OK ||
       httpd_query_key_value(q, "k", k, sizeof(k)) != ESP_OK ||
       httpd_query_key_value(q, "v", v, sizeof(v)) != ESP_OK) return text(r, "400 Bad Request", "k and v missing");
   urlDecode(v);
+  if (!strcmp(k, "hpw") && netState() == NET_PLAY && !netApPass()[0])   // open hotspot: not from strangers
+    return text(r, "403 Forbidden", "switch the password on at the console first (RIGHT on the hotspot page)");
+  if (!strcmp(k, "hpw"))                          // the hotspot lives in net.cpp, not in the games
+    return netApSetPass(v) ? text(r, "200 OK", v[0] ? "saved - used from the next hotspot start"
+                                                    : "no password from the next hotspot start")
+                           : text(r, "400 Bad Request", "8 to 63 plain characters, or empty");
   uiA = k; uiB = v;
   if (!askUi(UI_SET)) return busy(r);
   if (uiErr) return text(r, "400 Bad Request", uiErr);
   return text(r, "200 OK", "saved");
+}
+
+static esp_err_t hotspotGet(httpd_req_t *r) {
+  if (!allowed(r)) return ESP_OK;
+  char b[96], esc[70];
+  size_t k = 0;
+  for (const char *p = netApPass(); *p && k < sizeof(esc) - 3; p++) {   // JSON-safe
+    if (*p == '"' || *p == '\\') esc[k++] = '\\';
+    esc[k++] = *p;
+  }
+  esc[k] = 0;
+  snprintf(b, sizeof(b), "{\"pw\":\"%s\"}", esc);
+  httpd_resp_set_type(r, "application/json");
+  httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+  return httpd_resp_sendstr(r, b);
 }
 
 static esp_err_t screenGet(httpd_req_t *r) {
@@ -475,6 +503,7 @@ void phoneRegister(void *server) {
     { "/api/stats",    HTTP_GET,  statsGet,     NULL },
     { "/api/settings", HTTP_GET,  settingsGet,  NULL },
     { "/api/set",      HTTP_POST, setPost,      NULL },
+    { "/api/hotspot",  HTTP_GET,  hotspotGet,   NULL },
     { "/api/screen",   HTTP_GET,  screenGet,    NULL },
     { "/api/key",      HTTP_POST, keyPost,      NULL },
     { "/api/level",    HTTP_GET,  levelGet,     NULL },

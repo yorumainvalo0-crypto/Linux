@@ -71,7 +71,7 @@ void wlanRun() {
   uint8_t sel = 0, top = 0;
   bool leaving = false;
   if (phoneLink) { phoneLink = false; pollHook = NULL; }        // this page runs netTick itself
-  if (netHasConfig() && netState() != NET_ONLINE) netConnect();
+  if (netHasConfig() && netState() != NET_ONLINE && netState() != NET_PLAY) netConnect();
   btnClear();
   for (;;) {
     netTick();                             // first: the last picture is still in the buffer
@@ -115,9 +115,28 @@ void wlanRun() {
     }
     if (locked) { wlanProgress(jb); oled.sendBuffer(); continue; }
     if (st == NET_SETUP) { wlanSetupHelp(); oled.sendBuffer(); continue; }
+    if (st == NET_PLAY) {                  // the phone hotspot is open
+      if (btn(B_LEFT))  { netApNewPass();    sfx(900, 40); }       // new random password
+      if (btn(B_RIGHT)) { netApToggleOpen(); sfx(700, 40); }       // password on / off
+      if (btn(B_OK))    { netStop();         sfx(1200, 50); btnClear(); continue; }
+      char b[40];
+      wlanTitle("PHONE HOTSPOT");
+      snprintf(b, sizeof(b), "join  %s", netApName());
+      oled.drawStr(2, 24, b);
+      const char *pw = netApPass();
+      if (pw[0]) snprintf(b, sizeof(b), "pass  %.24s", pw);
+      else       snprintf(b, sizeof(b), "no password - open!");
+      oled.drawStr(2, 33, b);
+      oled.drawStr(2, 42, "open  http://192.168.4.1");
+      oled.drawHLine(0, 46, SCR_W);
+      oled.drawStr(2, 55, "LEFT new pw  RIGHT on/off");
+      oled.drawStr(2, 64, "OK = stop");
+      oled.sendBuffer();
+      continue;
+    }
 
     bool on = (st == NET_CONNECTING || st == NET_ONLINE);
-    const uint8_t ITEMS = 6, ROWS_W = 5;
+    const uint8_t ITEMS = 7, ROWS_W = 5;
     if (btn(B_UP)   && sel)             { sel--; sfx(700, 15); }
     if (btn(B_DOWN) && sel < ITEMS - 1) { sel++; sfx(700, 15); }
     if (sel < top) top = sel;
@@ -135,15 +154,17 @@ void wlanRun() {
         else if (jb == JOB_NEWER)   netInstallUpdate();
         else if (jb != JOB_CHECKING) netCheckUpdate();
       } else if (sel == 3) {
-        netForget();
+        netPlay();                         // phone hotspot, with or without password
       } else if (sel == 4) {
+        netForget();
+      } else if (sel == 5) {
         wlanStay = !wlanStay;
       } else leaving = true;
       btnClear();
       continue;
     }
 
-    char info[26], item[6][26];
+    char info[26], item[7][26];
     if (jb == JOB_ERROR)            snprintf(info, sizeof(info), "%s", netError());
     else if (st == NET_ONLINE)      snprintf(info, sizeof(info), "http://%s", netAddress());
     else if (st == NET_CONNECTING)  snprintf(info, sizeof(info), "joining %s", netSsid());
@@ -157,9 +178,10 @@ void wlanRun() {
     else if (jb == JOB_NEWER)       snprintf(item[2], 26, "install %s", netRemoteVersion());
     else if (jb == JOB_UPTODATE)    snprintf(item[2], 26, "up to date");
     else                            snprintf(item[2], 26, "check for update");
-    snprintf(item[3], 26, "forget network");
-    snprintf(item[4], 26, "stay online: %s", wlanStay ? "yes" : "no");   // phone pages while playing
-    snprintf(item[5], 26, "back");
+    snprintf(item[3], 26, "phone hotspot");
+    snprintf(item[4], 26, "forget network");
+    snprintf(item[5], 26, "stay online: %s", wlanStay ? "yes" : "no");   // phone pages while playing
+    snprintf(item[6], 26, "back");
 
     wlanTitle("WLAN");
     {
@@ -183,7 +205,7 @@ void wlanRun() {
     }
     oled.sendBuffer();
   }
-  if (wlanStay && netState() == NET_ONLINE) {   // keep serving the phone while playing
+  if (wlanStay && (netState() == NET_ONLINE || netState() == NET_PLAY)) {   // keep serving the phone
     phoneLink = true;
     pollHook = phoneHook;
   } else netStop();

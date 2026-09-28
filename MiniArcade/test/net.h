@@ -40,6 +40,20 @@ bool phoneAsking()          { return simRestoreAsk; }
 void phoneAnswer(bool yes)  { simRestoreAnswer = yes ? 1 : 2; simRestoreAsk = false; }
 void netRestartLater()      {}
 
+// the phone hotspot
+static char simApPass[65] = "12345678";
+static bool simApOpen = false;
+void        netPlay()           { simNet = NET_PLAY; }
+const char *netApPass()         { return simApOpen ? "" : simApPass; }
+void        netApNewPass()      { strcpy(simApPass, "87654321"); }
+void        netApToggleOpen()   { simApOpen = !simApOpen; }
+bool        netApSetPass(const char *p) {
+  size_t n = strlen(p);
+  if (n && (n < 8 || n > 63)) return false;
+  simApOpen = !n; if (n) strcpy(simApPass, p);
+  return true;
+}
+
 // two stored firmwares only in the "versions" scenarios
 static bool simTwoSlots = false, simConfirmed = false, simSwitched = false;
 

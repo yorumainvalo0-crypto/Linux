@@ -10,6 +10,7 @@
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "esp_http_server.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
@@ -79,6 +80,57 @@ static void saveCfg(const char *s, const char *p) {
   nvs_commit(h);
   nvs_close(h);
 }
+
+// ---------------- phone hotspot password ----------------
+/* The phone hotspot gets a random 8 digit password the first time; the
+   console can roll a new one or switch it off, the phone can set its own. */
+static char apPass[65];
+static bool apOpen = false, apLoaded = false;
+
+static void apSave() {
+  nvs_handle_t h;
+  if (nvs_open("net", NVS_READWRITE, &h) != ESP_OK) return;
+  nvs_set_str(h, "hpw", apPass);
+  nvs_set_u8(h, "hop", apOpen ? 1 : 0);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+static void apRandom() {
+  for (uint8_t i = 0; i < 8; i++) apPass[i] = '0' + esp_random() % 10;
+  apPass[8] = 0;
+}
+
+static void apLoad() {
+  if (apLoaded) return;
+  apLoaded = true;
+  apPass[0] = 0;
+  nvs_handle_t h;
+  if (nvs_open("net", NVS_READONLY, &h) == ESP_OK) {
+    size_t n = sizeof(apPass);
+    if (nvs_get_str(h, "hpw", apPass, &n) != ESP_OK) apPass[0] = 0;
+    uint8_t o = 0;
+    if (nvs_get_u8(h, "hop", &o) == ESP_OK) apOpen = o != 0;
+    nvs_close(h);
+  }
+  if (strlen(apPass) < 8) { apRandom(); apSave(); }
+}
+
+const char *netApPass() { apLoad(); return apOpen ? "" : apPass; }
+
+bool netApSetPass(const char *p) {
+  apLoad();
+  size_t n = strlen(p);
+  if (n && (n < 8 || n > 63)) return false;             // what WPA2 allows
+  for (const char *c = p; *c; c++) if (*c < ' ' || *c > '~') return false;
+  if (n) { strlcpy(apPass, p, sizeof(apPass)); apOpen = false; }
+  else apOpen = true;
+  apSave();                                              // used from the next start of the hotspot
+  return true;
+}
+
+// the pages that change things only on networks with a password
+static bool trusted() { return state == NET_ONLINE || (state == NET_PLAY && !apOpen); }
 
 bool        netHasConfig() { loadCfg(); return ssid[0] != 0; }
 const char *netSsid()      { loadCfg(); return ssid; }
@@ -423,11 +475,14 @@ static esp_err_t pageGet(httpd_req_t *r) {
   char b[96];
   if (state == NET_SETUP)
     snprintf(b, sizeof(b), "<p class=m>firmware %s &middot; setup hotspot</p>", netVersion());
+  else if (state == NET_PLAY)
+    snprintf(b, sizeof(b), "<p class=m>firmware %s &middot; phone hotspot</p>", netVersion());
   else
     snprintf(b, sizeof(b), "<p class=m>firmware %s &middot; WLAN ", netVersion());
   chunk(r, b);
-  if (state != NET_SETUP) { chunkEsc(r, netSsid()); chunk(r, "</p>"); }
-  if (state == NET_ONLINE) { chunk(r, PAGE_UPDATE); chunk(r, PHONE_LINKS); }
+  if (state != NET_SETUP && state != NET_PLAY) { chunkEsc(r, netSsid()); chunk(r, "</p>"); }
+  if (state == NET_ONLINE) chunk(r, PAGE_UPDATE);
+  if (state == NET_ONLINE || state == NET_PLAY) chunk(r, PHONE_LINKS);
   chunk(r, PAGE_WIFI);
   if (state == NET_SETUP) chunkNetworks(r);
   chunk(r, PAGE_TAIL);
@@ -510,8 +565,8 @@ static esp_err_t uploadFail(httpd_req_t *r, char *buf, const char *why) {
 
 // receives the raw file body and writes it into the free app slot
 static esp_err_t updatePost(httpd_req_t *r) {
-  // the setup hotspot is open to everybody around - no firmware from there
-  if (state == NET_SETUP) return sendText(r, "403 Forbidden", "updates only over your own WLAN");
+  // open hotspots reach everybody around - no firmware from there
+  if (!trusted()) return sendText(r, "403 Forbidden", "updates only over your own WLAN or a hotspot with a password");
   const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
   size_t total = r->content_len;
   if (!part) return sendText(r, "500 Internal Server Error", "no update slot - flash once by cable");
@@ -644,13 +699,45 @@ void netConnect() {
   startServer();
 }
 
+static void apNameFill() {
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+  snprintf(apName, sizeof(apName), "MiniArcade-%02X%02X", mac[4], mac[5]);
+}
+
+/* The phone hotspot: the phone joins the console directly (no router, no
+   internet) and gets the phone pages at 192.168.4.1.                    */
+void netPlay() {
+  apLoad();
+  state = NET_PLAY;                               // first, so no reconnect is tried
+  dnsStop();
+  radioOn(WIFI_MODE_AP);
+  apNameFill();
+  wifi_config_t ac = {};
+  memcpy(ac.ap.ssid, apName, strlen(apName));
+  ac.ap.ssid_len = strlen(apName);
+  ac.ap.channel = 1;
+  ac.ap.max_connection = 4;
+  if (apOpen) ac.ap.authmode = WIFI_AUTH_OPEN;
+  else {
+    ac.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    memcpy(ac.ap.password, apPass, strlen(apPass));
+  }
+  esp_wifi_set_config(WIFI_IF_AP, &ac);
+  esp_wifi_start();
+  txPower();
+  strlcpy(addr, AP_IP, sizeof(addr));
+  startServer();
+}
+
+void netApNewPass()    { apLoad(); apRandom(); apOpen = false; apSave(); if (state == NET_PLAY) netPlay(); }
+void netApToggleOpen() { apLoad(); apOpen = !apOpen;             apSave(); if (state == NET_PLAY) netPlay(); }
+
 void netSetup() {
   state = NET_SETUP;                              // first, so the disconnect is not retried
   dnsStop();
   radioOn(WIFI_MODE_APSTA);                       // STA part only scans for networks
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-  snprintf(apName, sizeof(apName), "MiniArcade-%02X%02X", mac[4], mac[5]);
+  apNameFill();
   wifi_config_t ac = {};
   memcpy(ac.ap.ssid, apName, strlen(apName));
   ac.ap.ssid_len = strlen(apName);
