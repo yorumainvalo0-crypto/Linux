@@ -9,7 +9,8 @@ enum NetState : uint8_t {
   NET_CONNECTING,   // joining the saved network
   NET_ONLINE,       // connected, update page at http://<netAddress()>/
   NET_FAILED,       // saved network not reachable or wrong password
-  NET_SETUP         // own hotspot netApName(), setup page at 192.168.4.1
+  NET_SETUP,        // own hotspot netApName(), setup page at 192.168.4.1
+  NET_PLAY          // phone hotspot netApName() (password netApPass()), phone pages at 192.168.4.1
 };
 
 enum NetJob : uint8_t {
@@ -28,6 +29,11 @@ const char *netSsid();
 void        netConnect();         // join the saved network, start the web page
 void        netSetup();           // open the setup hotspot
 void        netStop();            // web page and radio off
+void        netPlay();            // phone hotspot: the phone pages without a WLAN around
+const char *netApPass();          // its password, "" = open to everybody
+void        netApNewPass();       // a new random password (restarts a running hotspot)
+void        netApToggleOpen();    // password on / off (restarts a running hotspot)
+bool        netApSetPass(const char *p);   // from the phone: 8..63 characters, "" = open
 void        netForget();          // drop the stored WLAN
 void        netTick();            // call from the UI loop: deferred work
 bool        netRadioLink(uint8_t channel);   // radio only, for ESP-NOW (multiplayer)

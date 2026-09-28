@@ -89,6 +89,8 @@ open, and it needs a cpu clock of at least 80 MHz (the page offers to switch).
                        phone, the setup page opens by itself (otherwise go
                        to 192.168.4.1), pick the network, enter the password.
     check for update   asks GitHub for the latest release, OK again installs it
+    phone hotspot      the console opens its own WLAN for the phone pages
+                       (see "On the phone")
     forget network     deletes the stored network
 
 The update page in the browser can do the same: check GitHub, or upload a
@@ -131,8 +133,19 @@ or, on a fresh board, `miniarcade-full.bin` from a release at address 0x0
 ## On the phone
 
 With the console in your WLAN (Settings -> "wlan and update..." -> connect),
-open the address it shows in the phone's browser. Below the update part the
-page has:
+open the address it shows in the phone's browser. Without a WLAN around,
+pick "phone hotspot" on the same page: the console opens its own network
+"MiniArcade-XXXX" and shows its password. Join it with the phone and open
+http://192.168.4.1 (no internet meanwhile).
+
+    LEFT               a new random password (phones have to join again)
+    RIGHT              password off / on - off means anybody nearby can
+                       join, so firmware uploads are refused then
+    OK                 closes the hotspot
+    phone: Settings    set an own password (8..63 characters, empty = none),
+                       used from the next start of the hotspot
+
+The first password is 8 random digits. Below the update part the page has:
 
     Stats and awards   best score, times played and play time of every game,
                        all awards with what they need
@@ -151,9 +164,10 @@ page has:
 
 Screen and controller while playing: set "stay online: yes" on the WLAN page
 and leave it - the WLAN stays on (the menu shows "WLAN" top right) and the
-console answers the phone between frames. The multiplayer page switches it
-off again, as it needs the radio itself. The pages only exist in your own
-WLAN, never on the open setup hotspot.
+console answers the phone between frames (this works on the phone hotspot
+too). The multiplayer page switches it off again, as it needs the radio
+itself. The pages only exist in your own WLAN and on the phone hotspot,
+never on the open setup hotspot.
 
 ## Multiplayer
 
@@ -224,6 +238,7 @@ build fills in its own repository. The repository must be public.
     ESP-IDF 5.3.2       797 kB firmware  9.5: + 7 games, online Pac-Man and Battleship
     ESP-IDF 5.3.2       818 kB firmware  9.7: + phone pages (stats, settings, screen,
                                          controller, Sokoban editor, backup)
+    ESP-IDF 5.3.2       820 kB firmware  9.8: + phone hotspot
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 
