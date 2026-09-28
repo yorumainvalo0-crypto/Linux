@@ -89,10 +89,16 @@ uint32_t analogReadMilliVolts(uint8_t pin) {
     u.unit_id = ADC_UNIT_1;
     if (adc_oneshot_new_unit(&u, &adcUnit) != ESP_OK) { adcUnit = NULL; return 0; }
   }
-  adc_oneshot_chan_cfg_t c = {};
-  c.atten    = ADC_ATTEN_DB_12;               // input range roughly 0 .. 2.5 V
-  c.bitwidth = ADC_BITWIDTH_12;
-  adc_oneshot_config_channel(adcUnit, (adc_channel_t)pin, &c);
+  /* Only once per pin: configuring a channel also switches the pin's pull
+     resistors off, which silently undid the pull-down of the battery test. */
+  static uint8_t configured = 0;
+  if (!(configured & (1 << pin))) {
+    adc_oneshot_chan_cfg_t c = {};
+    c.atten    = ADC_ATTEN_DB_12;             // input range roughly 0 .. 2.5 V
+    c.bitwidth = ADC_BITWIDTH_12;
+    adc_oneshot_config_channel(adcUnit, (adc_channel_t)pin, &c);
+    configured |= (uint8_t)(1 << pin);
+  }
 
   if (!caliTried) {                           // one-time calibration setup
     caliTried = true;
