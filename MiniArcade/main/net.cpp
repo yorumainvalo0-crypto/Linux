@@ -427,7 +427,7 @@ static esp_err_t pageGet(httpd_req_t *r) {
     snprintf(b, sizeof(b), "<p class=m>firmware %s &middot; WLAN ", netVersion());
   chunk(r, b);
   if (state != NET_SETUP) { chunkEsc(r, netSsid()); chunk(r, "</p>"); }
-  if (state == NET_ONLINE) chunk(r, PAGE_UPDATE);
+  if (state == NET_ONLINE) { chunk(r, PAGE_UPDATE); chunk(r, PHONE_LINKS); }
   chunk(r, PAGE_WIFI);
   if (state == NET_SETUP) chunkNetworks(r);
   chunk(r, PAGE_TAIL);
@@ -583,16 +583,19 @@ static void startServer() {
   c.uri_match_fn = httpd_uri_match_wildcard;
   c.stack_size = 6144;
   c.lru_purge_enable = true;
+  c.max_uri_handlers = 24;                        // with the phone pages
   if (httpd_start(&server, &c) != ESP_OK) { server = NULL; return; }
-  static const httpd_uri_t uris[] = {             // order matters: "/*" catches the rest
+  static const httpd_uri_t uris[] = {
     { "/",       HTTP_GET,  pageGet,     NULL },
     { "/status", HTTP_GET,  statusGet,   NULL },
     { "/gh",     HTTP_POST, githubPost,  NULL },
     { "/save",   HTTP_POST, savePost,    NULL },
     { "/update", HTTP_POST, updatePost,  NULL },
-    { "/*",      HTTP_GET,  redirectGet, NULL },
   };
   for (const httpd_uri_t &u : uris) httpd_register_uri_handler(server, &u);
+  phoneRegister(server);
+  static const httpd_uri_t rest = { "/*", HTTP_GET, redirectGet, NULL };   // last: catches the rest
+  httpd_register_uri_handler(server, &rest);
 }
 
 static void stopServer() {
@@ -679,7 +682,10 @@ void netStop() {
 void netTick() {
   if (wantConnect && (int32_t)(nowMs() - connectAt) >= 0) { wantConnect = false; netConnect(); }
   if (restartAt && (int32_t)(nowMs() - restartAt) >= 0) esp_restart();
+  if (server) phoneTick();                        // a phone page waiting for the games
 }
+
+void netRestartLater() { restartSoon(); }
 
 const char *netAskVersion() { return askVer; }
 void        netAnswer(bool yes) { answer = yes ? 1 : 2; }

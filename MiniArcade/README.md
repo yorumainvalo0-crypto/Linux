@@ -55,6 +55,9 @@ the WLAN page only exists in this build, because it needs `main/net.h`.
     main/setup_wizard.h   key, sound and battery setup
     main/settings.h       settings page
     main/wlan.h           WLAN page and firmware versions
+    main/phone.cpp        the phone pages (HTTP, backup to and from the flash)
+    main/phone.h          what the console tells them (stats, settings, keys, levels)
+    main/backupfmt.h      the backup file format (tested on the PC)
     main/multiplayer.h    multiplayer page and the online games
     main/rtgames.h        rules of Pong, Snake and Pac-Man for two consoles (no hardware,
                           tested on the PC); Pac-Man alone uses it too
@@ -125,6 +128,33 @@ or, on a fresh board, `miniarcade-full.bin` from a release at address 0x0
 
     esptool.py --chip esp32c3 write_flash 0x0 miniarcade-full.bin
 
+## On the phone
+
+With the console in your WLAN (Settings -> "wlan and update..." -> connect),
+open the address it shows in the phone's browser. Below the update part the
+page has:
+
+    Stats and awards   best score, times played and play time of every game,
+                       all awards with what they need
+    Settings           player name, brightness, sleep time, sound on/off,
+                       cpu clock (from the next start on)
+    Screen             live picture of the display, "save a picture" = PNG
+    Controller         the screen plus big keys - play with the phone
+                       (a computer's arrow keys and Enter work too)
+    Sokoban editor     draw up to 3 own levels; on the console they come
+                       after the last built-in level ("OWN 1".."OWN 3")
+    Backup             download all saves as a text file (scores, stats,
+                       awards, Mine world, own levels, name, friends,
+                       settings - not the WLAN password) and restore it:
+                       the WLAN page on the console asks first, then the
+                       console restarts
+
+Screen and controller while playing: set "stay online: yes" on the WLAN page
+and leave it - the WLAN stays on (the menu shows "WLAN" top right) and the
+console answers the phone between frames. The multiplayer page switches it
+off again, as it needs the radio itself. The pages only exist in your own
+WLAN, never on the open setup hotspot.
+
 ## Multiplayer
 
 Library -> "Multiplayer". Every console with this page open appears in the
@@ -192,6 +222,8 @@ build fills in its own repository. The repository must be public.
                                          each update slot holds 1.9 MB
     ESP-IDF 5.3.2       792 kB firmware  9.4: + pause, stats, awards, online Pong / Snake
     ESP-IDF 5.3.2       797 kB firmware  9.5: + 7 games, online Pac-Man and Battleship
+    ESP-IDF 5.3.2       818 kB firmware  9.7: + phone pages (stats, settings, screen,
+                                         controller, Sokoban editor, backup)
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 

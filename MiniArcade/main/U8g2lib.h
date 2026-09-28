@@ -28,6 +28,7 @@ public:
   void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1);
   void drawStr(int16_t x, int16_t y, const char *s);
   int16_t getStrWidth(const char *s) { return (int16_t)strlen(s) * (font ? 7 : 5); }
+  uint8_t *getBufferPtr()      { return fb; }   // same name as in U8g2
 private:
   uint8_t fb[1024];            // 128 x 64, one bit per pixel, SSD1306 page order
   uint8_t font = 0, color = 1;

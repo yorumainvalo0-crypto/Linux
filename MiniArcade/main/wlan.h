@@ -50,16 +50,33 @@ static void wlanSetupHelp() {
   centerStr(64, "hold OK = leave");
 }
 
+/* "stay online": the WLAN stays on after this page is left, so the phone
+   pages (screen, controller, ...) work while playing. The UI loop then
+   serves them from poll(). Deep sleep waits meanwhile; the multiplayer
+   page, which needs the radio for itself, switches it off.           */
+static bool wlanStay = false;        // chosen on this page
+static bool phoneLink = false;       // WLAN on outside this page right now
+
+static void phoneHook() { netTick(); lastInput = millis(); }
+
+void phoneLinkOff() {
+  if (!phoneLink) return;
+  phoneLink = false;
+  pollHook = NULL;
+  netStop();
+}
+
 void wlanRun() {
   if (runClock < 80) { wlanNeedsClock(); return; }
-  uint8_t sel = 0;
+  uint8_t sel = 0, top = 0;
   bool leaving = false;
-  if (netHasConfig()) netConnect();
+  if (phoneLink) { phoneLink = false; pollHook = NULL; }        // this page runs netTick itself
+  if (netHasConfig() && netState() != NET_ONLINE) netConnect();
   btnClear();
   for (;;) {
+    netTick();                             // first: the last picture is still in the buffer
     bool alive = poll();
     lastInput = millis();                  // no deep sleep while the radio is on
-    netTick();
     NetState st = netState();
     NetJob   jb = netJob();
     bool locked = (jb == JOB_UPDATING || jb == JOB_DONE || jb == JOB_ASKING);   // update running
@@ -85,12 +102,26 @@ void wlanRun() {
       oled.sendBuffer();
       continue;
     }
+    if (phoneAsking()) {                   // a backup came in from the phone
+      if (btn(B_OK))                        { phoneAnswer(true);  sfx(1200, 50); }
+      if (btn(B_LEFT) || btn(B_RIGHT))      { phoneAnswer(false); sfx(300, 120); }
+      wlanTitle("BACKUP");
+      centerStr(30, "restore the backup");
+      centerStr(40, "from the phone?");
+      centerStr(51, "all saves are replaced");
+      centerStr(63, "OK = yes  LEFT = no");
+      oled.sendBuffer();
+      continue;
+    }
     if (locked) { wlanProgress(jb); oled.sendBuffer(); continue; }
     if (st == NET_SETUP) { wlanSetupHelp(); oled.sendBuffer(); continue; }
 
     bool on = (st == NET_CONNECTING || st == NET_ONLINE);
-    if (btn(B_UP)   && sel)     { sel--; sfx(700, 15); }
-    if (btn(B_DOWN) && sel < 4) { sel++; sfx(700, 15); }
+    const uint8_t ITEMS = 6, ROWS_W = 5;
+    if (btn(B_UP)   && sel)             { sel--; sfx(700, 15); }
+    if (btn(B_DOWN) && sel < ITEMS - 1) { sel++; sfx(700, 15); }
+    if (sel < top) top = sel;
+    if (sel >= top + ROWS_W) top = sel - ROWS_W + 1;
     if (btn(B_OK)) {
       sfx(1200, 50);
       if (sel == 0) {
@@ -105,12 +136,14 @@ void wlanRun() {
         else if (jb != JOB_CHECKING) netCheckUpdate();
       } else if (sel == 3) {
         netForget();
+      } else if (sel == 4) {
+        wlanStay = !wlanStay;
       } else leaving = true;
       btnClear();
       continue;
     }
 
-    char info[26], item[5][26];
+    char info[26], item[6][26];
     if (jb == JOB_ERROR)            snprintf(info, sizeof(info), "%s", netError());
     else if (st == NET_ONLINE)      snprintf(info, sizeof(info), "http://%s", netAddress());
     else if (st == NET_CONNECTING)  snprintf(info, sizeof(info), "joining %s", netSsid());
@@ -125,7 +158,8 @@ void wlanRun() {
     else if (jb == JOB_UPTODATE)    snprintf(item[2], 26, "up to date");
     else                            snprintf(item[2], 26, "check for update");
     snprintf(item[3], 26, "forget network");
-    snprintf(item[4], 26, "back");
+    snprintf(item[4], 26, "stay online: %s", wlanStay ? "yes" : "no");   // phone pages while playing
+    snprintf(item[5], 26, "back");
 
     wlanTitle("WLAN");
     {
@@ -141,15 +175,18 @@ void wlanRun() {
       oled.drawStr(46, 12, s);
     }
     oled.drawStr(2, 23, info);
-    for (uint8_t i = 0; i < 5; i++) {
-      uint8_t y = 24 + i * 8;                // last baseline: row 63
+    for (uint8_t r = 0; r < ROWS_W; r++) {
+      uint8_t i = top + r, y = 24 + r * 8;   // last baseline: row 63
       if (i == sel) { oled.drawBox(0, y, SCR_W, 8); oled.setDrawColor(0); }
       oled.drawStr(3, y + 7, item[i]);
       oled.setDrawColor(1);
     }
     oled.sendBuffer();
   }
-  netStop();
+  if (wlanStay && netState() == NET_ONLINE) {   // keep serving the phone while playing
+    phoneLink = true;
+    pollHook = phoneHook;
+  } else netStop();
 }
 
 // ---------------- firmware version ----------------

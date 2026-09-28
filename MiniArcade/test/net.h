@@ -33,6 +33,13 @@ static uint8_t simAnswer = 0;       // 1 = yes, 2 = no
 const char *netAskVersion()     { return "9.4"; }
 void        netAnswer(bool yes) { simAnswer = yes ? 1 : 2; simJob = yes ? JOB_DONE : JOB_ERROR; }
 
+// a backup from the phone waiting for OK on the WLAN page
+static bool simRestoreAsk = false;
+static int  simRestoreAnswer = 0;   // 1 = yes, 2 = no
+bool phoneAsking()          { return simRestoreAsk; }
+void phoneAnswer(bool yes)  { simRestoreAnswer = yes ? 1 : 2; simRestoreAsk = false; }
+void netRestartLater()      {}
+
 // two stored firmwares only in the "versions" scenarios
 static bool simTwoSlots = false, simConfirmed = false, simSwitched = false;
 

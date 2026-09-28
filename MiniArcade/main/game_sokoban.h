@@ -26,11 +26,30 @@ static uint8_t  skUndo[SK_UNDO];                 // bits 0-1 direction, bit 2 = 
 static uint16_t skUndoN, skMoves;
 static uint8_t  skLast = 0;                      // level shown first next time
 
+/* Own levels, drawn on the phone (phone.h): three slots after the built-in
+   ones, always open, kept in flash as "sk0".."sk2".                    */
+#define SK_OWN     3
+#define SK_TEXTMAX (SK_W * SK_H + SK_H)
+static char skOwn[SK_OWN][SK_TEXTMAX + 1];
+
+void skOwnLoad() {
+  prefs.begin("arcade", true);
+  for (uint8_t i = 0; i < SK_OWN; i++) {
+    char k[4] = { 's', 'k', (char)('0' + i), 0 };
+    memset(skOwn[i], 0, sizeof(skOwn[i]));
+    prefs.getBytes(k, skOwn[i], SK_TEXTMAX);
+    skOwn[i][SK_TEXTMAX] = 0;
+  }
+  prefs.end();
+}
+
+static const char *skText(uint8_t lvl) { return lvl < SK_N ? SK_LEVELS[lvl] : skOwn[lvl - SK_N]; }
+
 bool skLoad(uint8_t lvl) {
   memset(sk, 0, sizeof(sk));
   skW = skH = 0;
   uint8_t x = 0, y = 0;
-  for (const char *p = SK_LEVELS[lvl]; ; p++) {
+  for (const char *p = skText(lvl); ; p++) {
     if (*p == '|' || !*p) {
       if (x > skW) skW = x;
       y++; x = 0;
@@ -124,25 +143,38 @@ static void skDrawMap() {
 static void skBar(uint8_t lvl, const char *right) {
   char b[24];
   oled.setFont(FONT_B);
-  snprintf(b, sizeof(b), "SOKOBAN %u", lvl + 1);
+  if (lvl < SK_N) snprintf(b, sizeof(b), "SOKOBAN %u", lvl + 1);
+  else            snprintf(b, sizeof(b), "OWN %u", lvl - SK_N + 1);
   oled.drawStr(2, 12, b);
   oled.setFont(FONT);
   rightStr(12, right);
   oled.drawHLine(0, TOP_H - 1, SCR_W);
 }
 
-// the level list: LEFT / RIGHT through the unlocked ones, OK plays
+// can this entry of the list be played? (the unlocked ones, own ones that exist)
+static bool skOpen(uint8_t lvl) {
+  if (lvl < SK_N) return lvl <= (curHigh < SK_N ? curHigh : SK_N - 1);   // curHigh = levels solved
+  return lvl < SK_N + SK_OWN && skOwn[lvl - SK_N][0];
+}
+
+// the level list: LEFT / RIGHT through the open ones, OK plays
 static uint8_t skChoose() {
-  uint8_t open = curHigh < SK_N ? curHigh : SK_N - 1;       // curHigh = levels solved
-  uint8_t lvl = skLast > open ? open : skLast;
+  skOwnLoad();
+  uint8_t lvl = skOpen(skLast) ? skLast : 0;
+  while (!skOpen(lvl) && lvl) lvl--;
   skLoad(lvl);
   btnClear();
   while (poll()) {
-    if (btn(B_LEFT)  && lvl)        { lvl--; skLoad(lvl); sfx(700, 15); }
-    if (btn(B_RIGHT) && lvl < open) { lvl++; skLoad(lvl); sfx(700, 15); }
+    if (btn(B_LEFT)) {
+      for (int8_t l = (int8_t)lvl - 1; l >= 0; l--) if (skOpen(l)) { lvl = l; skLoad(lvl); sfx(700, 15); break; }
+    }
+    if (btn(B_RIGHT)) {
+      for (uint8_t l = lvl + 1; l < SK_N + SK_OWN; l++) if (skOpen(l)) { lvl = l; skLoad(lvl); sfx(700, 15); break; }
+    }
     if (btn(B_OK)) { sfx(1200, 50); return lvl; }
     char b[16];
-    snprintf(b, sizeof(b), "<%u/%u> OK", lvl + 1, SK_N);
+    if (lvl < SK_N) snprintf(b, sizeof(b), "<%u/%u> OK", lvl + 1, SK_N);
+    else            snprintf(b, sizeof(b), "<own> OK");
     skBar(lvl, b);
     skDrawMap();
     oled.sendBuffer();
@@ -173,7 +205,7 @@ void sokobanRun() {
       oled.sendBuffer();
       done = skSolved();
     }
-    bool record = lvl + 1 > curHigh;              // best = levels solved
+    bool record = lvl < SK_N && lvl + 1 > curHigh;    // best = built-in levels solved
     if (record) { curHigh = lvl + 1; saveHigh(curGame, curHigh); }
     sfx(1400, 250);
     for (uint8_t i = 0; i < 150; i++) {
@@ -185,6 +217,6 @@ void sokobanRun() {
     }
     awardCheck(record);
     if (lvl + 1 < SK_N) lvl++;                    // on to the next one
-    else lvl = skChoose();
+    else { skLast = lvl; lvl = skChoose(); }
   }
 }

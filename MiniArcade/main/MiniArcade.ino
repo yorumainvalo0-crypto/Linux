@@ -69,7 +69,14 @@ void applyPinModes() {
     pinMode(BTN_PIN[i], BTN_ACT[i] ? INPUT_PULLDOWN : INPUT_PULLUP);
 }
 
+/* A phone can press the keys too (phone.h, controller page): each press
+   holds the key for a moment and the phone repeats it while the finger
+   stays on it - so a lost connection never leaves a key stuck.         */
+static volatile uint32_t vKeyUntil[B_COUNT];
+
 bool rawPressed(uint8_t i) {
+  uint32_t u = vKeyUntil[i];
+  if (u && (int32_t)(u - millis()) > 0) return true;
   return digitalRead(BTN_PIN[i]) == (BTN_ACT[i] ? HIGH : LOW);
 }
 
@@ -124,6 +131,7 @@ void btnClear() {
 static uint8_t  cfgBright = 200;      // display contrast 0..255
 static uint8_t  cfgClock  = 160;      // cpu clock in MHz
 static uint8_t  cfgSleep  = 5;        // minutes without a key press, 0 = never
+static bool     cfgMute   = false;    // sound off (set from the phone)
 static uint32_t lastInput = 0;        // for the sleep timer
 static uint8_t  runClock  = 160;      // clock the board actually booted with
 static bool     fwUnconfirmed = false; // fresh update, no key pressed yet
@@ -146,7 +154,7 @@ static uint32_t sndUntil = 0;
 static bool     sndOn = false;
 
 void sfx(uint16_t freq, uint16_t ms) {
-  if (sndPin == 255 || !freq) return;
+  if (sndPin == 255 || !freq || cfgMute) return;
   tone(sndPin, freq);
   sndOn = true;
   sndUntil = millis() + ms;
@@ -211,6 +219,7 @@ void saveCfg() {
   prefs.putUShort("bri", cfgBright);
   prefs.putUShort("clk", cfgClock);
   prefs.putUShort("slp", cfgSleep);
+  prefs.putUShort("mut", cfgMute);
   prefs.end();
 }
 
@@ -243,6 +252,7 @@ bool loadPins() {
   cfgBright = (uint8_t)prefs.getUShort("bri", 200);
   cfgClock  = (uint8_t)prefs.getUShort("clk", 160);
   cfgSleep  = (uint8_t)prefs.getUShort("slp", 5);
+  cfgMute   = prefs.getUShort("mut", 0) != 0;
   bool ok = prefs.getUShort("pset", 0) == 2;      // version 2 = with polarity
   if (ok)
     for (uint8_t i = 0; i < B_COUNT; i++) {
@@ -460,6 +470,7 @@ bool gameOver(uint16_t score) {
 #include "game_battleship.h"
 #include "stats.h"
 #include "multiplayer.h"
+#include "phone.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -541,9 +552,13 @@ void menu() {
     oled.drawStr(2, 12, "MiniArcade");
     oled.setFont(FONT);
     {
-      char b[8];
-      if (batPin > 4) snprintf(b, sizeof(b), "USB");
-      else               snprintf(b, sizeof(b), "%u%%", batPercent());
+      char b[12];
+      const char *w = "";
+#ifdef HAVE_NET
+      if (phoneLink) w = "WLAN ";              // stays online for the phone pages
+#endif
+      if (batPin > 4) snprintf(b, sizeof(b), "%sUSB", w);
+      else               snprintf(b, sizeof(b), "%s%u%%", w, batPercent());
       rightStr(12, b);
     }
     oled.drawHLine(0, TOP_H - 1, SCR_W);
