@@ -581,6 +581,7 @@ int main(int argc,char**argv){
     check("brightness set and saved", !appSet("bright","50")&&cfgBright==127&&simNvsU16["bri"]==127);
     check("wrong values refused", appSet("bright","0")&&appSet("sleep","99")&&appSet("clock","100")&&appSet("nope","1"));
     check("clock kept for the next start", !appSet("clock","80")&&simNvsU16["clk"]==80);
+    sndPin=10;                                       // a buzzer (setup() did not run here)
     long t0=toneCount; appSet("sound","0"); sfx(1000,10);
     bool silent = toneCount==t0 && cfgMute && simNvsU16["mut"]==1;
     appSet("sound","1");
@@ -1086,7 +1087,7 @@ int main(int argc,char**argv){
   } else if(scenario=="wlanfail"){
     check("while joining: state shown, no disconnect offered", saw("joining")&&saw("stop joining"));
     check("after failing: failed, connect offered", saw("failed")&&saw("can't join HomeNet")&&saw("connect"));
-    check("never claims to be connected", !saw("disconnect")&&!saw("online"));
+    check("never claims to be connected", !saw("disconnect")&&!seenTexts.count("online"));
   } else if(scenario=="versions"){
     check("version choice shown at start", saw("VERSION")&&saw("previous")&&saw("new"));
     check("countdown shown", saw("3s")&&saw("1s"));

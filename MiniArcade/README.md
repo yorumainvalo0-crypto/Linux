@@ -55,6 +55,9 @@ the WLAN page only exists in this build, because it needs `main/net.h`.
     main/setup_wizard.h   key, sound and battery setup
     main/settings.h       settings page
     main/wlan.h           WLAN page and firmware versions
+    main/phone.cpp        the phone pages (HTTP, backup to and from the flash)
+    main/phone.h          what the console tells them (stats, settings, keys, levels)
+    main/backupfmt.h      the backup file format (tested on the PC)
     main/multiplayer.h    multiplayer page and the online games
     main/rtgames.h        rules of Pong, Snake and Pac-Man for two consoles (no hardware,
                           tested on the PC); Pac-Man alone uses it too
@@ -219,6 +222,8 @@ build fills in its own repository. The repository must be public.
                                          each update slot holds 1.9 MB
     ESP-IDF 5.3.2       792 kB firmware  9.4: + pause, stats, awards, online Pong / Snake
     ESP-IDF 5.3.2       797 kB firmware  9.5: + 7 games, online Pac-Man and Battleship
+    ESP-IDF 5.3.2       818 kB firmware  9.7: + phone pages (stats, settings, screen,
+                                         controller, Sokoban editor, backup)
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 
