@@ -191,25 +191,66 @@ void sleepCheck() {
 }
 
 // ---------------- battery ----------------
-/* Needs two resistors from the cell to a free ADC pin (GPIO0..4):
-      BAT+ ---[100k]--- pin ---[100k]--- GND
-   The pin then sees half the cell voltage. Detected automatically: a pin
-   that reads a stable 1.5..2.2 V is treated as the battery sense.        */
-static uint8_t batPin = 255;
+/* Needs two equal resistors from the cell to a free ADC pin (GPIO0..4):
+      BAT+ ---[R]--- pin ---[R]--- GND        (e.g. 2x 56k or 2x 100k)
+   The pin then sees half the cell voltage. The pin is found by itself
+   (batDetect, and RIGHT on the battery page).                           */
+static uint8_t batPin = 255;   // 0..4, 255 = none found (searched at every start),
+                               // 254 = never searched, 253 = "no battery" chosen by hand
+#define BAT_NONE_SET 253
 
 static uint16_t batMilliVolts() {
-  if (batPin > 4) return 0;                  // 255 = none, 254 = not configured yet
+  if (batPin > 4) return 0;
   uint32_t sum = 0;
-  for (uint8_t i = 0; i < 4; i++) sum += analogReadMilliVolts(batPin);
-  return (uint16_t)((sum / 4) * 2);          // undo the 1:2 divider
+  for (uint8_t i = 0; i < 8; i++) sum += analogReadMilliVolts(batPin);
+  return (uint16_t)((sum / 8) * 2);          // undo the 1:2 divider
 }
 
-uint8_t batPercent() {                       // 3.30 V = empty, 4.15 V = full
-  uint16_t mv = batMilliVolts();
-  if (mv < 3300) return 0;
-  if (mv > 4150) return 100;
-  return (uint8_t)((mv - 3300) * 100 / 850);
+/* Resting voltage of a Li-ion cell against its charge. The curve is flat in
+   the middle, so a straight line from empty to full shows nonsense there. */
+static const uint16_t BAT_CURVE[][2] = {
+  {3300, 0}, {3450, 5}, {3600, 10}, {3680, 20}, {3710, 30}, {3750, 40},
+  {3800, 50}, {3850, 60}, {3920, 70}, {4000, 80}, {4100, 90}, {4180, 100}
+};
+
+uint8_t batCurve(uint16_t mv) {
+  const uint8_t n = sizeof(BAT_CURVE) / sizeof(BAT_CURVE[0]);
+  if (mv <= BAT_CURVE[0][0]) return 0;
+  for (uint8_t i = 1; i < n; i++)
+    if (mv < BAT_CURVE[i][0]) {
+      uint16_t v0 = BAT_CURVE[i - 1][0], v1 = BAT_CURVE[i][0];
+      uint16_t p0 = BAT_CURVE[i - 1][1], p1 = BAT_CURVE[i][1];
+      return (uint8_t)(p0 + (uint32_t)(mv - v0) * (p1 - p0) / (v1 - v0));
+    }
+  return 100;
 }
+
+/* An older cell drops under load (sound, WLAN) and recovers right after, so
+   the voltage is averaged over about 8 s and the shown number only moves
+   when it changed by 3 % or more.                                        */
+static uint32_t batAvg = 0;        // mV * 16, 0 = no reading yet
+static uint32_t batAt = 0;
+static uint8_t  batShown = 255;
+
+uint16_t batSmoothMv() {
+  uint32_t now = millis();
+  if (!batAvg || now - batAt >= 500) {
+    int32_t mv16 = (int32_t)batMilliVolts() * 16;
+    if (!batAvg) batAvg = (uint32_t)mv16;
+    else batAvg = (uint32_t)((int32_t)batAvg + (mv16 - (int32_t)batAvg) / 16);
+    batAt = now;
+  }
+  return (uint16_t)(batAvg / 16);
+}
+
+uint8_t batPercent() {
+  uint8_t p = batCurve(batSmoothMv());
+  if (batShown == 255 || p == 0 || p == 100 || (p > batShown ? p - batShown : batShown - p) >= 3)
+    batShown = p;
+  return batShown;
+}
+
+void batReset() { batAvg = 0; batShown = 255; }   // another pin: start over
 
 // ---------------- flash storage (NVS) ----------------
 Preferences prefs;
@@ -248,7 +289,7 @@ void saveHigh(uint8_t idx, uint16_t v) {
 bool loadPins() {
   prefs.begin("arcade", true);
   sndPin = (uint8_t)prefs.getUShort("snd", 255);
-  batPin    = (uint8_t)prefs.getUShort("bat", 254);   // 254 = never configured
+  batPin    = (uint8_t)prefs.getUShort("bat", 254);   // 254 = never searched
   cfgBright = (uint8_t)prefs.getUShort("bri", 200);
   cfgClock  = (uint8_t)prefs.getUShort("clk", 160);
   cfgSleep  = (uint8_t)prefs.getUShort("slp", 5);
@@ -623,7 +664,6 @@ void setup() {
   }
   applyCfg();
   batDetect();
-  if (batPin == 254) { batPin = 255; saveBat(); }
   lastInput = millis();
   sfx(900, 80);                          // hello
 }

@@ -32,16 +32,23 @@ release have `MiniArcade-<version>.zip` with a German how-to.
              On the first start the sound wizard beeps on each free pin and
              you confirm the one you hear ("Setup sound" repeats it later).
 
-    battery  the 5 V booster output cannot be measured, so tap the cell:
-                 BAT+ ---[100k]---+---[100k]--- GND
-                                  |
-                              GPIO 0..4
-             That pin then sees half the cell voltage. It is found
-             automatically and the menu shows the percentage top right;
-             without it the menu simply shows "USB". The "Setup battery"
-             entry lists all five ADC pins with their live voltage and lets
-             you pick one by hand - useful when a pin is already taken by a
-             key or by the buzzer.
+    battery  the 5 V booster output cannot be measured, so tap the cell
+             with two equal resistors (e.g. 2x 56k or 2x 100k):
+                 BAT+ ---[R]---+---[R]--- GND
+                               |
+                           GPIO 0..4
+             That pin then sees half the cell voltage. The console finds
+             it by itself at every start until one is found. On the
+             "set up battery" page RIGHT searches again (e.g. after
+             rewiring), "bat" marks the pin that looks like the battery
+             and "5V?" a pin wired to the booster output instead of BAT+.
+             UP/DOWN + OK picks a pin by hand, "no battery" stops the
+             search. A floating pin is told apart with the internal
+             pull-down: it falls to 0 V, the divider keeps the pin up.
+             The percentage follows the Li-ion discharge curve and is
+             averaged over about 8 s, so an older cell that drops under
+             load does not make it jump; without a battery the menu
+             shows "USB".
 
 Same games as the Arduino sketch, but without the Arduino core and without
 U8g2. The Arduino API is provided by the thin platform layer in
@@ -239,6 +246,7 @@ build fills in its own repository. The repository must be public.
     ESP-IDF 5.3.2       818 kB firmware  9.7: + phone pages (stats, settings, screen,
                                          controller, Sokoban editor, backup)
     ESP-IDF 5.3.2       820 kB firmware  9.8: + phone hotspot
+    ESP-IDF 5.3.2       820 kB firmware  9.9: battery found by itself, smoothed percentage
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 

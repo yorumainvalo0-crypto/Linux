@@ -45,8 +45,17 @@ static int grabNext = 0;      // capture the next frame after a marker string
 void simCpuMhz(int m){ printf("      cpu clock set to %d MHz\n", m); }
 void simDeepSleep();
 void simTone(int freq){ if(freq){ toneCount++; lastTone=freq; } }
+static int  simBatPin = 0, simBatMv = 3800;   // cell behind two equal resistors
+static int  simGhostPin = -1;                  // floating pin that holds ~1.9 V until pulled down
+static int  simHighPin = -1;                   // divider on the 5 V booster output
+static int  simBatStart = -1;                  // batPin before the scenario rewires it
+static int  simMvRaw(int mv){ return mv * 4095 / 2500; }
 int  simAdcRaw(int ch){
-  if(ch==0 && simHasBattery) return 2510;      // ~1.9 V -> 3.8 V cell through 1:2
+  bool down = pinMode_[ch]==3;                 // internal pull-down (~45k) against 28k
+  if(ch==simBatPin && simHasBattery) return simMvRaw(simBatMv/2 * (down?62:100)/100);
+  if(ch==simHighPin) return simMvRaw(2500 * (down?62:100)/100);
+  if(ch==simGhostPin) return down ? 5 : simMvRaw(1900);
+  if(down) return 5;
   return 300 + (int)(clockUs/1000%400);        // floating pin: drifts
 }
 void arcadeTraceStr(const char *s){
@@ -439,6 +448,31 @@ int main(int argc,char**argv){
       tap(11200,8);                                                // RIGHT: password again
       tap(11900,16);                                               // OK: stop
       captureAt={2400,2600};
+  } else if(scenario=="batfind"){ simEnd=16000; ups(1,1300,220);
+      simNvsU16["bat"]=255;                     // older firmware found nothing
+      simBatPin=2; simGhostPin=1;               // the real one comes after a trap
+      auto tap=[&](uint32_t t,uint8_t k){ script.push_back({t,k}); script.push_back({t+60,0}); };
+      tap(5000,16);                                                // open settings
+      for(int i=0;i<5;i++) tap(5600+i*300,2);                      // down to battery
+      tap(7500,16);                                                // open battery page
+      simTimeHook=[](uint32_t t){ if(t==8000){ simBatStart=batPin; simBatPin=0; } };   // rewired to GPIO0
+      tap(8500,8);                                                 // RIGHT: search
+      tap(12000,16);                                               // OK keeps GPIO0
+  } else if(scenario=="bat5v"){ simEnd=12000; ups(1,1300,220);
+      simNvsU16["bat"]=254; simHasBattery=false; simHighPin=1;
+      auto tap=[&](uint32_t t,uint8_t k){ script.push_back({t,k}); script.push_back({t+60,0}); };
+      tap(5000,16);
+      for(int i=0;i<5;i++) tap(5600+i*300,2);
+      tap(7500,16);
+      tap(8500,8);                                                 // RIGHT: search
+  } else if(scenario=="batnone"){ simEnd=12000; ups(1,1300,220);
+      simNvsU16["bat"]=0;                       // battery on GPIO0 ...
+      auto tap=[&](uint32_t t,uint8_t k){ script.push_back({t,k}); script.push_back({t+60,0}); };
+      tap(5000,16);
+      for(int i=0;i<5;i++) tap(5600+i*300,2);
+      tap(7500,16);
+      for(int i=0;i<5;i++) tap(8000+i*250,2);                      // ... but "no battery" picked
+      tap(9800,16);
   } else if(scenario=="versions"){ simEnd=8000;
       simTwoSlots=true;                                             // fresh update, nothing pressed
       script.push_back({6000,2}); script.push_back({6060,0});      // first key press in the menu
@@ -896,6 +930,30 @@ int main(int argc,char**argv){
     return fails?1:0;
   }
 
+  if(scenario=="batcurve"){
+    fails=0;
+    check("curve ends", batCurve(3200)==0&&batCurve(4200)==100);
+    bool mono=true; for(int mv=3200;mv<4250;mv+=5) if(batCurve(mv+5)<batCurve(mv)) mono=false;
+    check("curve never goes down with more voltage", mono);
+    check("flat middle is not linear", batCurve(3800)==50&&batCurve(3700)<35);
+    batPin=0; simHasBattery=true; simBatPin=0; batReset();
+    int lo=100, hi=0, last=0;
+    for(int i=0;i<600;i++){                  // 60 s at 3.80 V with load dips of 0.25 V
+      clockUs += 100000;
+      simBatMv = (i%10<3) ? 3550 : 3800;
+      int p=batPercent();
+      if(i>100){ lo=std::min(lo,p); hi=std::max(hi,p); }
+      last=p;
+    }
+    printf("      with load dips: %d..%d %%\n", lo, hi);
+    check("load dips do not make it jump", hi-lo<=3);
+    for(int i=0;i<1200;i++){ clockUs += 100000; simBatMv = 3800 - i/4; last=batPercent(); }
+    printf("      after sinking to 3.50 V: %d %%\n", last);
+    check("a real drop is followed", last<12);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+
   try { setup(); for(;;) loop(); } catch(SimEnd&){}
 
   printf("scenario %s: %ld panel updates, %u ms simulated\n", scenario.c_str(), frames, (unsigned)(clockUs/1000));
@@ -1096,6 +1154,19 @@ int main(int argc,char**argv){
     check("menu shows that the WLAN is on", shown);
     phoneLinkOff();
     check("multiplayer (or anyone) can switch it off", !phoneLink&&!pollHook&&simNet==NET_OFF);
+  } else if(scenario=="batfind"){
+    check("found at start, the floating pin was skipped", simBatStart==2&&saw("*2:"));
+    check("battery page marks the divider", saw("RIGHT=find")&&saw(" bat"));
+    check("search finds the rewired pin", saw("found on GPIO0"));
+    check("stored", simNvsU16["bat"]==0&&batPin==0);
+    check("menu shows percent", saw("%"));
+  } else if(scenario=="bat5v"){
+    check("nothing taken as battery", batPin>4);
+    check("5 V divider explained", saw("no battery found")&&saw("GPIO1 sees 5 V:")&&saw("to BAT+ (not OUT)"));
+  } else if(scenario=="batnone"){
+    check("no battery chosen by hand is kept", simNvsU16["bat"]==253&&batPin==253);
+    batDetect();
+    check("and not searched again at the next start", batPin==253);
   } else if(scenario=="wlanplay"){
     check("hotspot offered on the wlan page", saw("phone hotspot"));
     check("name, password and address shown", saw("PHONE HOTSPOT")&&saw("join  MiniArcade-AB12")&&saw("pass  12345678")&&saw("open  http://192.168.4.1"));
