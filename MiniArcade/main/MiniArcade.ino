@@ -199,11 +199,16 @@ static uint8_t batPin = 255;   // 0..4, 255 = none found (searched at every star
                                // 254 = never searched, 253 = "no battery" chosen by hand
 #define BAT_NONE_SET 253
 
+/* The lowest of four quick pairs: a dip under load (sound, WLAN) counts,
+   a single noisy sample does not.                                       */
 static uint16_t batMilliVolts() {
   if (batPin > 4) return 0;
-  uint32_t sum = 0;
-  for (uint8_t i = 0; i < 8; i++) sum += analogReadMilliVolts(batPin);
-  return (uint16_t)((sum / 8) * 2);          // undo the 1:2 divider
+  uint16_t low = 0xFFFF;
+  for (uint8_t i = 0; i < 4; i++) {
+    uint16_t v = (uint16_t)((analogReadMilliVolts(batPin) + analogReadMilliVolts(batPin)) / 2);
+    if (v < low) low = v;
+  }
+  return (uint16_t)(low * 2);                // undo the 1:2 divider
 }
 
 /* Resting voltage of a Li-ion cell against its charge. The curve is flat in
@@ -225,22 +230,29 @@ uint8_t batCurve(uint16_t mv) {
   return 100;
 }
 
-/* An older cell drops under load (sound, WLAN) and recovers right after, so
-   the voltage is averaged over about 8 s and the shown number only moves
-   when it changed by 3 % or more.                                        */
-static uint32_t batAvg = 0;        // mV * 16, 0 = no reading yet
+/* An older cell drops under load and the board switches off in such a
+   dip, long before the resting voltage says "empty". So the percentage
+   follows the low points: a dip pulls it down within a second, while it
+   only climbs back over about half a minute (and while charging). The
+   shown number only moves by 3 % or more.                              */
+static uint32_t batLow = 0;        // mV * 16, 0 = no reading yet
 static uint32_t batAt = 0;
 static uint8_t  batShown = 255;
 
-uint16_t batSmoothMv() {
+void batTick() {                   // from poll(): about four samples a second
+  if (batPin > 4) return;
   uint32_t now = millis();
-  if (!batAvg || now - batAt >= 500) {
-    int32_t mv16 = (int32_t)batMilliVolts() * 16;
-    if (!batAvg) batAvg = (uint32_t)mv16;
-    else batAvg = (uint32_t)((int32_t)batAvg + (mv16 - (int32_t)batAvg) / 16);
-    batAt = now;
-  }
-  return (uint16_t)(batAvg / 16);
+  if (batLow && now - batAt < 250) return;
+  batAt = now;
+  int32_t mv16 = (int32_t)batMilliVolts() * 16;
+  if (!batLow) { batLow = (uint32_t)mv16; return; }
+  int32_t d = mv16 - (int32_t)batLow;
+  batLow = (uint32_t)((int32_t)batLow + (d < 0 ? d / 2 : d / 128));
+}
+
+uint16_t batSmoothMv() {
+  batTick();
+  return (uint16_t)(batLow / 16);
 }
 
 uint8_t batPercent() {
@@ -250,7 +262,7 @@ uint8_t batPercent() {
   return batShown;
 }
 
-void batReset() { batAvg = 0; batShown = 255; }   // another pin: start over
+void batReset() { batLow = 0; batShown = 255; }   // another pin: start over
 
 // ---------------- flash storage (NVS) ----------------
 Preferences prefs;
@@ -350,6 +362,7 @@ bool poll() {
   delay(5);
   btnUpdate();
   sfxUpdate();
+  batTick();
   if (pollHook) pollHook();
   sleepCheck();
   if (wantExit) {

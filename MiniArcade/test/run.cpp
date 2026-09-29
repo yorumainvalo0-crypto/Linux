@@ -938,18 +938,22 @@ int main(int argc,char**argv){
     check("flat middle is not linear", batCurve(3800)==50&&batCurve(3700)<35);
     batPin=0; simHasBattery=true; simBatPin=0; batReset();
     int lo=100, hi=0, last=0;
-    for(int i=0;i<600;i++){                  // 60 s at 3.80 V with load dips of 0.25 V
+    for(int i=0;i<600;i++){                  // 60 s at 3.80 V with load dips to 3.55 V
       clockUs += 100000;
       simBatMv = (i%10<3) ? 3550 : 3800;
       int p=batPercent();
       if(i>100){ lo=std::min(lo,p); hi=std::max(hi,p); }
       last=p;
     }
-    printf("      with load dips: %d..%d %%\n", lo, hi);
+    printf("      with load dips: %d..%d %%  (3.80 V alone would be %d %%)\n", lo, hi, batCurve(3800));
     check("load dips do not make it jump", hi-lo<=3);
+    check("the dips count, not the average", hi<=batCurve(3600)+3);
     for(int i=0;i<1200;i++){ clockUs += 100000; simBatMv = 3800 - i/4; last=batPercent(); }
     printf("      after sinking to 3.50 V: %d %%\n", last);
     check("a real drop is followed", last<12);
+    for(int i=0;i<1200;i++){ clockUs += 100000; simBatMv = 4150; last=batPercent(); }
+    printf("      two minutes on the charger: %d %%\n", last);
+    check("climbs back while charging", last>=90);
     printf("%s\n", fails?"### FAILURES ###":"all checks passed");
     return fails?1:0;
   }
