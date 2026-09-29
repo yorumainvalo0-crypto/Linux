@@ -48,10 +48,12 @@ release have `MiniArcade-<version>.zip` with a German how-to.
              UP/DOWN + OK picks a pin by hand, "no battery" stops the
              search. A floating pin is told apart with the internal
              pull-down: it falls to 0 V, the divider keeps the pin up.
-             The percentage follows the Li-ion discharge curve and is
-             averaged over about 8 s, so an older cell that drops under
-             load does not make it jump; without a battery the menu
-             shows "USB".
+             The percentage follows the Li-ion discharge curve and the
+             low points under load (sound, WLAN): an older cell switches
+             the board off in such a dip long before its resting voltage
+             looks empty. A dip pulls the number down within a second, it
+             climbs back over about half a minute; without a battery the
+             menu shows "USB".
 
 Same games as the Arduino sketch, but without the Arduino core and without
 U8g2. The Arduino API is provided by the thin platform layer in
@@ -251,6 +253,7 @@ build fills in its own repository. The repository must be public.
     ESP-IDF 5.3.2       820 kB firmware  9.8: + phone hotspot
     ESP-IDF 5.3.2       820 kB firmware  9.9: battery found by itself, smoothed percentage
     ESP-IDF 5.3.2       820 kB firmware  9.10: fix: the pull-down test of the battery search
+    ESP-IDF 5.3.2       820 kB firmware  9.11: battery percentage from the low points under load
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 
