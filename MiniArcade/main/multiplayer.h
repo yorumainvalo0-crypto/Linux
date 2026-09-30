@@ -11,10 +11,25 @@
 #if defined(HAVE_NET) && __has_include("link.h")
 #include "link.h"
 #include "rtgames.h"
+#include "boardgames.h"
 #define HAVE_LINK 1
 
-static const char *const MP_GAMES[6] = { "4 wins", "Tic Tac Toe", "Pong", "Snake", "Pac-Man", "Battleship" };   // LKG_C4 ..
-static const char *mpGameName(uint8_t g) { return g >= LKG_C4 && g <= LKG_SHIP ? MP_GAMES[g - 1] : "?"; }
+static const char *const MP_GAMES[LKG_LAST] = { "4 wins", "Tic Tac Toe", "Pong", "Snake", "Pac-Man", "Battleship",
+                                                "Checkers", "Mau-Mau", "Bomberman" };   // LKG_C4 ..
+static const char *mpGameName(uint8_t g) { return g >= LKG_C4 && g <= LKG_LAST ? MP_GAMES[g - 1] : "?"; }
+
+/* Moves go out one after the other: the next one only when the last one
+   is confirmed (a Checkers move of several jumps, Mau-Mau: draw, then
+   play). mpQFlush waits until all are out before a game ends.          */
+static uint8_t mpQ[16], mpQn;
+static void mpQPush(uint8_t m) { if (mpQn < sizeof(mpQ)) mpQ[mpQn++] = m; }
+static void mpQSend() {
+  if (mpQn && linkCore().sendMove(mpQ[0], linkNow())) memmove(mpQ, mpQ + 1, --mpQn);
+}
+static void mpQFlush(void (*draw)(const char *)) {
+  uint32_t t0 = millis();
+  while (mpQn && linkCore().state == LK_PLAYING && millis() - t0 < 5000 && poll()) { mpQSend(); draw(NULL); }
+}
 
 static void mpHook() { linkTick(); lastInput = millis(); }  // radio on: no deep sleep
 
@@ -269,6 +284,125 @@ static uint8_t mpBattle() {
   return ret;
 }
 
+// ---------------- Checkers ----------------
+/* Each jump is one move (square | direction << 5 | "more" << 7), so a move
+   of several jumps is several moves; both boards apply the same steps.
+   Each console shows its own side at the bottom.                   */
+static Checkers mpCk;
+static uint8_t  mpCkMe;
+static void mpCkDraw(const char *msg) {
+  char vs[16];
+  snprintf(vs, sizeof(vs), "vs %.6s", linkCore().opp.name);
+  ckDraw(mpCk, mpCkMe, -1, -1, msg ? msg : "", vs);
+  oled.sendBuffer();
+}
+
+static uint8_t mpCheckers() {
+  LinkCore &L = linkCore();
+  mpCk.begin();
+  mpCkMe = L.iStart ? 0 : 1;
+  mpQn = 0;
+  ckCur = 52; ckSel = -1;
+  const char *end = NULL;
+  uint8_t ret = 0;
+  btnClear();
+  while (!end) {
+    if (!poll()) { L.cancel(); ret = 1; break; }         // hold OK = give up
+    if (L.state != LK_PLAYING) break;                    // the other one left
+    bool mine = mpCk.turn == mpCkMe;
+    if (mine) {
+      int16_t m = ckInput(mpCk, mpCkMe);
+      if (m >= 0) {
+        bool more = mpCk.apply(m & 31, m >> 5);
+        mpQPush((uint8_t)(m | (more ? 0x80 : 0)));
+        if (!more) ckSel = -1;
+        sfx(600, 30);
+      }
+    } else {
+      uint8_t m;
+      if (L.moveIn(&m)) {
+        if (!mpCk.legal(m & 31, (m >> 5) & 3)) { L.cancel(); mpNote("connection error", NULL); ret = 2; break; }
+        mpCk.apply(m & 31, (m >> 5) & 3);
+        sfx(400, 30);
+      }
+    }
+    mpQSend();
+    if (mpCk.winner) end = mpCk.winner == 3 ? "DRAW" : (mpCk.winner - 1 == mpCkMe ? "YOU WIN" : "LOST");
+    char t[16], vs[16];
+    snprintf(t, sizeof(t), "%.6s...", L.opp.name);
+    snprintf(vs, sizeof(vs), "vs %.6s", L.opp.name);
+    mine = mpCk.turn == mpCkMe;
+    ckDraw(mpCk, mpCkMe, mine && !end ? ckCur : -1, mine ? ckSel : -1, mine ? (mpCk.chain >= 0 ? "take on!" : "your go") : t, vs);
+    oled.sendBuffer();
+  }
+  if (end) {
+    mpQFlush(mpCkDraw);
+    sfx(strcmp(end, "LOST") ? 1400 : 200, 250);
+    mpFinish(mpCkDraw, end);
+    statOnline(!strcmp(end, "YOU WIN"));
+  }
+  return ret;
+}
+
+// ---------------- Mau-Mau ----------------
+/* The deck is shuffled from the session number, the same on both consoles;
+   every draw, pass and card played goes over as one move.           */
+static MauMau mpMm;
+static uint8_t mpMmMe;
+static const char *mpMmNames[2];
+static void mpMmDraw(const char *msg) {
+  if (msg) snprintf(mmMsg, sizeof(mmMsg), "%s", msg);
+  mmDraw(mpMm, mpMmMe, -1, mpMmNames);
+  oled.sendBuffer();
+}
+
+static uint8_t mpMauMau() {
+  LinkCore &L = linkCore();
+  mpMm.begin(L.session() * 2654435761u, 2);
+  mpMmMe = L.iStart ? 0 : 1;
+  mpMmNames[mpMmMe] = "YOU";
+  mpMmNames[mpMmMe ^ 1] = L.opp.name;
+  mpQn = 0;
+  mmCur = 1;
+  snprintf(mmMsg, sizeof(mmMsg), "%s", mpMm.turn == mpMmMe ? "your go" : "");
+  const char *end = NULL;
+  uint8_t ret = 0;
+  btnClear();
+  while (!end) {
+    if (!poll()) { L.cancel(); ret = 1; break; }
+    if (L.state != LK_PLAYING) break;
+    if (mpMm.turn == mpMmMe) {
+      int16_t m = mmInput(mpMm, mpMmMe, mpMmNames);
+      if (m >= 0 && mpMm.move((uint8_t)m)) {
+        mmSay("you", (uint8_t)m, mpMm);
+        mpQPush((uint8_t)m);
+        if (mpMm.drew) {                                  // the cursor goes to the new card
+          uint8_t cards[MM_CARDS], n = mmHand(mpMm, mpMmMe, cards);
+          for (uint8_t i = 0; i < n; i++) if (cards[i] == mpMm.drawn) mmCur = i + 1;
+        }
+      }
+    } else {
+      uint8_t m;
+      if (L.moveIn(&m)) {
+        if (!mpMm.move(m)) { L.cancel(); mpNote("connection error", NULL); ret = 2; break; }
+        mmSay(L.opp.name, m, mpMm);
+        sfx(m == MM_DRAW ? 400 : 800, 25);
+      }
+    }
+    mpQSend();
+    if (mpMm.winner) end = mpMm.winner - 1 == mpMmMe ? "YOU WIN" : "LOST";
+    mmDraw(mpMm, mpMmMe, mpMm.turn == mpMmMe && !end ? mmCur : -1, mpMmNames);
+    oled.sendBuffer();
+  }
+  if (end) {
+    mpQFlush(mpMmDraw);
+    sfx(strcmp(end, "LOST") ? 1400 : 200, 250);
+    mpFinish(mpMmDraw, end);
+    statOnline(!strcmp(end, "YOU WIN"));
+  }
+  return ret;
+}
+
 // ---------------- real-time: Pong and Snake ----------------
 /* Both consoles compute the same game (rtgames.h); only the keys go over
    the radio, in lockstep (linkcore.h). A tick is taken as soon as both
@@ -343,14 +477,32 @@ static void mpPacDraw(const char *msg) {                // pm: the game of game_
   pmDraw(mpMe, msg);
 }
 
+static RtBomb mpRb;                                     // Bomberman: the field of both consoles
+static void mpBombDraw(const char *msg) {
+  char b[20];
+  oled.setFont(FONT_B);
+  snprintf(b, sizeof(b), "YOU %u", mpRb.score[mpMe]);
+  oled.drawStr(2, 12, b);
+  oled.setFont(FONT);
+  snprintf(b, sizeof(b), "%u %.6s", mpRb.score[1 - mpMe], linkCore().opp.name);
+  rightStr(12, b);
+  oled.drawHLine(0, TOP_H - 1, SCR_W);
+  const char *names[2];
+  names[mpMe] = "YOU"; names[1 - mpMe] = linkCore().opp.name;
+  if (mpStalled && !msg) msg = "waiting...";
+  rbDraw(mpRb, mpMe, names, msg);
+  oled.sendBuffer();
+}
+
 /* 0 = decided or the other one left, 1 = we gave up */
 static uint8_t mpRealtime() {
   LinkCore &L = linkCore();
-  bool pong = L.game == LKG_PONG, pac = L.game == LKG_PAC;
+  bool pong = L.game == LKG_PONG, pac = L.game == LKG_PAC, bomb = L.game == LKG_BOMB;
   mpMe = L.iStart ? 0 : 1;
   uint32_t seed = L.session() * 2654435761u;             // the same on both consoles
-  if (pong) mpPg.begin(seed); else if (pac) pm.begin(seed, 2); else mpSn.begin(seed);
+  if (pong) mpPg.begin(seed); else if (pac) pm.begin(seed, 2); else if (bomb) mpRb.begin(seed, 2); else mpSn.begin(seed);
   uint8_t  latch = 0;                                     // snake: last direction pressed
+  bool     bombKey = false;                               // bomberman: OK waits for the next input
   uint32_t next = millis(), lastStep = millis();
   const char *end = NULL;
   uint8_t ret = 0;
@@ -362,12 +514,19 @@ static uint8_t mpRealtime() {
     if (btn(B_DOWN))  latch = 2;
     if (btn(B_LEFT))  latch = 3;                          // the snake field is the same
     if (btn(B_RIGHT)) latch = 4;                          // on both consoles, not mirrored
+    if (bomb && btnTap(B_OK)) bombKey = true;
     uint32_t now = millis();
     for (uint8_t k = 0; k < 3 && lkDue(now, next); k++) {
       uint8_t in[2];
       if (!L.syncStep(&in[mpMe], &in[1 - mpMe])) break;
-      uint8_t ev = pong ? mpPg.step(in) : (pac ? pm.step(in) : mpSn.step(in));
-      uint8_t mine = pong ? (uint8_t)((btnHeld(B_UP) ? 1 : 0) | (btnHeld(B_DOWN) ? 2 : 0)) : latch;
+      uint8_t ev;
+      if (bomb) {
+        uint8_t bev = mpRb.step(in);
+        ev = (bev & RB_EV_BOOM ? RT_EV_POINT : 0) | (bev & (RB_EV_BOMB | RB_EV_POWER) ? RT_EV_HIT : 0);
+      } else ev = pong ? mpPg.step(in) : (pac ? pm.step(in) : mpSn.step(in));
+      uint8_t mine = pong ? (uint8_t)((btnHeld(B_UP) ? 1 : 0) | (btnHeld(B_DOWN) ? 2 : 0)) :
+                     bomb ? (uint8_t)(rbHeld() | (bombKey ? 8 : 0)) : latch;
+      bombKey = false;
       L.syncPut(mine, linkNow());
       next += RT_TICK_MS;
       lastStep = now;
@@ -377,14 +536,14 @@ static uint8_t mpRealtime() {
     }
     if ((int32_t)(now - next) > 100) next = now;          // do not race to catch up
     mpStalled = now - lastStep > 400;
-    uint8_t w = pong ? mpPg.winner : (pac ? pm.winner : mpSn.winner);
+    uint8_t w = pong ? mpPg.winner : (pac ? pm.winner : (bomb ? (mpRb.winner == RB_DRAW ? 3 : mpRb.winner) : mpSn.winner));
     if (w) end = w == 3 ? "DRAW" : (w == mpMe + 1 ? "YOU WIN" : "LOST");
-    if (pong) mpPongDraw(NULL); else if (pac) mpPacDraw(NULL); else mpSnakeDraw(NULL);
+    if (pong) mpPongDraw(NULL); else if (pac) mpPacDraw(NULL); else if (bomb) mpBombDraw(NULL); else mpSnakeDraw(NULL);
   }
   if (end) {
     sfx(strcmp(end, "LOST") ? 1400 : 200, 250);
     mpStalled = false;
-    mpFinish(pong ? mpPongDraw : (pac ? mpPacDraw : mpSnakeDraw), end);
+    mpFinish(pong ? mpPongDraw : (pac ? mpPacDraw : (bomb ? mpBombDraw : mpSnakeDraw)), end);
     statOnline(!strcmp(end, "YOU WIN"));
   }
   return ret;
@@ -451,13 +610,14 @@ void multiplayerRun() {
 
     if (st == LK_PLAYING) {
       gameEnd = LinkCore::realtime(L.game) ? mpRealtime() : L.game == LKG_C4 ? mpC4() :
-                L.game == LKG_TTT ? mpTTT() : mpBattle();
+                L.game == LKG_TTT ? mpTTT() : L.game == LKG_DAME ? mpCheckers() :
+                L.game == LKG_MAU ? mpMauMau() : mpBattle();
       btnClear();
       continue;
     }
 
     if (st == LK_INVITED) {                             // somebody challenges us
-      if (L.game < LKG_C4 || L.game > LKG_SHIP) { L.answer(false, linkNow()); continue; }
+      if (L.game < LKG_C4 || L.game > LKG_LAST) { L.answer(false, linkNow()); continue; }
       if (millis() >= nextBeep) { nextBeep = millis() + 2000; sfx(1500, 90); }
       if (btn(B_OK))                      { L.answer(true, linkNow()); sfx(1200, 60); btnClear(); continue; }
       if (btn(B_LEFT) || btn(B_RIGHT) || !alive) { L.answer(false, linkNow()); sfx(300, 80); btnClear(); continue; }
@@ -504,7 +664,7 @@ void multiplayerRun() {
       if (!sel) mpName();
       else if (L.peer(idx[sel - 1]).busy) sfx(300, 120);
       else {
-        uint8_t g = chooseMode("CHALLENGE", MP_GAMES, 6);
+        uint8_t g = chooseMode("CHALLENGE", MP_GAMES, LKG_LAST);
         if (g != 255) {
           for (uint8_t i = 0; i < L.peerCount(); i++)   // the list may have changed meanwhile
             if (!strcmp(L.peer(i).code, selCode)) {

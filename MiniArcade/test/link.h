@@ -4,6 +4,7 @@
 #pragma once
 #include "../main/link.h"
 #include "../main/rtgames.h"
+#include "../main/boardgames.h"
 #include <vector>
 #include <stdio.h>
 
@@ -111,25 +112,28 @@ static bool botDone() {
 static RtPong   botPg;
 static RtSnake  botSn;
 static RtPac    botPm;
+static RtBomb   botRb;
 static uint32_t botRtNext = 0, botRnd = 5;
 static bool     botRt = false;
 
 static void simBotRealtime(uint32_t now) {
   LinkCore &B = simBot;
-  bool pong = B.game == LKG_PONG, pac = B.game == LKG_PAC;
+  bool pong = B.game == LKG_PONG, pac = B.game == LKG_PAC, bomb = B.game == LKG_BOMB;
   uint8_t me = B.iStart ? 0 : 1;
   if (!botRt) {                                        // a new game begins
     botRt = true;
     uint32_t seed = B.session() * 2654435761u;
-    if (pong) botPg.begin(seed); else if (pac) botPm.begin(seed, 2); else botSn.begin(seed);
+    if (pong) botPg.begin(seed); else if (pac) botPm.begin(seed, 2); else if (bomb) botRb.begin(seed, 2); else botSn.begin(seed);
     botRtNext = now;
   }
   for (int k = 0; k < 3 && lkDue(now, botRtNext); k++) {
     uint8_t in[2];
     if (!B.syncStep(&in[me], &in[1 - me])) break;
-    if (pong) botPg.step(in); else if (pac) botPm.step(in); else botSn.step(in);
+    if (pong) botPg.step(in); else if (pac) botPm.step(in); else if (bomb) botRb.step(in); else botSn.step(in);
     uint8_t mine;
-    if (pac) {                                         // wander: a new open way now and then
+    if (bomb) {                                        // the CPU player of the game itself
+      mine = botRb.ai(me);
+    } else if (pac) {                                         // wander: a new open way now and then
       const RmEnt &e = botPm.pac[me];
       mine = botPm.want[me];
       if (!mine || rtRand(botRnd) % 40 == 0 || RtPac::wallAt(e.x + RtPac::dx(mine), e.y + RtPac::dy(mine)))
@@ -152,7 +156,7 @@ static void simBotRealtime(uint32_t now) {
     B.syncPut(mine, now);
     botRtNext += RT_TICK_MS;
   }
-  uint8_t w = pong ? botPg.winner : (pac ? botPm.winner : botSn.winner);
+  uint8_t w = pong ? botPg.winner : (pac ? botPm.winner : (bomb ? (botRb.winner == RB_DRAW ? 3 : botRb.winner) : botSn.winner));
   if (w) {
     simBotGames++;
     simBotResult = w == 3 ? 3 : (w == me + 1 ? 1 : 2);
@@ -214,6 +218,58 @@ static void simBotShip(uint32_t now) {
   if (botTurn && now >= botNext && !botShipWait) { botTurn = false; botShipShoot(now); }
 }
 
+// checkers and mau-mau: the bot keeps its own copy, its moves queue up like ours
+static Checkers botCk;
+static MauMau   botMm;
+static bool     botBgOn = false;
+static uint8_t  botQ[16], botQn = 0;
+static int      simBotCkDepth = 1;                  // how well the bot plays checkers
+static void botQSend(uint32_t now) { if (botQn && simBot.sendMove(botQ[0], now)) memmove(botQ, botQ + 1, --botQn); }
+
+static void simBotBoard(uint32_t now) {
+  LinkCore &B = simBot;
+  bool dame = B.game == LKG_DAME;
+  uint8_t me = B.iStart ? 0 : 1;
+  if (!botBgOn) {                                     // a new game begins
+    botBgOn = true; botQn = 0; botMoves = 0;
+    if (dame) botCk.begin(); else botMm.begin(B.session() * 2654435761u, 2);
+    botNext = now + 600;
+  }
+  uint8_t m;
+  if (B.moveIn(&m)) {                                 // ours arrive in order
+    bool ok;
+    if (dame) { ok = botCk.legal(m & 31, (m >> 5) & 3); if (ok) botCk.apply(m & 31, (m >> 5) & 3); }
+    else ok = botMm.move(m);
+    if (!ok) printf("      bot: move %u not allowed\n", m);
+    botNext = now + 500;
+  }
+  uint8_t w = dame ? botCk.winner : botMm.winner;
+  bool myTurn = dame ? botCk.turn == me : botMm.turn == me;
+  if (!w && myTurn && now >= botNext && botQn < 8) {
+    if (simBotLeaveAfter >= 0 && botMoves >= simBotLeaveAfter) { B.cancel(); botBgOn = false; return; }
+    if (dame) {
+      uint32_t r = botRnd | 1;
+      CkStep st = botCk.best(simBotCkDepth, r); botRnd = r;
+      bool more = botCk.apply(st.from, st.dir);
+      botQ[botQn++] = st.from | (st.dir << 5) | (more ? 0x80 : 0);
+    } else {
+      uint8_t mv = botMm.cpuMove();
+      botMm.move(mv);
+      botQ[botQn++] = mv;
+    }
+    botMoves++;
+    botNext = now + 300;
+  }
+  botQSend(now);
+  w = dame ? botCk.winner : botMm.winner;
+  if (w && !botQn) {
+    simBotGames++;
+    simBotResult = dame ? (w == 3 ? 3 : (w - 1 == me ? 1 : 2)) : (w - 1 == me ? 1 : 2);
+    B.finish();
+    botBgOn = false;
+  }
+}
+
 static void simBotBrain(uint32_t now) {
   LinkCore &B = simBot;
   if (B.state == LK_INVITED && now >= botNext) {
@@ -226,7 +282,8 @@ static void simBotBrain(uint32_t now) {
   if (B.state == LK_OVER && B.delivered()) B.toLobby();
   if (B.state == LK_PLAYING && LinkCore::realtime(B.game)) { simBotRealtime(now); return; }
   if (B.state == LK_PLAYING && B.game == LKG_SHIP) { simBotShip(now); return; }
-  if (B.state != LK_PLAYING) { botRt = false; botShipOn = false; }
+  if (B.state == LK_PLAYING && (B.game == LKG_DAME || B.game == LKG_MAU)) { simBotBoard(now); return; }
+  if (B.state != LK_PLAYING) { botRt = false; botShipOn = false; botBgOn = false; }
   if (B.state != LK_PLAYING) { if (B.state != LK_INVITED) botNext = now + 1500; return; }
   if (!botInGame) {                                    // a new game begins
     botInGame = true; botMoves = 0;

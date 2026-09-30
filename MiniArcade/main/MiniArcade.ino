@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------
    MiniArcade - tiny game launcher for ESP32-C3 + SSD1306 128x64 (I2C)
-   15 games, one file each (game_*.h). High scores, stats and awards are
+   32 games, one file each (game_*.h). High scores, stats and awards are
    kept in flash.
    ------------------------------------------------------------------
    Display: laid out for the common two colour panels where the top
@@ -522,6 +522,16 @@ bool gameOver(uint16_t score) {
 #include "game_jump.h"
 #include "game_sokoban.h"
 #include "game_battleship.h"
+#include "game_sudoku.h"
+#include "game_lightsout.h"
+#include "game_match3.h"
+#include "game_checkers.h"
+#include "game_maumau.h"
+#include "game_bomber.h"
+#include "game_cave.h"
+#include "game_stack.h"
+#include "game_minigolf.h"
+#include "game_lander.h"
 #include "stats.h"
 #include "multiplayer.h"
 #include "phone.h"
@@ -555,7 +565,17 @@ static const Game GAMES[] = {
   { "Jump & Run", jumpRun     },
   { "Sokoban",    sokobanRun  },
   { "Battleship", battleshipRun },
-  // add new games here (before the entries with a tag), e.g. { "Chess", chessRun },
+  { "Sudoku",     sudokuRun   },
+  { "Lights Out", lightsOutRun },
+  { "Match 3",    match3Run   },
+  { "Checkers",   checkersRun },
+  { "Mau-Mau",    maumauRun   },
+  { "Bomberman",  bomberRun   },
+  { "Cave",       caveRun     },
+  { "Stack",      stackRun    },
+  { "Minigolf",   minigolfRun },
+  { "Lander",     landerRun   },
+  // add new games here (before the entries with a tag); stats.h has room for ST_GAMES
 #ifdef HAVE_LINK
   { "Multiplayer", multiplayerRun, "2P" },
 #endif

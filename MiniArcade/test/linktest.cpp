@@ -110,6 +110,16 @@ uint8_t botInput<RtPac>(const RtPac &g, uint8_t me, uint32_t &r) {
   return w;
 }
 
+struct RtBomb2 : RtBomb { void begin(uint32_t s) { RtBomb::begin(s, 2); } };   // two players, like online
+template <>
+uint8_t botInput<RtBomb2>(const RtBomb2 &g, uint8_t me, uint32_t &r) {
+  RtBomb2 c = g;                                             // its own CPU player, on a copy
+  c.rnd = r | 1;                                             // with this console's own dice
+  uint8_t in = c.ai(me);
+  r = c.rnd;
+  return in;
+}
+
 template <class G>
 static bool playRealtime(int loss, int seed, uint8_t game, double *tps, uint8_t *win) {
   Air a; a.loss = loss; a.rs = 4242 + seed * 17;
@@ -153,8 +163,8 @@ static bool playRealtime(int loss, int seed, uint8_t game, double *tps, uint8_t 
 
 int main() {
   // ---- real-time games: both copies stay the same, even with heavy loss ----
-  for (uint8_t game : { (uint8_t)LKG_PONG, (uint8_t)LKG_SNAKE, (uint8_t)LKG_PAC }) {
-    const char *gn = game == LKG_PONG ? "pong" : (game == LKG_SNAKE ? "snake" : "pac-man");
+  for (uint8_t game : { (uint8_t)LKG_PONG, (uint8_t)LKG_SNAKE, (uint8_t)LKG_PAC, (uint8_t)LKG_BOMB }) {
+    const char *gn = game == LKG_PONG ? "pong" : (game == LKG_SNAKE ? "snake" : (game == LKG_PAC ? "pac-man" : "bomberman"));
     int same = 0, runs = 0, wins[4] = { 0 };
     double slow = 1e9;
     for (int loss : { 0, 30, 50 })
@@ -162,7 +172,9 @@ int main() {
         double tps = 0; uint8_t w = 0;
         bool ok = game == LKG_PONG  ? playRealtime<RtPong>(loss, seed, game, &tps, &w)
                 : game == LKG_SNAKE ? playRealtime<RtSnake>(loss, seed, game, &tps, &w)
-                                    : playRealtime<RtPac>(loss, seed, game, &tps, &w);
+                : game == LKG_PAC   ? playRealtime<RtPac>(loss, seed, game, &tps, &w)
+                                    : playRealtime<RtBomb2>(loss, seed, game, &tps, &w);
+        if (w == RB_DRAW) w = 3;
         if (ok) { same++; wins[w]++; } else printf("      %s loss %d seed %d: out of step\n", gn, loss, seed);
         if (loss == 30 && tps < slow) slow = tps;
       }

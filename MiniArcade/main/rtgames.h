@@ -8,6 +8,7 @@
 #pragma once
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define RT_TICK_MS 20                  // one tick of both games
 
@@ -457,5 +458,221 @@ struct RtPac {
     *py = e.y * 4 + dy(e.dir) * off;
     if (*px < 0) *px += RM_W * 4;
     if (*px >= RM_W * 4) *px -= RM_W * 4;
+  }
+};
+
+// ---------------- Bomberman ----------------
+/* A field of 17 x 9 tiles: walls in a fixed grid, bricks at random (the
+   same on both consoles from the seed). Input per player: bits 0-2 the
+   direction held (1 up, 2 down, 3 left, 4 right), bit 3 = drop a bomb.
+   A bomb goes off after RB_FUSE ticks and burns in four directions as far
+   as its owner's range; a brick stops the fire and may leave a power-up
+   (one more bomb, a longer range). The last one standing wins; after
+   RB_TIME ticks it is a draw. Player 0..3 start in the corners.       */
+#define RB_W      17
+#define RB_H      9
+#define RB_MAXP   4
+#define RB_BOMBS  16
+#define RB_FUSE   125                  // 2.5 s
+#define RB_FIRE   18                   // ticks a flame burns
+#define RB_STEP   7                    // ticks to walk one tile
+#define RB_TIME   (180 * 50)           // 3 minutes
+#define RB_DRAW   9                    // winner value for a draw
+enum { RB_EMPTY = 0, RB_WALL, RB_BRICK, RB_PBOMB, RB_PFIRE };
+enum { RB_EV_BOMB = 1, RB_EV_BOOM = 2, RB_EV_DEAD = 4, RB_EV_POWER = 8 };
+
+struct RbBomb { uint8_t x, y, owner, range, t; };     // t = 0: unused
+
+struct RtBomb {
+  uint8_t  tile[RB_H][RB_W];
+  uint8_t  hidden[RB_H][RB_W];         // power-up under a brick
+  uint8_t  fire[RB_H][RB_W];           // ticks the flame still burns
+  uint8_t  fireBy[RB_H][RB_W];         // whose bomb it was
+  RbBomb   bomb[RB_BOMBS];
+  uint8_t  n;                          // players
+  uint8_t  px[RB_MAXP], py[RB_MAXP], alive[RB_MAXP], maxB[RB_MAXP], range[RB_MAXP], wait[RB_MAXP];
+  uint8_t  dir[RB_MAXP];               // last direction walked (for drawing)
+  uint16_t score[RB_MAXP];             // brick 10, power-up 20, another player 100
+  uint16_t ticks;
+  uint8_t  winner;                     // 0 = running, 1..4 = that player, RB_DRAW
+  uint32_t rnd;
+
+  static bool corner(uint8_t x, uint8_t y) {           // kept free around the starts
+    uint8_t cx = x <= 2 ? x - 1 : RB_W - 2 - x, cy = y <= 2 ? y - 1 : RB_H - 2 - y;
+    return (x <= 2 || x >= RB_W - 3) && (y <= 2 || y >= RB_H - 3) && cx + cy <= 1;
+  }
+
+  void begin(uint32_t seed, uint8_t players) {
+    memset(this, 0, sizeof(*this));
+    rnd = seed | 1;
+    n = players;
+    for (uint8_t y = 0; y < RB_H; y++)
+      for (uint8_t x = 0; x < RB_W; x++) {
+        if (!x || !y || x == RB_W - 1 || y == RB_H - 1 || (!(x & 1) && !(y & 1))) { tile[y][x] = RB_WALL; continue; }
+        if (corner(x, y) || rtRand(rnd) % 100 >= 60) continue;
+        tile[y][x] = RB_BRICK;
+        uint8_t r = rtRand(rnd) % 10;
+        hidden[y][x] = r < 1 ? RB_PBOMB : (r < 2 ? RB_PFIRE : RB_EMPTY);
+      }
+    static const uint8_t SX[4] = { 1, RB_W - 2, RB_W - 2, 1 }, SY[4] = { 1, RB_H - 2, 1, RB_H - 2 };
+    for (uint8_t p = 0; p < n; p++) { px[p] = SX[p]; py[p] = SY[p]; alive[p] = 1; maxB[p] = 1; range[p] = 2; dir[p] = 2; }
+  }
+
+  int8_t bombAt(uint8_t x, uint8_t y) const {
+    for (uint8_t i = 0; i < RB_BOMBS; i++) if (bomb[i].t && bomb[i].x == x && bomb[i].y == y) return i;
+    return -1;
+  }
+  uint8_t bombsOf(uint8_t p) const { uint8_t k = 0; for (uint8_t i = 0; i < RB_BOMBS; i++) if (bomb[i].t && bomb[i].owner == p) k++; return k; }
+  bool open(uint8_t x, uint8_t y) const { return tile[y][x] != RB_WALL && tile[y][x] != RB_BRICK && bombAt(x, y) < 0; }
+  static int8_t ddx(uint8_t d) { return d == 3 ? -1 : (d == 4 ? 1 : 0); }
+  static int8_t ddy(uint8_t d) { return d == 1 ? -1 : (d == 2 ? 1 : 0); }
+
+  void burn(uint8_t x, uint8_t y, uint8_t owner) { fire[y][x] = RB_FIRE; fireBy[y][x] = owner; }
+
+  void explode(uint8_t i) {
+    RbBomb b = bomb[i];
+    bomb[i].t = 0;
+    burn(b.x, b.y, b.owner);
+    for (uint8_t d = 1; d <= 4; d++)
+      for (uint8_t k = 1; k <= b.range; k++) {
+        int8_t x = b.x + ddx(d) * k, y = b.y + ddy(d) * k;
+        uint8_t &t = tile[y][x];
+        if (t == RB_WALL) break;
+        burn(x, y, b.owner);
+        if (t == RB_BRICK) { t = hidden[y][x]; hidden[y][x] = RB_EMPTY; if (b.owner < n) score[b.owner] += 10; break; }
+        if (t == RB_PBOMB || t == RB_PFIRE) t = RB_EMPTY;          // an open power-up burns
+        int8_t o = bombAt(x, y);
+        if (o >= 0) explode(o);                                      // a chain
+      }
+  }
+
+  uint8_t step(const uint8_t *in) {
+    if (winner) return 0;
+    uint8_t ev = 0;
+    ticks++;
+    for (uint8_t y = 0; y < RB_H; y++) for (uint8_t x = 0; x < RB_W; x++) if (fire[y][x]) fire[y][x]--;
+    for (uint8_t p = 0; p < n; p++) {
+      if (!alive[p]) continue;
+      if ((in[p] & 8) && bombsOf(p) < maxB[p] && bombAt(px[p], py[p]) < 0)
+        for (uint8_t i = 0; i < RB_BOMBS; i++)
+          if (!bomb[i].t) { bomb[i] = { px[p], py[p], p, range[p], RB_FUSE }; ev |= RB_EV_BOMB; break; }
+      if (wait[p]) { wait[p]--; continue; }
+      uint8_t d = in[p] & 7;
+      if (d < 1 || d > 4) continue;
+      dir[p] = d;
+      uint8_t nx = px[p] + ddx(d), ny = py[p] + ddy(d);
+      if (!open(nx, ny)) continue;
+      px[p] = nx; py[p] = ny; wait[p] = RB_STEP - 1;
+      uint8_t &t = tile[ny][nx];
+      if (t == RB_PBOMB) { if (maxB[p] < 5) maxB[p]++; t = RB_EMPTY; score[p] += 20; ev |= RB_EV_POWER; }
+      if (t == RB_PFIRE) { if (range[p] < 6) range[p]++; t = RB_EMPTY; score[p] += 20; ev |= RB_EV_POWER; }
+    }
+    for (uint8_t i = 0; i < RB_BOMBS; i++)
+      if (bomb[i].t && !--bomb[i].t) { bomb[i].t = 1; explode(i); ev |= RB_EV_BOOM; }
+    uint8_t left = 0, last = 0;
+    for (uint8_t p = 0; p < n; p++) {
+      if (alive[p] && fire[py[p]][px[p]]) {
+        alive[p] = 0; ev |= RB_EV_DEAD;
+        uint8_t k = fireBy[py[p]][px[p]];
+        if (k != p && k < n) score[k] += 100;
+      }
+      if (alive[p]) { left++; last = p; }
+    }
+    if (left <= 1) winner = left ? last + 1 : RB_DRAW;
+    else if (ticks >= RB_TIME) winner = RB_DRAW;
+    return ev;
+  }
+
+  // ---------------- a CPU player ----------------
+  /* danger[y][x]: ticks until fire gets there (1 = burning now), 0 = safe.
+     A bomb's blast is traced like explode() does, chains included by
+     taking the earliest time along the way.                            */
+  void danger(uint8_t out[RB_H][RB_W], int8_t extraX = -1, int8_t extraY = -1, uint8_t extraR = 0) const {
+    memset(out, 0, RB_H * RB_W);
+    for (uint8_t y = 0; y < RB_H; y++) for (uint8_t x = 0; x < RB_W; x++) if (fire[y][x]) out[y][x] = 1;
+    RbBomb list[RB_BOMBS + 1];
+    uint8_t k = 0;
+    for (uint8_t i = 0; i < RB_BOMBS; i++) if (bomb[i].t) list[k++] = bomb[i];
+    if (extraX >= 0) list[k++] = { (uint8_t)extraX, (uint8_t)extraY, 0, extraR, RB_FUSE };
+    for (uint8_t rep = 0; rep < 3; rep++)                              // chains: a bomb in a blast goes earlier
+      for (uint8_t i = 0; i < k; i++) {
+        uint8_t t = list[i].t;
+        if (out[list[i].y][list[i].x] && out[list[i].y][list[i].x] < t) t = out[list[i].y][list[i].x];
+        auto mark = [&](uint8_t x, uint8_t y) { if (!out[y][x] || t < out[y][x]) out[y][x] = t; };
+        mark(list[i].x, list[i].y);
+        for (uint8_t d = 1; d <= 4; d++)
+          for (uint8_t s = 1; s <= list[i].range; s++) {
+            int8_t x = list[i].x + ddx(d) * s, y = list[i].y + ddy(d) * s;
+            if (tile[y][x] == RB_WALL) break;
+            mark(x, y);
+            if (tile[y][x] == RB_BRICK) break;
+          }
+      }
+  }
+
+  /* Breadth first from (x, y) over open tiles that are not burning when we
+     get there. goal(x, y) says what we look for. Returns the first
+     direction, 0 = none found. maxSteps limits the search.           */
+  template <class G> uint8_t route(uint8_t x0, uint8_t y0, const uint8_t dng[RB_H][RB_W], G goal, uint8_t maxSteps) const {
+    uint8_t first[RB_H][RB_W], dist[RB_H][RB_W];
+    memset(first, 0, sizeof(first)); memset(dist, 255, sizeof(dist));
+    uint8_t qx[RB_W * RB_H], qy[RB_W * RB_H], h = 0, tl = 0;
+    qx[tl] = x0; qy[tl++] = y0; dist[y0][x0] = 0;
+    while (h < tl) {
+      uint8_t x = qx[h], y = qy[h++];
+      if (dist[y][x] && goal(x, y)) return first[y][x];
+      if (dist[y][x] >= maxSteps) continue;
+      for (uint8_t d = 1; d <= 4; d++) {
+        uint8_t nx = x + ddx(d), ny = y + ddy(d);
+        if (dist[ny][nx] != 255 || !open(nx, ny)) continue;
+        uint16_t arrive = (uint16_t)(dist[y][x] + 1) * RB_STEP;
+        if (dng[ny][nx] && dng[ny][nx] <= arrive + RB_STEP && dng[ny][nx] + RB_FIRE >= arrive) continue;   // burns then
+        dist[ny][nx] = dist[y][x] + 1;
+        first[ny][nx] = dist[y][x] ? first[y][x] : d;
+        qx[tl] = nx; qy[tl++] = ny;
+      }
+    }
+    return 0;
+  }
+
+  uint8_t ai(uint8_t p) {
+    if (!alive[p] || winner) return 0;
+    uint8_t x = px[p], y = py[p];
+    uint8_t dng[RB_H][RB_W];
+    danger(dng);
+    auto safe = [&](uint8_t gx, uint8_t gy) { return !dng[gy][gx]; };
+    if (dng[y][x]) {                                                  // get out of the way
+      uint8_t d = route(x, y, dng, safe, 12);
+      return d ? d : (uint8_t)(1 + rtRand(rnd) % 4);
+    }
+    // a bomb here: next to a brick, or an enemy in the line of fire - if there is a way out
+    bool worth = false;
+    for (uint8_t d = 1; d <= 4 && !worth; d++)
+      for (uint8_t s = 1; s <= range[p]; s++) {
+        int8_t nx = x + ddx(d) * s, ny = y + ddy(d) * s;
+        if (tile[ny][nx] == RB_WALL) break;
+        if (tile[ny][nx] == RB_BRICK) { worth = s == 1; break; }
+        for (uint8_t q = 0; q < n; q++) if (q != p && alive[q] && px[q] == nx && py[q] == ny) worth = true;
+      }
+    if (worth && bombsOf(p) < maxB[p] && bombAt(x, y) < 0 && rtRand(rnd) % 4) {
+      uint8_t d2[RB_H][RB_W];
+      danger(d2, x, y, range[p]);
+      if (route(x, y, d2, [&](uint8_t gx, uint8_t gy) { return !d2[gy][gx]; }, RB_FUSE / RB_STEP - 3)) return 8;
+    }
+    // walk: a power-up, a place next to a brick, or towards the nearest enemy
+    auto target = [&](uint8_t gx, uint8_t gy) {
+      if (dng[gy][gx]) return false;
+      if (tile[gy][gx] == RB_PBOMB || tile[gy][gx] == RB_PFIRE) return true;
+      for (uint8_t d = 1; d <= 4; d++) if (tile[gy + ddy(d)][gx + ddx(d)] == RB_BRICK) return true;
+      for (uint8_t q = 0; q < n; q++) if (q != p && alive[q] && (uint8_t)(abs(px[q] - gx) + abs(py[q] - gy)) <= 1) return true;
+      return false;
+    };
+    uint8_t d = route(x, y, dng, target, 30);
+    if (d && rtRand(rnd) % 8) return d;
+    for (uint8_t t = 0; t < 4; t++) {                                  // else wander, but not into danger
+      uint8_t r = 1 + rtRand(rnd) % 4, nx = x + ddx(r), ny = y + ddy(r);
+      if (open(nx, ny) && !dng[ny][nx]) return r;
+    }
+    return 0;
   }
 };
