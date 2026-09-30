@@ -32,7 +32,7 @@ int appStats(char *out, int max) {
   n = jsonAdd(out, max, n, "],\"awards\":[");
   for (uint8_t i = 0; i < AWARD_N; i++)
     n = jsonAdd(out, max, n, "%s{\"n\":\"%s\",\"h\":\"%s\",\"w\":%u}", i ? "," : "",
-                AWARDS[i].name, AWARDS[i].how, (st.awards >> i) & 1 ? 1 : 0);
+                AWARDS[i].name, AWARDS[i].how, awardHas(i) ? 1 : 0);
   n = jsonAdd(out, max, n, "],\"online\":[%u,%u],\"total\":%lu}", st.mpGames, st.mpWins,
               (unsigned long)statTotalSecs());
   return n;

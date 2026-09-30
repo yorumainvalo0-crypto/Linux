@@ -10,14 +10,22 @@
 #define ST_GAMES 32                     // room for this many games
 
 struct __attribute__((packed)) StatBlob {
-  uint8_t  ver;                         // 2 (version 1 had room for 16 games)
+  uint8_t  ver;                         // 3 (version 2 had 32 awards, version 1 16 games)
   uint16_t plays[ST_GAMES];             // times started (a restart counts)
   uint32_t secs[ST_GAMES];              // seconds played
-  uint32_t awards;                      // one bit per award
+  uint64_t awards;                      // one bit per award
   uint16_t mpGames, mpWins;             // online games
 };
 static StatBlob st;
 static bool     stLoaded = false;
+
+struct __attribute__((packed)) StatBlob2 {   // firmware 9.5 .. 9.11
+  uint8_t  ver;
+  uint16_t plays[ST_GAMES];
+  uint32_t secs[ST_GAMES];
+  uint32_t awards;
+  uint16_t mpGames, mpWins;
+};
 
 struct __attribute__((packed)) StatBlob1 {   // firmware 9.4
   uint8_t  ver;
@@ -33,18 +41,25 @@ void statLoad() {
   memset(&st, 0, sizeof(st));
   prefs.begin("arcade", true);
   size_t n = prefs.getBytes("stats", &st, sizeof(st));
-  if (n != sizeof(st) || st.ver != 2) {
-    StatBlob1 o;
+  if (n != sizeof(st) || st.ver != 3) {      // an older layout: keep it all
+    StatBlob2 o2;
+    StatBlob1 o1;
     memset(&st, 0, sizeof(st));
-    if (prefs.getBytes("stats", &o, sizeof(o)) == sizeof(o) && o.ver == 1) {   // keep it all
-      memcpy(st.plays, o.plays, sizeof(o.plays));
-      memcpy(st.secs, o.secs, sizeof(o.secs));
-      st.awards = o.awards; st.mpGames = o.mpGames; st.mpWins = o.mpWins;
+    if (prefs.getBytes("stats", &o2, sizeof(o2)) == sizeof(o2) && o2.ver == 2) {
+      memcpy(st.plays, o2.plays, sizeof(o2.plays));
+      memcpy(st.secs, o2.secs, sizeof(o2.secs));
+      st.awards = o2.awards; st.mpGames = o2.mpGames; st.mpWins = o2.mpWins;
+    } else if (prefs.getBytes("stats", &o1, sizeof(o1)) == sizeof(o1) && o1.ver == 1) {
+      memcpy(st.plays, o1.plays, sizeof(o1.plays));
+      memcpy(st.secs, o1.secs, sizeof(o1.secs));
+      st.awards = o1.awards; st.mpGames = o1.mpGames; st.mpWins = o1.mpWins;
     }
-    st.ver = 2;
+    st.ver = 3;
   }
   prefs.end();
 }
+
+static inline bool awardHas(uint8_t i) { return (st.awards >> i) & 1; }
 
 void statSave() {
   prefs.begin("arcade", false);
@@ -85,13 +100,23 @@ static const Award AWARDS[] = {
   { "BOX PUSHER",   "Sokoban: solve 6 levels", AW_SCORE, 20, 6 },
   { "WAREHOUSE",    "Sokoban: solve all",      AW_SCORE, 20, 12 },
   { "ADMIRAL",      "Battleship: beat the CPU", AW_SCORE, 21, 1 },
+  { "NUMBER NINJA", "Sudoku: 300 points",      AW_SCORE, 22, 300 },
+  { "LIGHTS OFF",   "Lights Out: 100 points",  AW_SCORE, 23, 100 },
+  { "SWEET TOOTH",  "Match 3: 2000 points",    AW_SCORE, 24, 2000 },
+  { "GRANDMASTER",  "Checkers: 300 points",    AW_SCORE, 25, 300 },
+  { "LAST CARD",    "Mau-Mau: 300 points",     AW_SCORE, 26, 300 },
+  { "DEMOLITION",   "Bomberman: 500 points",   AW_SCORE, 27, 500 },
+  { "CAVE DIVER",   "Cave: 500 points",        AW_SCORE, 28, 500 },
+  { "SKYSCRAPER",   "Stack: 30 floors",        AW_SCORE, 29, 30 },
+  { "HOLE IN ONE",  "Minigolf: 500 points",    AW_SCORE, 30, 500 },
+  { "EAGLE",        "Lander: 1000 points",     AW_SCORE, 31, 1000 },
   { "ONE HOUR",     "play 1 hour in all",      AW_TIME,   0, 60 },
   { "MARATHON",     "play 10 hours in all",    AW_TIME,   0, 600 },
   { "HELLO THERE",  "play an online game",     AW_ONLINE, 0, 1 },
   { "CHAMPION",     "win 5 online games",      AW_WINS,   0, 5 },
 };
 static const uint8_t AWARD_N = sizeof(AWARDS) / sizeof(AWARDS[0]);
-static_assert(sizeof(AWARDS) / sizeof(AWARDS[0]) <= 32, "one bit per award in StatBlob.awards");
+static_assert(sizeof(AWARDS) / sizeof(AWARDS[0]) <= 64, "one bit per award in StatBlob.awards");
 
 const char *gameName(uint8_t i);        // from the library table
 uint8_t     realGames();
@@ -132,7 +157,7 @@ void awardCheck(bool record) {
   uint32_t mins = statTotalSecs() / 60;
   bool changed = false;
   for (uint8_t i = 0; i < AWARD_N; i++) {
-    if (st.awards & (1UL << i)) continue;
+    if (awardHas(i)) continue;
     const Award &a = AWARDS[i];
     bool won = false;
     switch (a.kind) {
@@ -145,7 +170,7 @@ void awardCheck(bool record) {
     case AW_WINS:   won = st.mpWins >= a.need; break;
     }
     if (!won) continue;
-    st.awards |= 1UL << i;
+    st.awards |= 1ULL << i;
     changed = true;
     awardShow(a);
   }
@@ -206,7 +231,7 @@ void statsRun() {
       rightStr(12, b);
     } else {
       uint8_t won = 0;
-      for (uint8_t i = 0; i < AWARD_N; i++) if (st.awards & (1UL << i)) won++;
+      for (uint8_t i = 0; i < AWARD_N; i++) if (awardHas(i)) won++;
       oled.drawStr(2, 12, "AWARDS");
       oled.setFont(FONT);
       snprintf(b, sizeof(b), "%u/%u  <STATS", won, AWARD_N);
@@ -223,7 +248,7 @@ void statsRun() {
         statTime(t, sizeof(t), st.secs[i]);
         snprintf(b, sizeof(b), "%-11.11s%4ux %6s", gameName(i), st.plays[i], t);
       } else {
-        bool has = st.awards & (1UL << i);
+        bool has = awardHas(i);
         snprintf(b, sizeof(b), "%c %s", has ? '*' : '-', AWARDS[i].name);
       }
       if (i == sel) { oled.drawBox(0, y, SCR_W, 8); oled.setDrawColor(0); }

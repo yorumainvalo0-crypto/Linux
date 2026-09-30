@@ -1,10 +1,12 @@
 # MiniArcade - ESP-IDF version
 
-22 games: Tetris, Snake, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders,
+32 games: Tetris, Snake, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders,
 Dino, Breakout, Rocks, Racer, Frogger, Connect Four, Tic Tac Toe, 2048,
-Minesweeper, Pac-Man, Shooter, Jump & Run, Sokoban and Battleship.
+Minesweeper, Pac-Man, Shooter, Jump & Run, Sokoban, Battleship, Sudoku,
+Lights Out, Match 3, Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf
+and Lander.
 Against a second console nearby (Multiplayer): Connect Four, Tic Tac Toe,
-Pong, Snake, Pac-Man and Battleship.
+Pong, Snake, Pac-Man, Battleship, Checkers, Mau-Mau and Bomberman.
 
 Ready-made firmware: `Versions/<version>/` in the repository and every
 release have `MiniArcade-<version>.zip` with a German how-to.
@@ -22,8 +24,30 @@ release have `MiniArcade-<version>.zip` with a German how-to.
                          ships by hand (OK sets one down, double OK turns it)
                          marks: square = missed shot, X = hit, solid = sunk,
                          dot = water next to a sunk ship
+    Sudoku               easy / medium / hard, every puzzle has one solution.
+                         OK on a free field opens the number picker (arrows
+                         change it, OK writes it); a wrong number is a
+                         mistake, the third one ends the game
+    Lights Out           OK switches a field and its neighbours - all dark
+                         within the move limit = next level
+    Match 3              OK picks a stone, an arrow swaps it; 30 moves, a row
+                         of 4 gives one move back, 5 two
+    Checkers             vs CPU (easy / normal / hard) or 2 players; arrows
+                         move the cursor, OK picks a piece, OK on a marked
+                         square moves it. Taking is a must and goes on
+    Mau-Mau              vs 1-3 CPUs. LEFT/RIGHT picks a card, OK plays it;
+                         the first place is the draw pile (then PASS).
+                         7: next draws 2, 8: next skips, J: wish a suit
+    Bomberman            vs 1-3 CPUs, OK drops a bomb. Power-ups from bricks:
+                         a bomb more, a longer fire. Last one standing wins
+    Cave                 hold UP to climb, let go to sink
+    Stack                OK (or DOWN) drops the sliding block
+    Minigolf             9 holes: LEFT/RIGHT aim, UP/DOWN strength, OK hits.
+                         Sand brakes, water costs a stroke
+    Lander               LEFT/RIGHT turn, hold UP for thrust; land upright
+                         and slowly on a pad (x2 / x5 points)
     Stats                how often and how long each game was played, and
-                         22 awards (LEFT/RIGHT switches the two pages).
+                         40 awards (LEFT/RIGHT switches the two pages).
                          A new award pops up with a short tune.
 
 ## Optional hardware
@@ -71,7 +95,9 @@ the WLAN page only exists in this build, because it needs `main/net.h`.
     main/phone.h          what the console tells them (stats, settings, keys, levels)
     main/backupfmt.h      the backup file format (tested on the PC)
     main/multiplayer.h    multiplayer page and the online games
-    main/rtgames.h        rules of Pong, Snake and Pac-Man for two consoles (no hardware,
+    main/boardgames.h     rules and CPU players of Checkers and Mau-Mau (no hardware,
+                          tested on the PC); the same code offline and online
+    main/rtgames.h        rules of Pong, Snake, Pac-Man and Bomberman for two consoles (no hardware,
                           tested on the PC); Pac-Man alone uses it too
     main/sokoban_levels.h the Sokoban levels (generated, every one solved by the test)
     main/arcade.cpp       SSD1306 driver, GPIO, timing, NVS
@@ -190,8 +216,8 @@ the consoles talk directly over ESP-NOW (channel 1), typically 50-200 m.
 
     first line   your own name and code - OK = change the name
     UP / DOWN    choose a player
-    OK           challenge: pick 4 wins, Tic Tac Toe, Pong, Snake, Pac-Man
-                 or Battleship
+    OK           challenge: pick 4 wins, Tic Tac Toe, Pong, Snake, Pac-Man,
+                 Battleship, Checkers, Mau-Mau or Bomberman
     RIGHT        mark as friend (*) - friends are listed first
     hold OK      back to the games
 
@@ -216,8 +242,13 @@ left. Snake: your snake is filled, the other one hollow; whoever hits a
 wall, a body or the other head loses. **Pac-Man** online: both Pac-Men
 share the maze and the dots, the ghosts hunt whoever is nearer, and when
 the dots are gone the higher score wins. **Battleship** takes turns like
-4 wins. Consoles with an older firmware do not know the newer games - the
-challenge then says "needs an update".
+4 wins. **Checkers**: each console shows its own side at the bottom; a
+move of several jumps goes over as several moves. **Mau-Mau**: both
+consoles shuffle the same deck from the session number, every card, draw
+and pass goes over. **Bomberman** runs in lockstep like Pong: the same
+field on both consoles, only the keys go over the radio (tested with 50 %
+packet loss). Consoles with an older firmware do not know the newer games -
+the challenge then says "needs an update".
 
 ### Version numbers and publishing an update
 
@@ -254,6 +285,8 @@ build fills in its own repository. The repository must be public.
     ESP-IDF 5.3.2       820 kB firmware  9.9: battery found by itself, smoothed percentage
     ESP-IDF 5.3.2       820 kB firmware  9.10: fix: the pull-down test of the battery search
     ESP-IDF 5.3.2       820 kB firmware  9.11: battery percentage from the low points under load
+    ESP-IDF 5.3.2       857 kB firmware  10.0: + 10 games (Sudoku, Lights Out, Match 3, Checkers,
+                                         Mau-Mau, Bomberman, Cave, Stack, Minigolf, Lander)
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 
@@ -266,5 +299,9 @@ exceptions or RTTI).
 `test/build.sh` runs every scenario against the real driver on a PC - each
 game, the menus, pause and stats, WLAN and updates, multiplayer against a
 bot console - and `test/linktest.cpp`, the radio protocol with lost packets
-(including whole online Pong and Snake games that must end the same on both
-consoles).
+(including whole online Pong, Snake, Pac-Man and Bomberman games that must
+end the same on both consoles). `test/games2.h` plays the games of 10.0
+through their real screens with bots and checks their rules: every
+Sudoku has one solution, every Lights Out level can be solved, every
+Minigolf hole can be played in par, no Mau-Mau card gets lost, the
+Checkers CPU beats a random player, and so on.

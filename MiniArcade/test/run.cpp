@@ -213,6 +213,8 @@ static void downs(int k, uint32_t t0=1300, uint32_t step=250){
 static void ups(int k, uint32_t t0=1300, uint32_t step=250){
   for(int i=0;i<k;i++){ script.push_back({t0+i*step,1}); script.push_back({t0+i*step+60,0}); }
 }
+#include <set>
+#include "games2.h"
 
 int main(int argc,char**argv){
   scenario = argc>1?argv[1]:"menu";
@@ -225,7 +227,8 @@ int main(int argc,char**argv){
     for(int i=0;i<5;i++){ simNvsU16["p"+std::to_string(i)]=3+i; simNvsU16["a"+std::to_string(i)]=1; }
   }
 
-  if(scenario=="menu"){        simEnd=10000; downs(GAME_COUNT-1,1300,300); captureAt={30,300,700};
+  if(games2Setup()){
+  } else if(scenario=="menu"){ simEnd=13000; downs(GAME_COUNT-1,1300,300); captureAt={30,300,700};
   } else if(scenario=="tetris"){ simEnd=60000; script={{1300,16},{1360,0}}; autoplay=true; captureAt={200,900};
   } else if(scenario=="snake"){  simEnd=20000; downs(1);
       script.push_back({1500,16}); script.push_back({1560,0});
@@ -695,6 +698,7 @@ int main(int argc,char**argv){
     printf("%s\n", fails?"### FAILURES ###":"all checks passed");
     return fails?1:0;
   }
+  if(games2Logic()) return fails?1:0;
   if(scenario=="mslogic"){
     int bad=0, zeroOpen=0;
     for(int round=0; round<300; round++){
@@ -963,9 +967,11 @@ int main(int argc,char**argv){
   printf("scenario %s: %ld panel updates, %u ms simulated\n", scenario.c_str(), frames, (unsigned)(clockUs/1000));
   if(getenv("DUMP")) for(auto&t:seenTexts) printf("   |%s|\n", t.c_str());
 
-  if(scenario=="menu"){
+  if(games2Check()){
+  } else if(scenario=="menu"){
     check("library drawn", saw("MiniArcade"));
     check("all games listed", saw("Tetris")&&saw("Snake")&&saw("Pong")&&saw("Doom")&&saw("Mine")&&saw("Tunnel 3D")&&saw("Flappy")&&saw("Invaders")&&saw("Dino")&&saw("Breakout")&&saw("Rocks")&&saw("Racer")&&saw("Frogger")&&saw("4 wins")&&saw("Tic Tac Toe")&&saw("Multiplayer"));
+    check("the games of 10.0 listed", saw("Sudoku")&&saw("Lights Out")&&saw("Match 3")&&saw("Checkers")&&saw("Mau-Mau")&&saw("Bomberman")&&saw("Cave")&&saw("Stack")&&saw("Minigolf")&&saw("Lander"));
     check("list scrolls to the last entry", saw("Settings"));
     printf("      tones played: %ld, last %d Hz\n", toneCount, lastTone);
     check("menu clicks are audible", toneCount>0);
@@ -1142,7 +1148,7 @@ int main(int argc,char**argv){
   } else if(scenario=="stats"){
     check("stats page drawn with the total time", saw("STATS")&&saw("1h03  AWARDS>"));
     check("per game line", saw("Tetris        3x   1h02"));
-    check("awards page drawn", saw("AWARDS")&&saw("1/30  <STATS")&&saw("* FIRST STEPS")&&saw("- EXPLORER"));
+    check("awards page drawn", saw("AWARDS")&&saw("1/40  <STATS")&&saw("* FIRST STEPS")&&saw("- EXPLORER"));
     check("what an award needs is shown", saw("try every game"));
   } else if(scenario=="wlan"){
     check("settings list the wlan page", saw("wlan and update..."));
