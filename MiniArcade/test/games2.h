@@ -393,7 +393,79 @@ static bool suValid(const uint8_t *g) {
   return true;
 }
 
+// ---------------- Dino: can every pair of obstacles be passed? ----------------
+/* Tries every way to press the keys, tick by tick (jump held or not, DOWN
+   or not), with the same collision boxes as dinoRun(). Two obstacles at
+   distance gap, the dino starts on the ground well before them.      */
+struct DnObs { int16_t x; uint8_t t, h; };
+static bool dnHit(const DnJump &j, bool duck, const DnObs &o) {
+  uint8_t dh = duck ? 7 : 14;
+  int16_t dt = DN_GY - dh + (j.y >> 4);
+  int16_t ow = dnWidth(o.t), ohh = dnHeight(o.t);
+  int16_t oy = o.t == 3 ? dnBirdY(o.h) : DN_GY - ohh;
+  return o.x < DN_X + (duck ? 12 : 8) && o.x + ow > DN_X + 1 && oy < dt + dh && oy + ohh > dt;
+}
+static bool dnPass(DnObs a, DnObs b, uint16_t spd, uint8_t keys = 4) {   // keys 2: no jumping
+  std::set<std::tuple<int, int, int, int>> seen;
+  int step = spd / 8;
+  std::function<bool(DnJump, int16_t)> go = [&](DnJump j, int16_t ax) -> bool {
+    if (ax + (b.x - a.x) < DN_X - 20) return true;                   // both are behind
+    if (!seen.insert({ ax, j.y, j.vy, (j.air ? 1 : 0) | (j.reached ? 2 : 0) | (j.drop ? 4 : 0) }).second) return false;
+    for (int k = 0; k < 4; k++) {
+      if (keys == 2 && (k & 1)) continue;
+      bool held = k & 1, down = k & 2;
+      DnJump n = j;
+      dnStep(n, held, down, spd);
+      bool duck = down && !n.air;
+      DnObs A = a, B = b;
+      A.x = ax - step; B.x = ax - step + (b.x - a.x);
+      if (dnHit(n, duck, A) || dnHit(n, duck, B)) continue;
+      if (go(n, ax - step)) return true;
+    }
+    return false;
+  };
+  return go(DnJump{ 0, 0, false, false, false }, DN_X + 50);
+}
+
 static bool games2Logic() {
+  if (scenario == "dinofair") {
+    fails = 0;
+    static const DnObs KINDS[6] = { { 0, 0, 0 }, { 0, 1, 0 }, { 0, 2, 0 }, { 0, 3, 0 }, { 0, 3, 1 }, { 0, 3, 2 } };
+    bool ok = true;
+    for (uint16_t spd = 26; spd <= 64; spd += 2) {
+      auto allPass = [&](int16_t gap) {
+        for (auto &ka : KINDS) for (auto &kb : KINDS) {
+          DnObs A = ka, B = kb; B.x = gap;
+          if (!dnPass(A, B, spd)) return false;
+        }
+        return true;
+      };
+      int16_t bad = -1;                                              // the game uses dnGap .. dnGap + 49
+      for (int16_t gap = dnGap(spd); gap < dnGap(spd) + 50 && bad < 0; gap++) if (!allPass(gap)) bad = gap;
+      int16_t need = 0;                                              // smallest start from which every gap works
+      for (int16_t g = 160; g >= 14; g--) if (!allPass(g)) { need = g + 1; break; }
+      if (spd % 8 == 0 || bad >= 0) printf("      speed %u: from a gap of %d on all can be passed, the game keeps %d%s\n", spd, need, dnGap(spd), bad >= 0 ? "  <- too small" : "");
+      if (bad >= 0) { ok = false; printf("        first gap that cannot be passed: %d\n", bad); }
+    }
+    check("dino: every pair of obstacles can be passed at every speed", ok);
+    DnObs cactus = { 0, 2, 0 }, cactus2 = { 60, 2, 0 }, mid = { 0, 3, 1 }, mid2 = { 60, 3, 1 };
+    check("dino (the check itself): a cactus needs a jump, a middle bird a duck",
+          !dnPass(cactus, cactus2, 40, 2) && dnPass(mid, mid2, 40, 2) && dnPass(cactus, cactus2, 40));
+    // the jump itself: a tap is a short hop, holding a high jump, DOWN drops fast
+    auto apex = [](int holdTicks, int downAt) {
+      DnJump j = { 0, 0, false, false, false };
+      int top = 0, t = 0;
+      do { dnStep(j, t < holdTicks, downAt >= 0 && t >= downAt, 40); if (-j.y > top) top = -j.y; t++; } while (j.air && t < 100);
+      return std::make_pair(top / 16, t);
+    };
+    auto tap = apex(1, -1), hold = apex(30, -1), dropped = apex(30, 4);
+    printf("      tap: %d px high, %d ticks in the air; held: %d px, %d ticks; DOWN after 4 ticks: %d ticks\n",
+           tap.first, tap.second, hold.first, hold.second, dropped.second);
+    check("dino: a tap hops, holding jumps high, DOWN drops fast",
+          tap.first >= 13 && tap.first <= 17 && hold.first >= 22 && hold.first <= 27 && dropped.second < hold.second - 6);
+    printf("%s\n", fails ? "### FAILURES ###" : "all checks passed");
+    return true;
+  }
   if (scenario != "g2logic10") return false;
   fails = 0;
   // Sudoku: valid, consistent, unique, about as many givens as asked

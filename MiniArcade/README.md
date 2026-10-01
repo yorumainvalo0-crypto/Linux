@@ -17,6 +17,8 @@ release have `MiniArcade-<version>.zip` with a German how-to.
     hold OK in a game    pause: continue / restart / quit to menu
                          (hold OK once more = quit)
     UP in the library    jumps from the top to Settings, Stats, Multiplayer
+    Dino                 like the Chrome original: tap UP/OK = short hop, hold
+                         = high jump, DOWN = duck (in the air: drop fast)
     Minesweeper          OK opens, a quick double tap on OK sets a flag
     Sokoban              OK takes the last move back
     Shooter              the ship fires by itself, OK = bomb
@@ -287,6 +289,7 @@ build fills in its own repository. The repository must be public.
     ESP-IDF 5.3.2       820 kB firmware  9.11: battery percentage from the low points under load
     ESP-IDF 5.3.2       857 kB firmware  10.0: + 10 games (Sudoku, Lights Out, Match 3, Checkers,
                                          Mau-Mau, Bomberman, Cave, Stack, Minigolf, Lander)
+    ESP-IDF 5.3.2       857 kB firmware  10.1: Dino jumps like the Chrome original
 
 Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
 
