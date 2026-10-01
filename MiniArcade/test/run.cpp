@@ -214,6 +214,8 @@ static void ups(int k, uint32_t t0=1300, uint32_t step=250){
   for(int i=0;i<k;i++){ script.push_back({t0+i*step,1}); script.push_back({t0+i*step+60,0}); }
 }
 #include <set>
+#include <tuple>
+#include <functional>
 #include "games2.h"
 
 int main(int argc,char**argv){

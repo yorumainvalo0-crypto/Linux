@@ -10,6 +10,36 @@
 
 #define DN_CLOUDS 3
 
+/* The jump of the Chrome original, scaled to a 14 px dino and a 30 ms
+   tick (all in 1/16 px): a tap gives a short hop, holding the key a high
+   jump (about 26 px), DOWN in the air drops fast. Holding the key
+   on the ground jumps again at once.                                  */
+#define DN_V0     78           // speed at take-off (a little more at high speed)
+#define DN_G      9            // gravity per tick
+#define DN_DROP   36           // let go: the climb slows to this at once
+#define DN_MINH   (9 * 16)     // a jump always rises this far
+#define DN_MAXH   (19 * 16)    // from here on it ends like a let-go jump
+
+struct DnJump {
+  int16_t y, vy;               // height (negative = up) and speed, 1/16 px
+  bool    air, reached, drop;  // in the air, past the minimum, fast drop
+};
+
+// one tick of the dino: held = jump key down, down = DOWN key down
+void dnStep(DnJump &j, bool held, bool down, uint16_t spd) {
+  if (!j.air) {
+    if (!held) return;
+    j.air = true; j.reached = j.drop = false;
+    j.vy = -(DN_V0 + spd / 6);
+  }
+  if (down && !j.drop) { j.drop = true; j.vy = 16; }      // speed drop
+  j.y += j.drop ? j.vy * 3 : j.vy;
+  j.vy += DN_G;
+  if (-j.y >= DN_MINH || j.drop) j.reached = true;
+  if (((!held && j.reached) || -j.y >= DN_MAXH) && j.vy < -DN_DROP) j.vy = -DN_DROP;
+  if (j.y >= 0) { j.y = 0; j.vy = 0; j.air = false; }
+}
+
 /* obstacle kinds: 0 = one small cactus, 1 = two small, 2 = big cactus,
    3 = pterodactyl (only once the score got past 30)                     */
 static uint8_t dnWidth(uint8_t t)  { return (t == 1) ? 13 : (t == 2 ? 9 : (t == 3 ? 9 : 6)); }
@@ -20,9 +50,9 @@ static uint8_t dnHeight(uint8_t t) { return (t == 2) ? 13 : (t == 3 ? 6 : 9); }
    never needed.                                                          */
 static int16_t dnBirdY(uint8_t h) { return (h == 0) ? DN_GY - 12 : (h == 1 ? DN_GY - 17 : DN_GY - 28); }
 
-/* Smallest distance between two obstacles that can always be cleared at
-   this speed - found by trying every jump / dive / duck timing on a PC.
-   With a fixed 45 px some pairs could not be passed from speed 5 on.   */
+/* Distance between two obstacles. test/games2.h ("dinofair") tries every
+   way to press the keys for every pair and every gap the game can make
+   (this one up to 49 more) at every speed - all can be passed.      */
 static int16_t dnGap(uint16_t spd) {
   static const uint8_t g[9] = { 45, 45, 45, 45, 45, 51, 57, 69, 77 };
   uint8_t v = spd / 8;
@@ -33,7 +63,9 @@ void dinoRun() {
   bool again = true;
   while (again) {
     again = false;
-    int16_t  y = 0, vy = 0;                    // height above ground, Q4
+    DnJump   jp = { 0, 0, false, false, false };
+    int16_t  &y = jp.y;                        // height above ground, Q4
+    bool     tapped = false;
     int16_t  ox[DN_OBS], cx[DN_CLOUDS];
     uint8_t  ot[DN_OBS], oh[DN_OBS], cy[DN_CLOUDS];
     uint16_t score = 0, spd = 26, blink = 0, nextBlink = 100;
@@ -49,16 +81,16 @@ void dinoRun() {
     btnClear();
 
     while (poll()) {
-      bool duck = btnHeld(B_DOWN) && y == 0;
-      if ((btnTap(B_UP) || btnTap(B_OK)) && y == 0) { vy = -52; sfx(700, 35); }
-      if (btnHeld(B_DOWN) && y < 0) vy += 6;             // dive back down
+      if (btnTap(B_UP) || btnTap(B_OK)) tapped = true;    // a quick tap still counts at the next tick
+      bool duck = btnHeld(B_DOWN) && !jp.air;
 
       uint32_t now = gameMillis();
       if (now >= next) {
         next = now + 30;
-        vy += 5;
-        y += vy;
-        if (y > 0) { y = 0; vy = 0; }
+        bool was = jp.air;
+        dnStep(jp, tapped || btnHeld(B_UP) || btnHeld(B_OK), btnHeld(B_DOWN), spd);
+        tapped = false;
+        if (jp.air && !was) sfx(700, 35);
         dist += spd;
         score = (dist / 80 > 65535) ? 65535 : (uint16_t)(dist / 80);
         if (spd < 64) spd = 26 + score / 5;
