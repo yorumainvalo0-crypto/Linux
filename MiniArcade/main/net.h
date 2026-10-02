@@ -54,16 +54,16 @@ void        netAnswer(bool yes);  // the player's decision on the device
 
 void        netRestartLater();    // restart in a moment (after a page went out)
 
-// ---------------- AI chat (Claude API) ----------------
-/* One question at a time to Claude, over the joined WLAN (it needs the
-   internet). The API key stays on the console: it only ever goes to
-   api.anthropic.com, is never shown or sent to a page again and is not
-   part of a backup.                                                    */
+// ---------------- AI chat (OpenRouter, free models only) ----------------
+/* One question at a time to the best free model on OpenRouter, over the
+   joined WLAN (it needs the internet). The API key stays on the console:
+   it only ever goes to openrouter.ai, is never shown or sent to a page
+   again and is not part of a backup.                                  */
 #define AI_QUESTION_MAX 300       // characters typed on the console
 #define AI_ANSWER_MAX   3000      // bytes of answer text (UTF-8) that are kept
 enum AiState : uint8_t {
   AI_IDLE,
-  AI_ASKING,        // the question is on its way, Claude is answering
+  AI_ASKING,        // the question is on its way, a model is answering
   AI_DONE,          // netAiAnswer() holds the answer
   AI_ERROR          // netAiAnswer() says why there is none
 };
@@ -71,7 +71,8 @@ bool        netAiHasKey();
 bool        netAiSetKey(const char *key);       // "" = forget it; false = does not look like a key
 bool        netAiAsk(const char *question);     // runs in the background; false = busy or offline
 AiState     netAiState();
-const char *netAiAnswer();                      // UTF-8 text, as Claude wrote it
+const char *netAiAnswer();                      // UTF-8 text, as the model wrote it
+const char *netAiModel();                       // the model that answered, "" if none
 
 // ---------------- pages for a phone (phone.cpp) ----------------
 /* With the console in a WLAN, a phone in the same network gets: stats and

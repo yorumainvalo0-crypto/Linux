@@ -1,12 +1,13 @@
 // MiniArcade: AI chat. Part of MiniArcade.ino, which includes it -
-// not compiled on its own. The requests to Claude are in net.cpp.
+// not compiled on its own. The requests to OpenRouter are in net.cpp.
 
 // =========================================================
 //  AI CHAT   (ESP-IDF build only: needs a WLAN with internet)
 // =========================================================
 /* The question is typed on the console with an on-screen keyboard and goes
-   to Claude; the answer comes back as text to scroll through. The API key
-   is typed in the same way once, or entered on the phone's settings page.
+   to the best free model on OpenRouter; the answer comes back as text to
+   scroll through, with the model's name on top. The API key is typed in
+   the same way once, or entered on the phone's settings page.
    Keyboard: arrows pick a key, OK types it. The bottom row switches
    between small and capital letters (ABC) and symbols (#+), and has space,
    delete and send. Holding OK leaves.                                    */
@@ -239,7 +240,7 @@ static bool aiMessage(const char *title, const char *const *lines, uint8_t n) {
 
 /* The key typed on the console. true = saved. */
 static bool aiKeyEntry() {
-  static const char *const HELP[5] = { "needs a Claude API key", "(console.anthropic.com)",
+  static const char *const HELP[5] = { "needs an OpenRouter key", "(free: openrouter.ai/keys)",
                                        "OK: type it in here", "or on the phone page:", "Settings > AI chat" };
   if (!aiMessage("AI CHAT", HELP, 5)) return false;
   static char key[201];
@@ -257,7 +258,7 @@ static bool aiKeyEntry() {
     if (millis() < badUntil) {
       aiTitle("NOT A KEY");
       oled.drawStr(2, 30, "keys look like");
-      oled.drawStr(2, 40, "sk-ant-api03-...");
+      oled.drawStr(2, 40, "sk-or-v1-...");
       oled.drawStr(2, 50, "check the letters");
     } else kbDraw(kb, "API KEY", "save");
     oled.sendBuffer();
@@ -305,6 +306,14 @@ static bool aiOnline(bool &started) {
   return false;
 }
 
+// "nvidia/nemotron-3-ultra:free" -> "nemotron-3-ultra", at most max - 1 letters
+static void aiModelName(char *out, size_t max) {
+  const char *m = netAiModel(), *s = strchr(m, '/');
+  strlcpy(out, s ? s + 1 : m, max);
+  char *f = strstr(out, ":free");
+  if (f) *f = 0;
+}
+
 static void aiShow(const char *utf8) {
   aiAscii(utf8, aiShown, sizeof(aiShown));
   aiLines = aiWrap(aiShown, aiLn, AI_LINES);
@@ -316,7 +325,7 @@ void aiRun() {
   if (!netAiHasKey()) {
     if (!aiKeyEntry()) return;
   } else {
-    static const char *const OPT[3] = { "ask Claude", "type a new API key", "forget the API key" };
+    static const char *const OPT[3] = { "ask the AI", "type a new API key", "forget the API key" };
     uint8_t o = chooseMode("AI CHAT", OPT, 3);
     if (o == 255) return;
     if (o == 1 && !aiKeyEntry()) return;
@@ -344,7 +353,7 @@ void aiRun() {
         btnClear();
         continue;
       }
-      kbDraw(aiKb, "ASK CLAUDE", "send");
+      kbDraw(aiKb, "ASK THE AI", "send");
     } else if (mode == AM_WAIT) {
       s = netAiState();
       if (s != AI_ASKING) {
@@ -354,7 +363,7 @@ void aiRun() {
         btnClear();
         continue;
       }
-      aiTitle("CLAUDE");
+      aiTitle("AI");
       char dots[4] = { 0, 0, 0, 0 };
       for (uint8_t i = 0; i < (millis() / 400) % 4; i++) dots[i] = '.';
       char b[24];
@@ -381,11 +390,19 @@ void aiRun() {
         btnClear();
         continue;
       }
-      aiTitle(netAiState() == AI_ERROR ? "NO ANSWER" : "CLAUDE");
+      bool err = netAiState() == AI_ERROR;
+      aiTitle(err ? "NO ANSWER" : "AI");
       char b[16];
+      int16_t right = SCR_W;
       if (aiLines > AI_ROWS) {
         snprintf(b, sizeof(b), "%u/%u", (unsigned)(aiTop + 1), (unsigned)(last + 1));
         rightStr(12, b);
+        right = SCR_W - oled.getStrWidth(b) - 4;
+      }
+      if (!err) {                                   // which free model answered
+        char m[AI_COLS + 1];
+        aiModelName(m, (right - 22) / 5 + 1);
+        oled.drawStr(22, 12, m);
       }
       for (uint8_t r = 0; r < AI_ROWS && aiTop + r < aiLines; r++) {
         const AiLine &l = aiLn[aiTop + r];

@@ -398,13 +398,19 @@ void netCheckUpdate()   { startGithub(false); }
 void netInstallUpdate() { startGithub(true); }
 
 // ---------------- AI chat ----------------
-/* A single question to the Claude Messages API, without the history - every
-   question starts afresh. Low effort keeps the answers quick; the server
-   side fallback answers on another model when the first one declines.   */
-#define AI_URL     "https://api.anthropic.com/v1/messages"
-#define AI_MODEL   "claude-opus-5-5"
-#define AI_KEY_MAX 200
-#define AI_RESP_MAX 32768                         // whole JSON answer, thinking signature included
+/* A single question to OpenRouter (OpenAI style chat completions), without
+   the history - every question starts afresh. Only free models are used:
+   the ":free" variants of the ranked list below (or the newer list in the
+   repository, MiniArcade/ai-models.txt), with OpenRouter's own random free
+   router last. On top, provider.max_price = 0 makes OpenRouter refuse a
+   request rather than bill it - so a question can never cost money.    */
+#define AI_URL      "https://openrouter.ai/api/v1/chat/completions"
+#define AI_LIST_URL "https://raw.githubusercontent.com/" CONFIG_ARCADE_GITHUB_REPO "/main/MiniArcade/ai-models.txt"
+#define AI_LAST     "openrouter/free"            // picks any free model that is up
+#define AI_KEY_MAX  200
+#define AI_RESP_MAX 32768                         // whole JSON answer
+#define AI_MODELS   8
+#define AI_ID_MAX   64
 
 static const char AI_SYSTEM[] =
   "You are the AI chat of MiniArcade, a tiny handheld game console. Its screen shows about "
@@ -414,9 +420,22 @@ static const char AI_SYSTEM[] =
   "text without Markdown, tables, emoji or code blocks. Keep it short: usually two to five "
   "sentences, at most about 120 words unless the question really needs more.";
 
+// best first; used until the list from the repository has been read
+static const char *const AI_BUILTIN[] = {
+  "thinkingmachines/inkling:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "qwen/qwen3.8-27b:free",
+  "google/gemma-4-31b-it:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+};
+
 static volatile AiState aiState = AI_IDLE;
-static char aiQuestion[AI_QUESTION_MAX + 1];
-static char aiText[AI_ANSWER_MAX];
+static char    aiQuestion[AI_QUESTION_MAX + 1];
+static char    aiText[AI_ANSWER_MAX];
+static char    aiModel[AI_ID_MAX];                // the model that answered last
+static char    aiList[AI_MODELS][AI_ID_MAX];      // the ranking from the repository
+static uint8_t aiListN = 0;
+static bool    aiListTried = false;               // once per start
 
 // the stored key, "" when there is none
 static void aiKeyLoad(char *out, size_t max) {
@@ -424,7 +443,7 @@ static void aiKeyLoad(char *out, size_t max) {
   nvs_handle_t h;
   if (nvs_open("net", NVS_READONLY, &h) != ESP_OK) return;
   size_t n = max;
-  if (nvs_get_str(h, "aik", out, &n) != ESP_OK) out[0] = 0;
+  if (nvs_get_str(h, "ork", out, &n) != ESP_OK) out[0] = 0;
   nvs_close(h);
 }
 
@@ -448,15 +467,16 @@ bool netAiSetKey(const char *key) {
   }
   nvs_handle_t h;
   if (nvs_open("net", NVS_READWRITE, &h) != ESP_OK) return false;
+  nvs_erase_key(h, "aik");                        // the Claude key of 10.2 is not used any more
   esp_err_t e;
   if (n) {
     char k[AI_KEY_MAX + 1];
     memcpy(k, key, n);
     k[n] = 0;
-    e = nvs_set_str(h, "aik", k);
+    e = nvs_set_str(h, "ork", k);
     memset(k, 0, sizeof(k));
   } else {
-    e = nvs_erase_key(h, "aik");
+    e = nvs_erase_key(h, "ork");
     if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
   }
   if (e == ESP_OK) e = nvs_commit(h);
@@ -469,128 +489,188 @@ static void aiFinish(AiState s, const char *text) {
   aiState = s;
 }
 
-// the request body, built with cJSON so the question is escaped properly
-static char *aiBody() {
+/* The ranking from the repository: one model per line, best first, '#'
+   starts a comment. Only ":free" models are taken. Keeps the built-in
+   list when the file cannot be read.                                  */
+static void aiFetchList() {
+  aiListTried = true;
+  esp_http_client_config_t cfg;
+  clientCfg(&cfg, AI_LIST_URL);
+  esp_http_client_handle_t c = esp_http_client_init(&cfg);
+  if (!c) return;
+  static char b[2048];                            // the file, comments included
+  int n = 0;
+  if (esp_http_client_open(c, 0) == ESP_OK && esp_http_client_fetch_headers(c) >= 0 &&
+      esp_http_client_get_status_code(c) == 200) {
+    for (int k; n < (int)sizeof(b) - 1 && (k = esp_http_client_read(c, b + n, sizeof(b) - 1 - n)) > 0; ) n += k;
+  }
+  esp_http_client_cleanup(c);
+  b[n] = 0;
+  uint8_t got = 0;
+  char list[AI_MODELS][AI_ID_MAX];
+  char *save = NULL;
+  for (char *line = strtok_r(b, "\r\n", &save); line && got < AI_MODELS; line = strtok_r(NULL, "\r\n", &save)) {
+    char *h = strchr(line, '#');
+    if (h) *h = 0;
+    while (*line == ' ' || *line == '\t') line++;
+    size_t len = strcspn(line, " \t");
+    line[len] = 0;
+    if (len < 6 || len >= AI_ID_MAX || strcmp(line + len - 5, ":free")) continue;   // free ones only
+    strlcpy(list[got++], line, AI_ID_MAX);
+  }
+  if (got) { memcpy(aiList, list, sizeof(list)); aiListN = got; }
+}
+
+static uint8_t aiCount() { return aiListN ? aiListN : sizeof(AI_BUILTIN) / sizeof(AI_BUILTIN[0]); }
+static const char *aiAt(uint8_t i) { return aiListN ? aiList[i] : AI_BUILTIN[i]; }
+
+/* The request body: up to two ranked models and the free router behind
+   them - OpenRouter goes down the list when one is busy or down.      */
+static char *aiBody(uint8_t first) {
   cJSON *req = cJSON_CreateObject();
   if (!req) return NULL;
-  cJSON_AddStringToObject(req, "model", AI_MODEL);
+  cJSON *models = cJSON_AddArrayToObject(req, "models");
+  for (uint8_t i = first; i < first + 2 && i < aiCount(); i++) cJSON_AddItemToArray(models, cJSON_CreateString(aiAt(i)));
+  cJSON_AddItemToArray(models, cJSON_CreateString(AI_LAST));
   cJSON_AddNumberToObject(req, "max_tokens", 4096);
-  cJSON_AddStringToObject(req, "fallbacks", "default");
-  cJSON *oc = cJSON_AddObjectToObject(req, "output_config");
-  if (oc) cJSON_AddStringToObject(oc, "effort", "low");
-  cJSON_AddStringToObject(req, "system", AI_SYSTEM);
+  cJSON *rs = cJSON_AddObjectToObject(req, "reasoning");      // think a little, send none of it
+  if (rs) { cJSON_AddStringToObject(rs, "effort", "low"); cJSON_AddBoolToObject(rs, "exclude", true); }
+  cJSON *pv = cJSON_AddObjectToObject(req, "provider");        // never anything that costs money
+  cJSON *mp = pv ? cJSON_AddObjectToObject(pv, "max_price") : NULL;
+  if (mp) { cJSON_AddNumberToObject(mp, "prompt", 0); cJSON_AddNumberToObject(mp, "completion", 0);
+            cJSON_AddNumberToObject(mp, "request", 0); }
   cJSON *msgs = cJSON_AddArrayToObject(req, "messages");
-  cJSON *m = cJSON_CreateObject();
-  if (msgs && m) {
-    cJSON_AddStringToObject(m, "role", "user");
-    cJSON_AddStringToObject(m, "content", aiQuestion);
+  const char *role[2] = { "system", "user" }, *text[2] = { AI_SYSTEM, aiQuestion };
+  for (uint8_t i = 0; i < 2 && msgs; i++) {
+    cJSON *m = cJSON_CreateObject();
+    if (!m) break;
+    cJSON_AddStringToObject(m, "role", role[i]);
+    cJSON_AddStringToObject(m, "content", text[i]);
     cJSON_AddItemToArray(msgs, m);
-  } else cJSON_Delete(m);
+  }
   char *body = cJSON_PrintUnformatted(req);
   cJSON_Delete(req);
   return body;
 }
 
-// the text of a 200 answer, or why there is none
-static void aiReadAnswer(const char *json, size_t len) {
-  cJSON *root = cJSON_ParseWithLength(json, len);
-  if (!root) { aiFinish(AI_ERROR, "Claude's answer could not be read."); return; }
-  const cJSON *stop = cJSON_GetObjectItemCaseSensitive(root, "stop_reason");
-  if (cJSON_IsString(stop) && !strcmp(stop->valuestring, "refusal")) {
-    cJSON_Delete(root);
-    aiFinish(AI_ERROR, "Claude declined to answer this question.");
-    return;
-  }
-  static char out[AI_ANSWER_MAX];
-  size_t n = 0;
-  out[0] = 0;
-  const cJSON *block;
-  cJSON_ArrayForEach(block, cJSON_GetObjectItemCaseSensitive(root, "content")) {
-    const cJSON *type = cJSON_GetObjectItemCaseSensitive(block, "type");
-    const cJSON *text = cJSON_GetObjectItemCaseSensitive(block, "text");
-    if (!cJSON_IsString(type) || strcmp(type->valuestring, "text") || !cJSON_IsString(text)) continue;
-    if (n && n < sizeof(out) - 2) { out[n++] = '\n'; out[n] = 0; }
-    n += strlcpy(out + n, text->valuestring, sizeof(out) - n);
-    if (n >= sizeof(out)) n = sizeof(out) - 1;
-  }
-  bool cut = cJSON_IsString(stop) && !strcmp(stop->valuestring, "max_tokens");
-  cJSON_Delete(root);
-  if (!n) { aiFinish(AI_ERROR, "Claude sent no text."); return; }
-  if (cut && n < sizeof(out) - 4) strcat(out, " ...");
-  aiFinish(AI_DONE, out);
+// the error message of an answer, "" when there is none
+static const char *aiErrMsg(const cJSON *root) {
+  const cJSON *m = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "error"), "message");
+  return cJSON_IsString(m) ? m->valuestring : "";
 }
 
-// what went wrong, from the status and the API's error message
-static void aiReadError(int status, const char *json, size_t len) {
-  const char *msg = "";
+// the text of a 200 answer; false when it carries an error instead
+static bool aiReadAnswer(const char *json, size_t len) {
   cJSON *root = cJSON_ParseWithLength(json, len);
-  if (root) {
-    const cJSON *m = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "error"), "message");
-    if (cJSON_IsString(m)) msg = m->valuestring;
-  }
+  if (!root) { aiFinish(AI_ERROR, "The answer could not be read."); return true; }
+  const cJSON *choice = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(root, "choices"), 0);
+  const cJSON *msg = cJSON_GetObjectItemCaseSensitive(choice, "message");
+  const cJSON *text = cJSON_GetObjectItemCaseSensitive(msg, "content");
+  const cJSON *fin = cJSON_GetObjectItemCaseSensitive(choice, "finish_reason");
+  const cJSON *model = cJSON_GetObjectItemCaseSensitive(root, "model");
+  if (cJSON_IsString(model)) strlcpy(aiModel, model->valuestring, sizeof(aiModel));
+  bool ok = true;
+  if (cJSON_IsString(text) && text->valuestring[0]) {
+    static char out[AI_ANSWER_MAX];
+    strlcpy(out, text->valuestring, sizeof(out));
+    if (cJSON_IsString(fin) && !strcmp(fin->valuestring, "length") && strlen(out) < sizeof(out) - 5)
+      strcat(out, " ...");
+    aiFinish(AI_DONE, out);
+  } else if (cJSON_GetObjectItemCaseSensitive(root, "error") ||
+             cJSON_GetObjectItemCaseSensitive(choice, "error")) {
+    ok = false;                                   // the model failed: try the next ones
+  } else aiFinish(AI_ERROR, "The model sent no text. Ask again.");
+  cJSON_Delete(root);
+  return ok;
+}
+
+// what went wrong, from the status and OpenRouter's error message
+static void aiReadError(int status, const char *json, size_t len) {
+  cJSON *root = cJSON_ParseWithLength(json, len);
+  const char *msg = root ? aiErrMsg(root) : "";
   const char *what;
   if (status == 401)                       what = "The API key was not accepted. Type it in again.";
-  else if (status == 403)                  what = "This API key may not do that.";
-  else if (status == 429)                  what = "Too many questions or no credit left. Wait a moment.";
-  else if (status == 529 || status >= 500) what = "Claude is busy right now. Try again in a minute.";
-  else                                     what = "Claude could not answer.";
+  else if (status == 402)                  what = "OpenRouter wants credit for this - no free model took the question.";
+  else if (status == 429)                  what = "The free limit is used up for now. Try again later (free models: about 50 questions a day).";
+  else if (strstr(msg, "data policy"))     what = "Free models need a setting: openrouter.ai, Settings > Privacy, allow free model training/logging.";
+  else if (status >= 500)                  what = "OpenRouter is busy right now. Try again in a minute.";
+  else                                     what = "No free model could answer.";
   static char b[AI_ANSWER_MAX];
   snprintf(b, sizeof(b), "%s\n\n(error %d) %s", what, status, msg);
   if (root) cJSON_Delete(root);
   aiFinish(AI_ERROR, b);
 }
 
-static void aiTask(void *) {
-  char *body = aiBody();
-  char *resp = NULL;                              // taken after the TLS handshake
-  size_t cap = AI_RESP_MAX;
-  esp_http_client_handle_t c = NULL;
-  if (!body) { aiFinish(AI_ERROR, "Out of memory."); goto done; }
-  {
-    esp_http_client_config_t cfg;
-    clientCfg(&cfg, AI_URL);
-    cfg.method = HTTP_METHOD_POST;
-    cfg.timeout_ms = 90000;                       // a long answer takes a while
-    c = esp_http_client_init(&cfg);
-    if (!c) { aiFinish(AI_ERROR, "Out of memory."); goto done; }
-    char key[AI_KEY_MAX + 1];
-    aiKeyLoad(key, sizeof(key));
-    esp_http_client_set_header(c, "x-api-key", key);   // the client keeps its own copy
-    memset(key, 0, sizeof(key));
-    esp_http_client_set_header(c, "anthropic-version", "2023-06-01");
-    esp_http_client_set_header(c, "anthropic-beta", "server-side-fallback-2026-07-01");
-    esp_http_client_set_header(c, "content-type", "application/json");
+/* One request with the models from rank "first" on. Returns the status,
+   0 when the connection failed; resp gets the body.                  */
+static int aiPost(uint8_t first, char **resp, size_t *rn) {
+  *resp = NULL;
+  *rn = 0;
+  char *body = aiBody(first);
+  if (!body) return 0;
+  esp_http_client_config_t cfg;
+  clientCfg(&cfg, AI_URL);
+  cfg.method = HTTP_METHOD_POST;
+  cfg.timeout_ms = 120000;                        // free models can be slow
+  esp_http_client_handle_t c = esp_http_client_init(&cfg);
+  int status = 0;
+  if (c) {
+    char auth[AI_KEY_MAX + 8];
+    strcpy(auth, "Bearer ");
+    aiKeyLoad(auth + 7, sizeof(auth) - 7);
+    esp_http_client_set_header(c, "Authorization", auth);   // the client keeps its own copy
+    memset(auth, 0, sizeof(auth));
+    esp_http_client_set_header(c, "Content-Type", "application/json");
+    esp_http_client_set_header(c, "X-Title", "MiniArcade");
     int len = strlen(body);
-    if (esp_http_client_open(c, len) != ESP_OK) {
-      aiFinish(AI_ERROR, "No connection to Claude. Does this WLAN reach the internet?");
-      goto done;
-    }
-    int64_t size = esp_http_client_write(c, body, len) == len ? esp_http_client_fetch_headers(c) : -1;
-    if (size < 0) { aiFinish(AI_ERROR, "The connection to Claude broke off."); goto done; }
-    if (size > 0 && size < AI_RESP_MAX) cap = (size_t)size + 1;
-    resp = (char *)malloc(cap);
-    if (!resp) { aiFinish(AI_ERROR, "Out of memory."); goto done; }
-    int status = esp_http_client_get_status_code(c);
-    size_t n = 0;
-    for (;;) {
-      if (n >= cap - 1) {
-        if (size > 0 && n == (size_t)size) break;     // all of it, as announced
-        aiFinish(AI_ERROR, "Claude's answer is too long for the console.");
-        goto done;
+    int64_t size = -1;
+    if (esp_http_client_open(c, len) == ESP_OK && esp_http_client_write(c, body, len) == len)
+      size = esp_http_client_fetch_headers(c);
+    if (size >= 0) {
+      size_t cap = size > 0 && size < AI_RESP_MAX ? (size_t)size + 1 : AI_RESP_MAX;
+      char *r = (char *)malloc(cap);                // taken after the TLS handshake
+      size_t n = 0;
+      if (r) {
+        for (;;) {
+          if (n >= cap - 1) break;                  // full (or all of it, as announced)
+          int k = esp_http_client_read(c, r + n, cap - 1 - n);
+          if (k <= 0) break;
+          n += k;
+        }
+        r[n] = 0;
+        *resp = r;
+        *rn = n;
+        status = esp_http_client_get_status_code(c);
       }
-      int k = esp_http_client_read(c, resp + n, cap - 1 - n);
-      if (k < 0) { aiFinish(AI_ERROR, "The connection to Claude broke off."); goto done; }
-      if (k == 0) break;
-      n += k;
     }
-    resp[n] = 0;
-    if (status == 200) aiReadAnswer(resp, n);
-    else aiReadError(status, resp, n);
+    esp_http_client_cleanup(c);
   }
-done:
-  if (c) esp_http_client_cleanup(c);
-  free(resp);
   cJSON_free(body);
+  return status;
+}
+
+static void aiTask(void *) {
+  if (!aiListTried) aiFetchList();
+  aiModel[0] = 0;
+  // a ranked model that is gone gives 400/404 for the whole request: then the next two
+  for (uint8_t first = 0; ; first += 2) {
+    char *resp;
+    size_t n;
+    int status = aiPost(first, &resp, &n);
+    bool more = first + 2 < aiCount();
+    if (!status) { aiFinish(AI_ERROR, "No connection to OpenRouter. Does this WLAN reach the internet?"); break; }
+    if (status == 200) {
+      bool done = aiReadAnswer(resp, n);
+      free(resp);
+      if (done) break;
+      if (!more) { aiFinish(AI_ERROR, "No free model could answer. Try again in a minute."); break; }
+      continue;
+    }
+    if ((status == 400 || status == 404) && more && !strstr(resp, "data policy")) { free(resp); continue; }
+    aiReadError(status, resp, n);
+    free(resp);
+    break;
+  }
   vTaskDelete(NULL);
 }
 
@@ -610,6 +690,7 @@ bool netAiAsk(const char *question) {
 
 AiState     netAiState()  { return aiState; }
 const char *netAiAnswer() { return aiText; }
+const char *netAiModel()  { return aiModel; }
 
 // ---------------- web page ----------------
 static const char PAGE_HEAD[] =

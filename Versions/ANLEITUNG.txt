@@ -13,10 +13,14 @@ Erstes Flashen im Browser (Chrome oder Edge):
  4. "Program" druecken, warten bis "Leaving..." erscheint
  5. RESET druecken - die Konsole startet
 
-AI-Chat (ab 10.2): In der Spieleliste "AI Chat" waehlen. Die Frage wird
-mit der Bildschirmtastatur getippt (Pfeile waehlen, OK tippt, "send"
-schickt sie ab), Claude antwortet auf dem Display (hoch/runter = blaettern).
-Noetig: WLAN mit Internet und ein eigener API-Key von console.anthropic.com
-(kostenpflichtig pro Frage). Den Key am einfachsten auf der Handy-Seite
-Settings -> "AI chat" eintragen; er bleibt nur auf der Konsole, wird nie
-wieder angezeigt und ist in keinem Backup.
+AI-Chat (ab 10.3 kostenlos): In der Spieleliste "AI Chat" waehlen. Die
+Frage wird mit der Bildschirmtastatur getippt (Pfeile waehlen, OK tippt,
+"send" schickt sie ab), das beste kostenlose Modell auf OpenRouter
+antwortet auf dem Display (hoch/runter = blaettern, oben steht der Name
+des Modells). Noetig: WLAN mit Internet und ein kostenloser API-Key von
+openrouter.ai/keys (ohne Guthaben, ca. 50 Fragen am Tag). Es werden nur
+Gratis-Modelle benutzt, jede Anfrage hat "Hoechstpreis 0" - es kann nichts
+kosten. Den Key am einfachsten auf der Handy-Seite Settings -> "AI chat"
+eintragen; er bleibt nur auf der Konsole, wird nie wieder angezeigt und
+ist in keinem Backup. Meldet OpenRouter "data policy": auf openrouter.ai
+unter Settings -> Privacy die Gratis-Modelle erlauben.
