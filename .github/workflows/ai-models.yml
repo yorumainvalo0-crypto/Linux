@@ -1,0 +1,29 @@
+# Keeps MiniArcade/ai-models.txt (the free models the AI chat asks) in
+# line with OpenRouter: once a week, models that are no longer free are
+# dropped and new free ones added at the end. The consoles read the file
+# from main, so no firmware update is needed for a new list.
+name: AI chat free models
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"          # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare with OpenRouter
+        run: python3 MiniArcade/tools/ai_models.py
+      - name: Commit a changed list
+        run: |
+          if git diff --quiet MiniArcade/ai-models.txt; then echo "no change"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add MiniArcade/ai-models.txt
+          git commit -m "AI chat: refresh the free model list"
+          git push

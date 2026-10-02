@@ -471,7 +471,7 @@ int main(int argc,char**argv){
   } else if(scenario=="aiwlan"){ simEnd=12000; ups(4,1300,220); simNoNet=true; simAiKey=true;
       auto tap=[&](uint32_t t,uint8_t k){ script.push_back({t,k}); script.push_back({t+60,0}); };
       tap(3000,16);                                                // AI Chat: key stored, options
-      tap(3600,16);                                                // ask Claude: joins in vain
+      tap(3600,16);                                                // ask the AI: joins in vain
   } else if(scenario=="batfind"){ simEnd=16000; ups(1,1300,220);
       simNvsU16["bat"]=255;                     // older firmware found nothing
       simBatPin=2; simGhostPin=1;               // the real one comes after a trap
@@ -1202,16 +1202,17 @@ int main(int argc,char**argv){
   } else if(scenario=="ai"){
     auto sub=[&](const char *x){ for(auto&t:seenTexts) if(t.find(x)!=std::string::npos) return true; return false; };
     check("listed in the library", saw("AI Chat")&&saw("web"));
-    check("asks for a key first", saw("needs a Claude API key")&&saw("API KEY"));
+    check("asks for a key first", saw("needs an OpenRouter key")&&saw("API KEY"));
     check("key typed on the console and stored", simAiKey&&!strcmp(simAiKeyText,"aaaaaaaaaaaaaaaaaaaa"));
-    check("keyboard shown", saw("ASK CLAUDE")&&saw("space")&&saw("del")&&saw("send")&&saw("ABC")&&saw("#+"));
+    check("keyboard shown", saw("ASK THE AI")&&saw("space")&&saw("del")&&saw("send")&&saw("ABC")&&saw("#+"));
     check("question typed and sent", !strcmp(simAiQ,"hi"));
     check("waiting shown", saw("thinking")&&saw("thinking..."));
-    check("answer in plain ASCII, word wrapped", saw("Hallo! Gruesse aus der")&&saw("Wolke - ich bin Claude.")&&saw("?Que tal? "));
+    check("answer in plain ASCII, word wrapped", saw("Hallo! Gruesse aus der")&&saw("Wolke - ich bin die KI.")&&saw("?Que tal? "));
     check("markdown heading removed", saw("Tipp")&&!sub("# Tipp")&&!sub("**"));
     bool wide=false; for(auto&t:seenTexts) if(t.size()>25&&t.find("Antwort")!=std::string::npos) wide=true;
     check("no line wider than the screen", !wide&&sub("Ende."));
     check("scroll position shown", sub("1/")&&sub("/")) ;
+    check("the free model that answered is named", saw("nemotron-3-ultra"));
     check("page left, WLAN switched off again", simNet==NET_OFF);
     char b[64];
     aiAscii("Stra\xC3\x9F" "e, \xC3\x84pfel `x` \xE2\x80\x9Ehi\xE2\x80\x9C\n## H", b, sizeof(b));
@@ -1220,7 +1221,7 @@ int main(int argc,char**argv){
     aiAscii("\xC3\xA9\xC3\xB1\xC3\xA7 \xF0\x9F\x98\x80!", b, sizeof(b));
     check("accents dropped, emoji left out", !strcmp(b,"enc !"));
   } else if(scenario=="aiwlan"){
-    check("options with a stored key", saw("ask Claude")&&saw("forget the API key"));
+    check("options with a stored key", saw("ask the AI")&&saw("forget the API key"));
     check("join failure explained", saw("joining HomeNet")&&saw("can't join HomeNet"));
     check("nothing sent", !simAiQ[0]);
   } else if(scenario=="wlanplay"){

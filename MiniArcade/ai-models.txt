@@ -1,0 +1,11 @@
+# Free OpenRouter models for the AI chat, best first (one per line).
+# The console reads this file from main before its first question and
+# tries the first two, then OpenRouter's random free router. Only ids
+# ending in ":free" are used. A weekly job (tools/ai_models.py) drops
+# models that are no longer free and adds new free ones at the end;
+# reorder by hand to move a better one up.
+thinkingmachines/inkling:free
+nvidia/nemotron-3-ultra-550b-a55b:free
+qwen/qwen3.8-27b:free
+google/gemma-4-31b-it:free
+nvidia/nemotron-3-super-120b-a12b:free

@@ -7,8 +7,9 @@ Lights Out, Match 3, Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf
 and Lander.
 Against a second console nearby (Multiplayer): Connect Four, Tic Tac Toe,
 Pong, Snake, Pac-Man, Battleship, Checkers, Mau-Mau and Bomberman.
-AI Chat: type a question on the console, Claude answers on the display
-(needs a WLAN with internet and an own API key).
+AI Chat: type a question on the console, the best free AI model on
+OpenRouter answers on the display (needs a WLAN with internet and a free
+OpenRouter key).
 
 Ready-made firmware: `Versions/<version>/` in the repository and every
 release have `MiniArcade-<version>.zip` with a German how-to.
@@ -97,7 +98,9 @@ the WLAN page only exists in this build, because it needs `main/net.h`.
     main/settings.h       settings page
     main/wlan.h           WLAN page and firmware versions
     main/ai.h             AI chat: on-screen keyboard and the answer view
-                          (the request to Claude is in main/net.cpp)
+                          (the request to OpenRouter is in main/net.cpp)
+    ai-models.txt         the free models of the AI chat, best first
+    tools/ai_models.py    keeps that list in line with OpenRouter (weekly)
     main/phone.cpp        the phone pages (HTTP, backup to and from the flash)
     main/phone.h          what the console tells them (stats, settings, keys, levels)
     main/backupfmt.h      the backup file format (tested on the PC)
@@ -217,36 +220,48 @@ never on the open setup hotspot.
 
 ## AI chat
 
-"AI Chat" in the library sends a question to Claude (Anthropic) and shows
-the answer. The question is typed on the console with an on-screen
-keyboard:
+"AI Chat" in the library sends a question to the best free AI model on
+OpenRouter and shows the answer, with the model's name on top. The
+question is typed on the console with an on-screen keyboard:
 
     arrows             pick a key (the rows wrap around)
     OK                 types it
     ABC / abc          capital / small letters
     #+                 symbols (abc goes back)
     space, del         space, delete the last letter
-    send               asks Claude; the screen says "thinking..."
+    send               asks; the screen says "thinking..."
     answer             UP/DOWN scroll a line, LEFT/RIGHT a page,
                        OK = next question (after an error the old one stays)
     hold OK            leave
 
-It needs an API key from console.anthropic.com (paid per use - one short
-question costs a fraction of a cent). Type it in on the console the first
-time (keys look like sk-ant-api03-...; ABC for capitals, #+ for "-" and
-"_"), or put it in on the phone's settings page, which is easier. The key
-stays on the console: it only ever goes to api.anthropic.com, it is never
-shown again (the phone page only says whether one is stored), and backups
-leave it out. "AI Chat" with a key stored offers: ask Claude, type a new
-API key, forget the API key.
+It is free: it needs an OpenRouter API key (openrouter.ai/keys, an
+account without credit is enough) and only ever uses free models - the
+":free" ones, with OpenRouter's random free router last, and every request
+says "maximum price 0", so OpenRouter would refuse a question rather than
+bill it. Free models allow about 50 questions a day. If OpenRouter answers
+"no endpoints matching your data policy", allow free models under
+Settings > Privacy on openrouter.ai.
+
+Which model: `ai-models.txt` lists the free models best first. The console
+reads it from main before its first question (until then, and if GitHub
+cannot be reached, it uses the same list built in) and asks the first two;
+if both are busy or gone, OpenRouter takes the next free one. Once a week
+the workflow "AI chat free models" (`tools/ai_models.py`) drops models that
+are no longer free and adds new free ones at the end - move a better one
+up by hand, no firmware update needed.
+
+The key is typed on the console the first time (keys look like
+sk-or-v1-...) or, easier, put in on the phone's settings page. It stays on
+the console: it only ever goes to openrouter.ai, it is never shown again
+(the phone page only says whether one is stored), and backups leave it
+out. "AI Chat" with a key stored offers: ask the AI, type a new API key,
+forget the API key.
 
 The console joins the saved WLAN by itself and switches the radio off when
 the page is left (unless "stay online" is on). The phone hotspot has no
 internet, so the chat does not work there. Every question starts afresh
 (no history); the answers come in plain text - umlauts as ae/oe/ue,
-because the small font only knows ASCII. The model is claude-opus-5-5 with
-low effort for quick answers; if it declines a question, the API retries
-it on another model by itself.
+because the small font only knows ASCII.
 
 ## Multiplayer
 
@@ -330,6 +345,7 @@ build fills in its own repository. The repository must be public.
                                          Mau-Mau, Bomberman, Cave, Stack, Minigolf, Lander)
     ESP-IDF 5.3.2       857 kB firmware  10.1: Dino jumps like the Chrome original
     ESP-IDF 5.3.2       874 kB firmware  10.2: + AI chat (Claude, JSON parser)
+    ESP-IDF 5.3.2       876 kB firmware  10.3: AI chat over OpenRouter, free models only
 
 Both IDF versions built 9.1 unchanged. 6.1 is smaller because it uses picolibc.
 From 10.2 on the build needs IDF 5.x: the AI chat uses its json (cJSON)
@@ -350,5 +366,5 @@ through their real screens with bots and checks their rules: every
 Sudoku has one solution, every Lights Out level can be solved, every
 Minigolf hole can be played in par, no Mau-Mau card gets lost, the
 Checkers CPU beats a random player, and so on. The AI chat is typed
-through its real keyboard against a pretend Claude: key, question, the
+through its real keyboard against a pretend AI: key, question, the
 plain-ASCII answer and the word wrap are checked.

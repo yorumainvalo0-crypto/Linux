@@ -75,7 +75,7 @@ static AiState simAi = AI_IDLE;
 static int     simAiTicks = 0;
 static const char *simAiText = "";
 static const char SIM_AI_ANSWER[] =
-  "**Hallo!** Gr\xC3\xBC\xC3\x9F" "e aus der Wolke \xE2\x80\x93 ich bin Claude. \xC2\xBFQu\xC3\xA9 tal? \xF0\x9F\x98\x80\n\n"
+  "**Hallo!** Gr\xC3\xBC\xC3\x9F" "e aus der Wolke \xE2\x80\x93 ich bin die KI. \xC2\xBFQu\xC3\xA9 tal? \xF0\x9F\x98\x80\n\n"
   "# Tipp\nDiese Antwort ist absichtlich lang, damit man sie mit den Pfeiltasten scrollen muss: "
   "eins zwei drei vier f\xC3\xBCnf sechs sieben acht neun zehn elf zw\xC3\xB6lf dreizehn vierzehn "
   "f\xC3\xBCnfzehn sechzehn siebzehn achtzehn neunzehn zwanzig. Ende.";
@@ -93,3 +93,4 @@ bool    netAiAsk(const char *q) {
 }
 AiState     netAiState()  { if (simAi == AI_ASKING && ++simAiTicks > 400) simAi = AI_DONE; return simAi; }
 const char *netAiAnswer() { return simAiText; }
+const char *netAiModel()  { return simAi == AI_DONE ? "nvidia/nemotron-3-ultra-550b-a55b:free" : ""; }
