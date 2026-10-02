@@ -7,6 +7,8 @@ Lights Out, Match 3, Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf
 and Lander.
 Against a second console nearby (Multiplayer): Connect Four, Tic Tac Toe,
 Pong, Snake, Pac-Man, Battleship, Checkers, Mau-Mau and Bomberman.
+AI Chat: type a question on the console, Claude answers on the display
+(needs a WLAN with internet and an own API key).
 
 Ready-made firmware: `Versions/<version>/` in the repository and every
 release have `MiniArcade-<version>.zip` with a German how-to.
@@ -16,7 +18,8 @@ release have `MiniArcade-<version>.zip` with a German how-to.
     UP/DOWN/LEFT/RIGHT + OK
     hold OK in a game    pause: continue / restart / quit to menu
                          (hold OK once more = quit)
-    UP in the library    jumps from the top to Settings, Stats, Multiplayer
+    UP in the library    jumps from the top to Settings, Stats, Multiplayer,
+                         AI Chat
     Dino                 like the Chrome original: tap UP/OK = short hop, hold
                          = high jump, DOWN = duck (in the air: drop fast)
     Minesweeper          OK opens, a quick double tap on OK sets a flag
@@ -93,6 +96,8 @@ the WLAN page only exists in this build, because it needs `main/net.h`.
     main/setup_wizard.h   key, sound and battery setup
     main/settings.h       settings page
     main/wlan.h           WLAN page and firmware versions
+    main/ai.h             AI chat: on-screen keyboard and the answer view
+                          (the request to Claude is in main/net.cpp)
     main/phone.cpp        the phone pages (HTTP, backup to and from the flash)
     main/phone.h          what the console tells them (stats, settings, keys, levels)
     main/backupfmt.h      the backup file format (tested on the PC)
@@ -190,7 +195,8 @@ The first password is 8 random digits. Below the update part the page has:
     Stats and awards   best score, times played and play time of every game,
                        all awards with what they need
     Settings           player name, brightness, sleep time, sound on/off,
-                       cpu clock (from the next start on)
+                       cpu clock (from the next start on), hotspot password,
+                       the API key of the AI chat
     Screen             live picture of the display, "save a picture" = PNG
     Controller         the screen plus big keys - play with the phone
                        (a computer's arrow keys and Enter work too)
@@ -208,6 +214,39 @@ console answers the phone between frames (this works on the phone hotspot
 too). The multiplayer page switches it off again, as it needs the radio
 itself. The pages only exist in your own WLAN and on the phone hotspot,
 never on the open setup hotspot.
+
+## AI chat
+
+"AI Chat" in the library sends a question to Claude (Anthropic) and shows
+the answer. The question is typed on the console with an on-screen
+keyboard:
+
+    arrows             pick a key (the rows wrap around)
+    OK                 types it
+    ABC / abc          capital / small letters
+    #+                 symbols (abc goes back)
+    space, del         space, delete the last letter
+    send               asks Claude; the screen says "thinking..."
+    answer             UP/DOWN scroll a line, LEFT/RIGHT a page,
+                       OK = next question (after an error the old one stays)
+    hold OK            leave
+
+It needs an API key from console.anthropic.com (paid per use - one short
+question costs a fraction of a cent). Type it in on the console the first
+time (keys look like sk-ant-api03-...; ABC for capitals, #+ for "-" and
+"_"), or put it in on the phone's settings page, which is easier. The key
+stays on the console: it only ever goes to api.anthropic.com, it is never
+shown again (the phone page only says whether one is stored), and backups
+leave it out. "AI Chat" with a key stored offers: ask Claude, type a new
+API key, forget the API key.
+
+The console joins the saved WLAN by itself and switches the radio off when
+the page is left (unless "stay online" is on). The phone hotspot has no
+internet, so the chat does not work there. Every question starts afresh
+(no history); the answers come in plain text - umlauts as ae/oe/ue,
+because the small font only knows ASCII. The model is claude-opus-5-5 with
+low effort for quick answers; if it declines a question, the API retries
+it on another model by itself.
 
 ## Multiplayer
 
@@ -290,8 +329,11 @@ build fills in its own repository. The repository must be public.
     ESP-IDF 5.3.2       857 kB firmware  10.0: + 10 games (Sudoku, Lights Out, Match 3, Checkers,
                                          Mau-Mau, Bomberman, Cave, Stack, Minigolf, Lander)
     ESP-IDF 5.3.2       857 kB firmware  10.1: Dino jumps like the Chrome original
+    ESP-IDF 5.3.2       874 kB firmware  10.2: + AI chat (Claude, JSON parser)
 
-Both IDF versions build unchanged. 6.1 is smaller because it uses picolibc.
+Both IDF versions built 9.1 unchanged. 6.1 is smaller because it uses picolibc.
+From 10.2 on the build needs IDF 5.x: the AI chat uses its json (cJSON)
+component, which IDF 6 moved to the component registry.
 
 The savings come from dropping the Arduino core plus U8g2 and from the
 size options in sdkconfig.defaults (no logging, nano printf, no C++
@@ -307,4 +349,6 @@ end the same on both consoles). `test/games2.h` plays the games of 10.0
 through their real screens with bots and checks their rules: every
 Sudoku has one solution, every Lights Out level can be solved, every
 Minigolf hole can be played in par, no Mau-Mau card gets lost, the
-Checkers CPU beats a random player, and so on.
+Checkers CPU beats a random player, and so on. The AI chat is typed
+through its real keyboard against a pretend Claude: key, question, the
+plain-ASCII answer and the word wrap are checked.

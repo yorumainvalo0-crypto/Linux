@@ -500,6 +500,7 @@ bool gameOver(uint16_t score) {
 #include "setup_wizard.h"
 #include "wlan.h"
 #include "settings.h"
+#include "ai.h"
 #include "game_tetris.h"
 #include "game_snake.h"
 #include "game_pong.h"
@@ -576,6 +577,9 @@ static const Game GAMES[] = {
   { "Minigolf",   minigolfRun },
   { "Lander",     landerRun   },
   // add new games here (before the entries with a tag); stats.h has room for ST_GAMES
+#ifdef HAVE_NET
+  { "AI Chat",    aiRun,       "web" },
+#endif
 #ifdef HAVE_LINK
   { "Multiplayer", multiplayerRun, "2P" },
 #endif

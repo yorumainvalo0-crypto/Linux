@@ -1,7 +1,8 @@
 // Pages for a phone in the same WLAN as the console - see net.h
 //
 //   /stats     high scores, play times, awards        (GET /api/stats)
-//   /settings  name, brightness, sleep, sound, clock  (GET /api/settings, POST /api/set)
+//   /settings  name, brightness, sleep, sound, clock, hotspot password, AI key
+//                                                     (GET /api/settings, POST /api/set)
 //   /screen    live picture of the display            (GET /api/screen)
 //   /pad       the screen plus big keys to play with  (POST /api/key)
 //   /level     Sokoban level editor, 3 own slots      (GET/POST /api/level)
@@ -175,8 +176,15 @@ static const char P_SETTINGS[] =
   "<input id=hp maxlength=63 autocomplete=off></label><button onclick=\"set('hpw',$('hp').value)\">save the password</button>"
   "<p class=m>Used from the next start of the hotspot (console: WLAN page, \"phone hotspot\"). "
   "There, LEFT makes a new random password and RIGHT switches the password off and on.</p>"
+  "<h1>AI chat</h1><p class=m id=ai></p><label>Claude API key (from console.anthropic.com)"
+  "<input id=ak type=password autocomplete=off></label>"
+  "<button onclick=\"set('aikey',$('ak').value);$('ak').value='';setTimeout(hs,800)\">save the key</button>"
+  "<button onclick=\"set('aikey','');setTimeout(hs,800)\">forget the key</button>"
+  "<p class=m>The key stays on the console: it is never shown again and not part of a backup. "
+  "Questions are typed on the console (library: AI Chat) and need a WLAN with internet.</p>"
   "<p id=msg class=m></p><script>"
-  "fetch('/api/hotspot').then(function(r){return r.json()}).then(function(h){$('hp').value=h.pw});"
+  "function hs(){fetch('/api/hotspot').then(function(r){return r.json()}).then(function(h){$('hp').value=h.pw;"
+  "$('ai').textContent=h.ai?'A key is stored.':'No key stored yet.'})}hs();"
   "function set(k,v){fetch('/api/set?k='+k+'&v='+encodeURIComponent(v),{method:'POST'})"
   ".then(function(r){return r.text()}).then(function(t){$('msg').textContent=t})}"
   "fetch('/api/settings').then(function(r){return r.json()}).then(function(s){$('nm').value=s.name;"
@@ -314,6 +322,11 @@ static esp_err_t setPost(httpd_req_t *r) {
   urlDecode(v);
   if (!strcmp(k, "hpw") && netState() == NET_PLAY && !netApPass()[0])   // open hotspot: not from strangers
     return text(r, "403 Forbidden", "switch the password on at the console first (RIGHT on the hotspot page)");
+  if (!strcmp(k, "aikey") && netState() == NET_PLAY && !netApPass()[0])
+    return text(r, "403 Forbidden", "switch the hotspot password on at the console first");
+  if (!strcmp(k, "aikey"))                        // stored in net.cpp, never read back out
+    return netAiSetKey(v) ? text(r, "200 OK", v[0] ? "key saved - it is not shown again" : "key forgotten")
+                          : text(r, "400 Bad Request", "that does not look like an API key");
   if (!strcmp(k, "hpw"))                          // the hotspot lives in net.cpp, not in the games
     return netApSetPass(v) ? text(r, "200 OK", v[0] ? "saved - used from the next hotspot start"
                                                     : "no password from the next hotspot start")
@@ -326,14 +339,14 @@ static esp_err_t setPost(httpd_req_t *r) {
 
 static esp_err_t hotspotGet(httpd_req_t *r) {
   if (!allowed(r)) return ESP_OK;
-  char b[96], esc[70];
+  char b[112], esc[70];
   size_t k = 0;
   for (const char *p = netApPass(); *p && k < sizeof(esc) - 3; p++) {   // JSON-safe
     if (*p == '"' || *p == '\\') esc[k++] = '\\';
     esc[k++] = *p;
   }
   esc[k] = 0;
-  snprintf(b, sizeof(b), "{\"pw\":\"%s\"}", esc);
+  snprintf(b, sizeof(b), "{\"pw\":\"%s\",\"ai\":%d}", esc, netAiHasKey() ? 1 : 0);   // never the key itself
   httpd_resp_set_type(r, "application/json");
   httpd_resp_set_hdr(r, "Cache-Control", "no-store");
   return httpd_resp_sendstr(r, b);
