@@ -18,6 +18,7 @@
 #include "esp_app_format.h"
 #include "esp_image_format.h"
 #include "esp_crt_bundle.h"
+#include "cJSON.h"
 #include "nvs.h"
 #include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
@@ -395,6 +396,220 @@ static void startGithub(bool install) {
 
 void netCheckUpdate()   { startGithub(false); }
 void netInstallUpdate() { startGithub(true); }
+
+// ---------------- AI chat ----------------
+/* A single question to the Claude Messages API, without the history - every
+   question starts afresh. Low effort keeps the answers quick; the server
+   side fallback answers on another model when the first one declines.   */
+#define AI_URL     "https://api.anthropic.com/v1/messages"
+#define AI_MODEL   "claude-opus-5-5"
+#define AI_KEY_MAX 200
+#define AI_RESP_MAX 32768                         // whole JSON answer, thinking signature included
+
+static const char AI_SYSTEM[] =
+  "You are the AI chat of MiniArcade, a tiny handheld game console. Its screen shows about "
+  "25 characters by 6 lines at a time; the player scrolls through longer answers with the "
+  "arrow keys. The question was typed letter by letter with five buttons, so it is short, "
+  "often lowercase and may have typos. Answer in the language of the question, in plain "
+  "text without Markdown, tables, emoji or code blocks. Keep it short: usually two to five "
+  "sentences, at most about 120 words unless the question really needs more.";
+
+static volatile AiState aiState = AI_IDLE;
+static char aiQuestion[AI_QUESTION_MAX + 1];
+static char aiText[AI_ANSWER_MAX];
+
+// the stored key, "" when there is none
+static void aiKeyLoad(char *out, size_t max) {
+  out[0] = 0;
+  nvs_handle_t h;
+  if (nvs_open("net", NVS_READONLY, &h) != ESP_OK) return;
+  size_t n = max;
+  if (nvs_get_str(h, "aik", out, &n) != ESP_OK) out[0] = 0;
+  nvs_close(h);
+}
+
+bool netAiHasKey() {
+  char k[AI_KEY_MAX + 1];
+  aiKeyLoad(k, sizeof(k));
+  bool has = k[0] != 0;
+  memset(k, 0, sizeof(k));
+  return has;
+}
+
+bool netAiSetKey(const char *key) {
+  while (*key == ' ') key++;
+  size_t n = strlen(key);
+  while (n && (key[n - 1] == ' ' || key[n - 1] == '\n' || key[n - 1] == '\r')) n--;
+  if (n && (n < 20 || n > AI_KEY_MAX)) return false;
+  for (size_t i = 0; i < n; i++) {                 // keys are letters, digits, '-' and '_'
+    char c = key[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
+      return false;
+  }
+  nvs_handle_t h;
+  if (nvs_open("net", NVS_READWRITE, &h) != ESP_OK) return false;
+  esp_err_t e;
+  if (n) {
+    char k[AI_KEY_MAX + 1];
+    memcpy(k, key, n);
+    k[n] = 0;
+    e = nvs_set_str(h, "aik", k);
+    memset(k, 0, sizeof(k));
+  } else {
+    e = nvs_erase_key(h, "aik");
+    if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
+  }
+  if (e == ESP_OK) e = nvs_commit(h);
+  nvs_close(h);
+  return e == ESP_OK;
+}
+
+static void aiFinish(AiState s, const char *text) {
+  strlcpy(aiText, text, sizeof(aiText));
+  aiState = s;
+}
+
+// the request body, built with cJSON so the question is escaped properly
+static char *aiBody() {
+  cJSON *req = cJSON_CreateObject();
+  if (!req) return NULL;
+  cJSON_AddStringToObject(req, "model", AI_MODEL);
+  cJSON_AddNumberToObject(req, "max_tokens", 4096);
+  cJSON_AddStringToObject(req, "fallbacks", "default");
+  cJSON *oc = cJSON_AddObjectToObject(req, "output_config");
+  if (oc) cJSON_AddStringToObject(oc, "effort", "low");
+  cJSON_AddStringToObject(req, "system", AI_SYSTEM);
+  cJSON *msgs = cJSON_AddArrayToObject(req, "messages");
+  cJSON *m = cJSON_CreateObject();
+  if (msgs && m) {
+    cJSON_AddStringToObject(m, "role", "user");
+    cJSON_AddStringToObject(m, "content", aiQuestion);
+    cJSON_AddItemToArray(msgs, m);
+  } else cJSON_Delete(m);
+  char *body = cJSON_PrintUnformatted(req);
+  cJSON_Delete(req);
+  return body;
+}
+
+// the text of a 200 answer, or why there is none
+static void aiReadAnswer(const char *json, size_t len) {
+  cJSON *root = cJSON_ParseWithLength(json, len);
+  if (!root) { aiFinish(AI_ERROR, "Claude's answer could not be read."); return; }
+  const cJSON *stop = cJSON_GetObjectItemCaseSensitive(root, "stop_reason");
+  if (cJSON_IsString(stop) && !strcmp(stop->valuestring, "refusal")) {
+    cJSON_Delete(root);
+    aiFinish(AI_ERROR, "Claude declined to answer this question.");
+    return;
+  }
+  static char out[AI_ANSWER_MAX];
+  size_t n = 0;
+  out[0] = 0;
+  const cJSON *block;
+  cJSON_ArrayForEach(block, cJSON_GetObjectItemCaseSensitive(root, "content")) {
+    const cJSON *type = cJSON_GetObjectItemCaseSensitive(block, "type");
+    const cJSON *text = cJSON_GetObjectItemCaseSensitive(block, "text");
+    if (!cJSON_IsString(type) || strcmp(type->valuestring, "text") || !cJSON_IsString(text)) continue;
+    if (n && n < sizeof(out) - 2) { out[n++] = '\n'; out[n] = 0; }
+    n += strlcpy(out + n, text->valuestring, sizeof(out) - n);
+    if (n >= sizeof(out)) n = sizeof(out) - 1;
+  }
+  bool cut = cJSON_IsString(stop) && !strcmp(stop->valuestring, "max_tokens");
+  cJSON_Delete(root);
+  if (!n) { aiFinish(AI_ERROR, "Claude sent no text."); return; }
+  if (cut && n < sizeof(out) - 4) strcat(out, " ...");
+  aiFinish(AI_DONE, out);
+}
+
+// what went wrong, from the status and the API's error message
+static void aiReadError(int status, const char *json, size_t len) {
+  const char *msg = "";
+  cJSON *root = cJSON_ParseWithLength(json, len);
+  if (root) {
+    const cJSON *m = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "error"), "message");
+    if (cJSON_IsString(m)) msg = m->valuestring;
+  }
+  const char *what;
+  if (status == 401)                       what = "The API key was not accepted. Type it in again.";
+  else if (status == 403)                  what = "This API key may not do that.";
+  else if (status == 429)                  what = "Too many questions or no credit left. Wait a moment.";
+  else if (status == 529 || status >= 500) what = "Claude is busy right now. Try again in a minute.";
+  else                                     what = "Claude could not answer.";
+  static char b[AI_ANSWER_MAX];
+  snprintf(b, sizeof(b), "%s\n\n(error %d) %s", what, status, msg);
+  if (root) cJSON_Delete(root);
+  aiFinish(AI_ERROR, b);
+}
+
+static void aiTask(void *) {
+  char *body = aiBody();
+  char *resp = NULL;                              // taken after the TLS handshake
+  size_t cap = AI_RESP_MAX;
+  esp_http_client_handle_t c = NULL;
+  if (!body) { aiFinish(AI_ERROR, "Out of memory."); goto done; }
+  {
+    esp_http_client_config_t cfg;
+    clientCfg(&cfg, AI_URL);
+    cfg.method = HTTP_METHOD_POST;
+    cfg.timeout_ms = 90000;                       // a long answer takes a while
+    c = esp_http_client_init(&cfg);
+    if (!c) { aiFinish(AI_ERROR, "Out of memory."); goto done; }
+    char key[AI_KEY_MAX + 1];
+    aiKeyLoad(key, sizeof(key));
+    esp_http_client_set_header(c, "x-api-key", key);   // the client keeps its own copy
+    memset(key, 0, sizeof(key));
+    esp_http_client_set_header(c, "anthropic-version", "2023-06-01");
+    esp_http_client_set_header(c, "anthropic-beta", "server-side-fallback-2026-07-01");
+    esp_http_client_set_header(c, "content-type", "application/json");
+    int len = strlen(body);
+    if (esp_http_client_open(c, len) != ESP_OK) {
+      aiFinish(AI_ERROR, "No connection to Claude. Does this WLAN reach the internet?");
+      goto done;
+    }
+    int64_t size = esp_http_client_write(c, body, len) == len ? esp_http_client_fetch_headers(c) : -1;
+    if (size < 0) { aiFinish(AI_ERROR, "The connection to Claude broke off."); goto done; }
+    if (size > 0 && size < AI_RESP_MAX) cap = (size_t)size + 1;
+    resp = (char *)malloc(cap);
+    if (!resp) { aiFinish(AI_ERROR, "Out of memory."); goto done; }
+    int status = esp_http_client_get_status_code(c);
+    size_t n = 0;
+    for (;;) {
+      if (n >= cap - 1) {
+        if (size > 0 && n == (size_t)size) break;     // all of it, as announced
+        aiFinish(AI_ERROR, "Claude's answer is too long for the console.");
+        goto done;
+      }
+      int k = esp_http_client_read(c, resp + n, cap - 1 - n);
+      if (k < 0) { aiFinish(AI_ERROR, "The connection to Claude broke off."); goto done; }
+      if (k == 0) break;
+      n += k;
+    }
+    resp[n] = 0;
+    if (status == 200) aiReadAnswer(resp, n);
+    else aiReadError(status, resp, n);
+  }
+done:
+  if (c) esp_http_client_cleanup(c);
+  free(resp);
+  cJSON_free(body);
+  vTaskDelete(NULL);
+}
+
+bool netAiAsk(const char *question) {
+  if (aiState == AI_ASKING) return false;
+  if (state != NET_ONLINE) { aiFinish(AI_ERROR, "Not connected to the WLAN."); return false; }
+  if (!netAiHasKey()) { aiFinish(AI_ERROR, "No API key stored."); return false; }
+  strlcpy(aiQuestion, question, sizeof(aiQuestion));
+  aiState = AI_ASKING;
+  // TLS and the JSON answer need a fair amount of stack
+  if (xTaskCreate(aiTask, "ai", 10240, NULL, 5, NULL) != pdPASS) {
+    aiFinish(AI_ERROR, "Out of memory.");
+    return false;
+  }
+  return true;
+}
+
+AiState     netAiState()  { return aiState; }
+const char *netAiAnswer() { return aiText; }
 
 // ---------------- web page ----------------
 static const char PAGE_HEAD[] =

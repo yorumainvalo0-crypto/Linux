@@ -12,3 +12,11 @@ Erstes Flashen im Browser (Chrome oder Edge):
  3. Flash Address: 0x0   File: miniarcade-full.bin
  4. "Program" druecken, warten bis "Leaving..." erscheint
  5. RESET druecken - die Konsole startet
+
+AI-Chat (ab 10.2): In der Spieleliste "AI Chat" waehlen. Die Frage wird
+mit der Bildschirmtastatur getippt (Pfeile waehlen, OK tippt, "send"
+schickt sie ab), Claude antwortet auf dem Display (hoch/runter = blaettern).
+Noetig: WLAN mit Internet und ein eigener API-Key von console.anthropic.com
+(kostenpflichtig pro Frage). Den Key am einfachsten auf der Handy-Seite
+Settings -> "AI chat" eintragen; er bleibt nur auf der Konsole, wird nie
+wieder angezeigt und ist in keinem Backup.

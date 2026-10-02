@@ -67,3 +67,29 @@ void fwSlots(FwSlot s[2]) {
 bool fwStartOther() { simSwitched = true; printf("      restarts into the other slot\n"); throw SimEnd{}; }
 void fwConfirm()    { simConfirmed = true; }
 bool fwPending()    { return simTwoSlots && !simConfirmed; }
+
+// the AI chat: a fixed answer some frames after the question
+static bool    simAiKey = false;
+static char    simAiKeyText[201], simAiQ[AI_QUESTION_MAX + 1];
+static AiState simAi = AI_IDLE;
+static int     simAiTicks = 0;
+static const char *simAiText = "";
+static const char SIM_AI_ANSWER[] =
+  "**Hallo!** Gr\xC3\xBC\xC3\x9F" "e aus der Wolke \xE2\x80\x93 ich bin Claude. \xC2\xBFQu\xC3\xA9 tal? \xF0\x9F\x98\x80\n\n"
+  "# Tipp\nDiese Antwort ist absichtlich lang, damit man sie mit den Pfeiltasten scrollen muss: "
+  "eins zwei drei vier f\xC3\xBCnf sechs sieben acht neun zehn elf zw\xC3\xB6lf dreizehn vierzehn "
+  "f\xC3\xBCnfzehn sechzehn siebzehn achtzehn neunzehn zwanzig. Ende.";
+bool    netAiHasKey()               { return simAiKey; }
+bool    netAiSetKey(const char *k)  {
+  size_t n = strlen(k);
+  if (n && (n < 20 || n > 200)) return false;
+  strcpy(simAiKeyText, k); simAiKey = n > 0;
+  return true;
+}
+bool    netAiAsk(const char *q) {
+  if (simNet != NET_ONLINE) { simAi = AI_ERROR; simAiText = "Not connected to the WLAN."; return false; }
+  strcpy(simAiQ, q); simAi = AI_ASKING; simAiTicks = 0; simAiText = SIM_AI_ANSWER;
+  return true;
+}
+AiState     netAiState()  { if (simAi == AI_ASKING && ++simAiTicks > 400) simAi = AI_DONE; return simAi; }
+const char *netAiAnswer() { return simAiText; }

@@ -453,6 +453,25 @@ int main(int argc,char**argv){
       tap(11200,8);                                                // RIGHT: password again
       tap(11900,16);                                               // OK: stop
       captureAt={2400,2600};
+  } else if(scenario=="ai"){ simEnd=22000; ups(4,1300,220);
+      auto tap=[&](uint32_t t,uint8_t k){ script.push_back({t,k}); script.push_back({t+60,0}); };
+      tap(3000,16);                                                // AI Chat: no key yet
+      tap(3600,16);                                                // OK: type it in here
+      for(int i=0;i<20;i++) tap(4200+i*150,16);                    // "aaaa..." (20 letters)
+      tap(7400,1); tap(7700,4);                                    // UP to the bottom row, LEFT wraps to "save"
+      tap(8000,16);                                                // save: joins the WLAN, asks
+      for(int i=0;i<7;i++) tap(8800+i*150,8);                      // RIGHT to 'h'
+      tap(10000,16); tap(10300,8); tap(10600,16);                  // h, i
+      tap(10900,1); tap(11200,8);                                  // bottom row: del, RIGHT: send
+      tap(11500,16);                                               // send
+      for(int i=0;i<12;i++) tap(13500+i*200,2);                    // scroll down to the end
+      tap(16500,1);                                                // and one up
+      script.push_back({18000,16}); script.push_back({19200,0});   // hold OK: leave
+      captureAt={1000,1600};
+  } else if(scenario=="aiwlan"){ simEnd=12000; ups(4,1300,220); simNoNet=true; simAiKey=true;
+      auto tap=[&](uint32_t t,uint8_t k){ script.push_back({t,k}); script.push_back({t+60,0}); };
+      tap(3000,16);                                                // AI Chat: key stored, options
+      tap(3600,16);                                                // ask Claude: joins in vain
   } else if(scenario=="batfind"){ simEnd=16000; ups(1,1300,220);
       simNvsU16["bat"]=255;                     // older firmware found nothing
       simBatPin=2; simGhostPin=1;               // the real one comes after a trap
@@ -1180,6 +1199,30 @@ int main(int argc,char**argv){
     check("no battery chosen by hand is kept", simNvsU16["bat"]==253&&batPin==253);
     batDetect();
     check("and not searched again at the next start", batPin==253);
+  } else if(scenario=="ai"){
+    auto sub=[&](const char *x){ for(auto&t:seenTexts) if(t.find(x)!=std::string::npos) return true; return false; };
+    check("listed in the library", saw("AI Chat")&&saw("web"));
+    check("asks for a key first", saw("needs a Claude API key")&&saw("API KEY"));
+    check("key typed on the console and stored", simAiKey&&!strcmp(simAiKeyText,"aaaaaaaaaaaaaaaaaaaa"));
+    check("keyboard shown", saw("ASK CLAUDE")&&saw("space")&&saw("del")&&saw("send")&&saw("ABC")&&saw("#+"));
+    check("question typed and sent", !strcmp(simAiQ,"hi"));
+    check("waiting shown", saw("thinking")&&saw("thinking..."));
+    check("answer in plain ASCII, word wrapped", saw("Hallo! Gruesse aus der")&&saw("Wolke - ich bin Claude.")&&saw("?Que tal? "));
+    check("markdown heading removed", saw("Tipp")&&!sub("# Tipp")&&!sub("**"));
+    bool wide=false; for(auto&t:seenTexts) if(t.size()>25&&t.find("Antwort")!=std::string::npos) wide=true;
+    check("no line wider than the screen", !wide&&sub("Ende."));
+    check("scroll position shown", sub("1/")&&sub("/")) ;
+    check("page left, WLAN switched off again", simNet==NET_OFF);
+    char b[64];
+    aiAscii("Stra\xC3\x9F" "e, \xC3\x84pfel `x` \xE2\x80\x9Ehi\xE2\x80\x9C\n## H", b, sizeof(b));
+    printf("      ascii: %s\n", b);
+    check("umlauts, quotes, code and headings converted", !strcmp(b,"Strasse, Aepfel x \"hi\"\nH"));
+    aiAscii("\xC3\xA9\xC3\xB1\xC3\xA7 \xF0\x9F\x98\x80!", b, sizeof(b));
+    check("accents dropped, emoji left out", !strcmp(b,"enc !"));
+  } else if(scenario=="aiwlan"){
+    check("options with a stored key", saw("ask Claude")&&saw("forget the API key"));
+    check("join failure explained", saw("joining HomeNet")&&saw("can't join HomeNet"));
+    check("nothing sent", !simAiQ[0]);
   } else if(scenario=="wlanplay"){
     check("hotspot offered on the wlan page", saw("phone hotspot"));
     check("name, password and address shown", saw("PHONE HOTSPOT")&&saw("join  MiniArcade-AB12")&&saw("pass  12345678")&&saw("open  http://192.168.4.1"));
