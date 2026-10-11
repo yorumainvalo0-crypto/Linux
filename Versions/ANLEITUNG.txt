@@ -24,3 +24,8 @@ kosten. Den Key am einfachsten auf der Handy-Seite Settings -> "AI chat"
 eintragen; er bleibt nur auf der Konsole, wird nie wieder angezeigt und
 ist in keinem Backup. Meldet OpenRouter "data policy": auf openrouter.ai
 unter Settings -> Privacy die Gratis-Modelle erlauben.
+
+Akku (ab 10.4): Die Anzeige lernt deinen Akku beim Spielen - einfach normal
+nutzen und laden. Voll = Spannung nach dem Laden, leer = wo die Konsole
+von selbst ausgeht. Bei einem neuen Akku: Einstellungen -> "set up
+battery" -> LINKS -> OK (vergisst das Gelernte).

@@ -393,6 +393,10 @@ int main(int argc,char**argv){
       script.push_back({6500,8});  script.push_back({6560,0});     // awards page
       script.push_back({7000,2});  script.push_back({7060,0});     // second award
       captureAt={1000,1300};
+  } else if(scenario=="batlive"){ simEnd=13*60000;
+      simNvsU16["slp"]=0; simNvsU16["bat"]=0; simBatPin=0; simBatMv=4080;
+      simTimeHook=[](uint32_t t){ simBatMv = 4080 - (int)(t/10000); };   // -6 mV a minute
+      captureAt={1000};
   } else if(scenario=="sleep"){   simEnd=90000;
       simNvsU16["slp"]=1;                       // one minute, then nothing happens
       captureAt={200};
@@ -955,6 +959,67 @@ int main(int argc,char**argv){
     return fails?1:0;
   }
 
+  if(scenario=="batlearn"){
+    fails=0;
+    // an old cell: full at 4.08 V, gives up at 3.45 V, a curve unlike the general one
+    static const int TQ[11]={3450,3600,3660,3690,3720,3750,3790,3840,3900,3980,4080};
+    auto cellMv=[](double q)->int{ if(q<=0) return TQ[0]; if(q>=100) return TQ[10];
+      int k=(int)(q/10); double f=(q-10*k)/10; return (int)(TQ[k]+(TQ[k+1]-TQ[k])*f); };
+    auto worst=[&](const BatLearn &l){ int w=0; for(int q=10;q<=90;q+=5){ int d=abs((int)l.percent(cellMv(q))-q); if(d>w) w=d; } return w; };
+    BatLearn L; L.clear();
+    check("new: the general curve", L.percent(3800)==batCurve(3800)&&L.percent(4180)==100);
+    printf("      general curve on this cell: up to %d %% off\n", worst(L));
+    int before=worst(L);
+    // 1. a session from full: 3 hours to empty, about 10 %% of it with WLAN
+    const int RUN=180;
+    L.start(cellMv(100));
+    check("full learned at the first start", L.full==4080&&(L.flags&BL_RUN));
+    check("full shows as 100 %", L.percent(4080)==100);
+    for(int m=1;m<=RUN;m++){ double q=100.0-100.0*m/RUN; L.minute((uint16_t)cellMv(q+0.5), m%10==0, false); }
+    // the board goes off; next start after charging
+    L.start(4080);
+    printf("      learned: full %u, empty %u, run %u min, curve %s\n", L.full, L.empty, L.T, (L.flags&BL_SHAPE)?"own":"general");
+    check("empty learned where it went off", L.empty>=3450&&L.empty<=3480);
+    check("run length learned (WLAN minutes count double)", L.T>=RUN&&L.T<=RUN+RUN/10+2);
+    check("own curve learned", (L.flags&BL_SHAPE)!=0);
+    int after=worst(L);
+    printf("      own curve on this cell: up to %d %% off (general: %d %%)\n", after, before);
+    check("own curve much closer than the general one", after<=6&&after<before);
+    bool mono=true; for(int mv=3300;mv<4200;mv+=5) if(L.percent(mv+5)<L.percent(mv)) mono=false;
+    check("own curve never goes down with more voltage", mono);
+    // 2. later runs from full that stop half way (charged early) keep it right
+    for(int r=0;r<5;r++){
+      L.start(4080);
+      for(int m=1;m<=RUN/2;m++){ double q=100.0-100.0*m/RUN; L.minute((uint16_t)cellMv(q+0.5), false, false); }
+      L.stop();                                       // went to sleep, then charged
+    }
+    printf("      after 5 half runs: up to %d %% off\n", worst(L));
+    check("half runs keep the curve right", worst(L)<=6);
+    // 3. a charger in the middle ends the run; topping up halfway is no new run
+    L.start(4080);
+    for(int m=1;m<=30;m++) L.minute((uint16_t)cellMv(100.0-100.0*m/RUN), false, false);
+    L.minute(3950, false, true);
+    check("charging ends the run", !(L.flags&BL_RUN));
+    L.stop(); L.start(3800); L.minute(3790,false,false);
+    check("half charged start: no run", !(L.flags&BL_RUN));
+    L.start(4080); for(int m=1;m<=60;m++) L.minute((uint16_t)cellMv(100.0-100.0*m/RUN), false, false);
+    L.stop(); L.start((uint16_t)(L.last+120));
+    check("charged a bit while asleep: run ends", !(L.flags&BL_RUN));
+    // 4. sleeping near empty is not empty; a run with lots of WLAN does not teach the length
+    uint16_t e=L.empty, t=L.T;
+    L.start(4080); for(int m=1;m<=RUN;m++) L.minute((uint16_t)cellMv(100.0-100.0*m/RUN), true, false);
+    L.start(4080);
+    check("WLAN run: length not taken", L.T==t);
+    L.start(4080); L.last=3460; L.stop(); L.start(4080);
+    check("asleep near empty: empty kept", L.empty==e || abs((int)L.empty-(int)e)<=20);
+    // 5. one high reading (just off the charger) does not stick
+    BatLearn H; H.clear(); H.start(4190); for(int i=0;i<20;i++) H.start(4080);
+    printf("      full after one 4.19 V start and 20 at 4.08 V: %u\n", H.full);
+    check("full settles on the real top", H.full<=4095);
+    printf("%s\n", fails?"### FAILURES ###":"all checks passed");
+    return fails?1:0;
+  }
+
   if(scenario=="batcurve"){
     fails=0;
     check("curve ends", batCurve(3200)==0&&batCurve(4200)==100);
@@ -1187,7 +1252,7 @@ int main(int argc,char**argv){
     check("multiplayer (or anyone) can switch it off", !phoneLink&&!pollHook&&simNet==NET_OFF);
   } else if(scenario=="batfind"){
     check("found at start, the floating pin was skipped", simBatStart==2&&saw("*2:"));
-    check("battery page marks the divider", saw("RIGHT=find")&&saw(" bat"));
+    check("battery page marks the divider", saw("L=cell R=find")&&saw(" bat"));
     check("search finds the rewired pin", saw("found on GPIO0"));
     check("stored", simNvsU16["bat"]==0&&batPin==0);
     check("menu shows percent", saw("%"));
@@ -1224,6 +1289,15 @@ int main(int argc,char**argv){
     check("options with a stored key", saw("ask the AI")&&saw("forget the API key"));
     check("join failure explained", saw("joining HomeNet")&&saw("can't join HomeNet"));
     check("nothing sent", !simAiQ[0]);
+  } else if(scenario=="batlive"){
+    BatLearn L; memset(&L,0,sizeof(L));
+    bool stored = simNvsBlob.count("bcal") && simNvsBlob["bcal"].size()==sizeof(L);
+    if(stored) memcpy(&L, simNvsBlob["bcal"].data(), sizeof(L));
+    printf("      stored: full %u, last %u, run %u min, step 4.05 V at minute %u\n", L.full, L.last, L.runMin, L.cross[2]);
+    check("learning kept in flash", stored&&L.ver==BL_VER);
+    check("start a minute in counts as full", L.full>=4060&&L.full<=4080&&(L.flags&BL_RUN));
+    check("minutes counted (saved every 5), steps passed", L.runMin>=8&&L.cross[2]!=BL_NONE&&L.cross[0]==BL_SKIP);
+    check("last voltage near the present", L.last>=3990&&L.last<=4020);
   } else if(scenario=="wlanplay"){
     check("hotspot offered on the wlan page", saw("phone hotspot"));
     check("name, password and address shown", saw("PHONE HOTSPOT")&&saw("join  MiniArcade-AB12")&&saw("pass  12345678")&&saw("open  http://192.168.4.1"));
