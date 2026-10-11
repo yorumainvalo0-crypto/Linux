@@ -268,6 +268,36 @@ void batDetect() {
 
 /* Live view of the five ADC pins; RIGHT searches the battery by itself,
    UP/DOWN + OK picks a pin by hand.                                    */
+/* What the console learned about the cell (batlearn.h). OK forgets it -
+   for a new cell, which has a curve of its own. true = forgotten.     */
+static bool batLearnPage() {
+  btnClear();
+  while (poll()) {
+    if (btn(B_OK)) { batLearnForget(); return true; }
+    if (btn(B_LEFT) || btn(B_RIGHT) || btn(B_UP) || btn(B_DOWN)) return false;
+    const BatLearn &l = batLearned();
+    char b[32];
+    oled.setFont(FONT_B);
+    oled.drawStr(2, 12, "YOUR CELL");
+    oled.drawHLine(0, TOP_H - 1, SCR_W);
+    oled.setFont(FONT);
+    if (l.full) snprintf(b, sizeof(b), "full   %u.%02u V", l.full / 1000, (l.full % 1000) / 10);
+    else        snprintf(b, sizeof(b), "full   not learned yet");
+    oled.drawStr(2, 24, b);
+    if (l.empty) snprintf(b, sizeof(b), "empty  %u.%02u V", l.empty / 1000, (l.empty % 1000) / 10);
+    else         snprintf(b, sizeof(b), "empty  when it goes off");
+    oled.drawStr(2, 32, b);
+    snprintf(b, sizeof(b), "curve  %s", (l.flags & BL_SHAPE) ? "own" : "general Li-ion");
+    oled.drawStr(2, 40, b);
+    snprintf(b, sizeof(b), "%s", (l.flags & BL_RUN) ? "learning since full" : "learns again from full");
+    oled.drawStr(2, 48, b);
+    oled.drawHLine(0, 52, SCR_W);
+    oled.drawStr(2, 62, "OK=new cell, forget it");
+    oled.sendBuffer();
+  }
+  return false;
+}
+
 void batterySetup() {
   uint8_t sel = (batPin < 5) ? batPin : 5;
   BatProbe res[5];
@@ -283,6 +313,11 @@ void batterySetup() {
       batReset();
       sfx(1200, 80);
       return;
+    }
+    if (btn(B_LEFT)) {                     // what was learned about the cell; forget it for a new one
+      if (batLearnPage()) sfx(1200, 80);
+      btnClear();
+      continue;
     }
     if (btn(B_RIGHT)) {                    // search by itself
       uint8_t high = 255;
@@ -339,7 +374,7 @@ void batterySetup() {
     oled.setFont(FONT_B);
     oled.drawStr(2, 12, "BATTERY");
     oled.setFont(FONT);
-    rightStr(10, "RIGHT=find");
+    rightStr(10, "L=cell R=find");
     oled.drawHLine(0, TOP_H - 1, SCR_W);
     for (uint8_t p = 0; p < 6; p++) {
       char line[26];

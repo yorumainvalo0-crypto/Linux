@@ -165,6 +165,7 @@ void sfxUpdate() {
 }
 
 void centerStr(uint8_t y, const char *s);          // defined further down
+void batLearnStop();                               // battery, below
 
 /* Goes to deep sleep when no button was touched for a while. Any press on
    the OK button wakes the board - that is a normal reset, so the launcher
@@ -179,6 +180,7 @@ void sleepCheck() {
   if (millis() - lastInput < (uint32_t)cfgSleep * 60000UL) return;
 
   noTone(sndPin);
+  batLearnStop();                                  // asleep is not empty
   oled.clearBuffer();
   oled.setFont(FONT_B);
   centerStr(28, "SLEEPING");
@@ -211,24 +213,7 @@ static uint16_t batMilliVolts() {
   return (uint16_t)(low * 2);                // undo the 1:2 divider
 }
 
-/* Resting voltage of a Li-ion cell against its charge. The curve is flat in
-   the middle, so a straight line from empty to full shows nonsense there. */
-static const uint16_t BAT_CURVE[][2] = {
-  {3300, 0}, {3450, 5}, {3600, 10}, {3680, 20}, {3710, 30}, {3750, 40},
-  {3800, 50}, {3850, 60}, {3920, 70}, {4000, 80}, {4100, 90}, {4180, 100}
-};
-
-uint8_t batCurve(uint16_t mv) {
-  const uint8_t n = sizeof(BAT_CURVE) / sizeof(BAT_CURVE[0]);
-  if (mv <= BAT_CURVE[0][0]) return 0;
-  for (uint8_t i = 1; i < n; i++)
-    if (mv < BAT_CURVE[i][0]) {
-      uint16_t v0 = BAT_CURVE[i - 1][0], v1 = BAT_CURVE[i][0];
-      uint16_t p0 = BAT_CURVE[i - 1][1], p1 = BAT_CURVE[i][1];
-      return (uint8_t)(p0 + (uint32_t)(mv - v0) * (p1 - p0) / (v1 - v0));
-    }
-  return 100;
-}
+#include "batlearn.h"                 // the curve, and how it learns the own cell
 
 /* An older cell drops under load and the board switches off in such a
    dip, long before the resting voltage says "empty". So the percentage
@@ -239,6 +224,9 @@ static uint32_t batLow = 0;        // mV * 16, 0 = no reading yet
 static uint32_t batAt = 0;
 static uint8_t  batShown = 255;
 
+static void batLearnTick(uint32_t now);
+extern Preferences prefs;
+
 void batTick() {                   // from poll(): about four samples a second
   if (batPin > 4) return;
   uint32_t now = millis();
@@ -248,6 +236,7 @@ void batTick() {                   // from poll(): about four samples a second
   if (!batLow) { batLow = (uint32_t)mv16; return; }
   int32_t d = mv16 - (int32_t)batLow;
   batLow = (uint32_t)((int32_t)batLow + (d < 0 ? d / 2 : d / 128));
+  batLearnTick(now);
 }
 
 uint16_t batSmoothMv() {
@@ -255,8 +244,74 @@ uint16_t batSmoothMv() {
   return (uint16_t)(batLow / 16);
 }
 
+// ---- learning the own cell (batlearn.h), kept in flash as "bcal" ----
+static BatLearn batL;
+static bool     batLLoaded = false, batLStarted = false;
+static uint16_t batLMv30 = 0, batLPrev = 0;   // the voltage at 30 s, a minute ago
+static int16_t  batLRise = 0;                  // how much it rose in the minute before
+static uint32_t batLNext = 0;                  // next minute tick
+static uint8_t  batLDirty = 0;                 // minutes since the last save
+bool batRadioOn();                             // WLAN or multiplayer radio on (defined below)
+
+static void batLearnLoad() {
+  if (batLLoaded) return;
+  batLLoaded = true;
+  prefs.begin("arcade", true);
+  bool ok = prefs.getBytes("bcal", &batL, sizeof(batL)) == sizeof(batL) && batL.ver == BL_VER;
+  prefs.end();
+  if (!ok) batL.clear();
+}
+
+static void batLearnSave() {
+  prefs.begin("arcade", false);
+  prefs.putBytes("bcal", &batL, sizeof(batL));
+  prefs.end();
+  batLDirty = 0;
+}
+
+void batLearnForget() { batL.clear(); batLearnSave(); batShown = 255; }
+const BatLearn &batLearned() { batLearnLoad(); return batL; }
+
+/* A minute in (the low points have settled by then) the start voltage
+   counts - unless it is still rising, which means a charger. Then once
+   a minute; near empty every minute is saved, so the last voltage
+   before the cell gives up is in flash.                             */
+static void batLearnTick(uint32_t now) {
+  uint16_t mv = (uint16_t)(batLow / 16);
+  if (!batLStarted) {
+    if (now >= 30000 && !batLMv30) batLMv30 = mv;
+    if (now < 60000 || !batLMv30) return;
+    batLearnLoad();
+    batLStarted = true;
+    batLRise = (int16_t)(mv - batLMv30);
+    if (batLRise >= 8) batL.minute(mv, false, true);   // on the charger
+    else batL.start(mv);
+    batLPrev = mv;
+    batLNext = now + 60000;
+    batLearnSave();
+    return;
+  }
+  if ((int32_t)(now - batLNext) < 0) return;
+  batLNext += 60000;
+  if ((int32_t)(now - batLNext) > 60000) batLNext = now + 60000;   // after deep sleep or a long block
+  int16_t rise = (int16_t)(mv - batLPrev);
+  bool charging = rise >= 8 && batLRise >= 8;    // two minutes climbing: a charger, not a dip ending
+  batLRise = rise;
+  batLPrev = mv;
+  bool now1 = batL.minute(mv, batRadioOn(), charging);
+  if (now1 || ++batLDirty >= 5 || mv < batL.emptyMv() + 250) batLearnSave();
+}
+
+// before deep sleep: the cell is not empty
+void batLearnStop() {
+  if (!batLStarted) return;
+  batL.stop();
+  batLearnSave();
+}
+
 uint8_t batPercent() {
-  uint8_t p = batCurve(batSmoothMv());
+  batLearnLoad();
+  uint8_t p = batL.percent(batSmoothMv());
   if (batShown == 255 || p == 0 || p == 100 || (p > batShown ? p - batShown : batShown - p) >= 3)
     batShown = p;
   return batShown;
@@ -536,6 +591,15 @@ bool gameOver(uint16_t score) {
 #include "stats.h"
 #include "multiplayer.h"
 #include "phone.h"
+
+// WLAN or the multiplayer radio uses more current: the battery learning
+// counts such minutes double
+bool batRadioOn() {
+#ifdef HAVE_NET
+  if (netState() != NET_OFF) return true;
+#endif
+  return pollHook != NULL;
+}
 
 // =========================================================
 //  GAME LIBRARY

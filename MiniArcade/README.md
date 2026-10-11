@@ -84,6 +84,15 @@ release have `MiniArcade-<version>.zip` with a German how-to.
              looks empty. A dip pulls the number down within a second, it
              climbs back over about half a minute; without a battery the
              menu shows "USB".
+             It learns the own cell while it is used - no need to run it
+             flat on purpose: the voltage at the start after charging is
+             "full", the last voltage before the board went off by itself
+             (not asleep) is "empty", and with the minutes from full to
+             empty each voltage step gets its true percentage. Later runs
+             from full refine that curve, also when charged early again.
+             WLAN minutes count double; charging in between ends a run.
+             LEFT on the battery page shows what was learned, OK there
+             forgets it - do that for a new cell.
 
 Same games as the Arduino sketch, but without the Arduino core and without
 U8g2. The Arduino API is provided by the thin platform layer in
@@ -95,6 +104,7 @@ the WLAN page only exists in this build, because it needs `main/net.h`.
     main/game_*.h         one file per game
     main/stats.h          stats and awards
     main/setup_wizard.h   key, sound and battery setup
+    main/batlearn.h       the battery curve and how it learns the own cell (tested on the PC)
     main/settings.h       settings page
     main/wlan.h           WLAN page and firmware versions
     main/ai.h             AI chat: on-screen keyboard and the answer view
@@ -346,6 +356,7 @@ build fills in its own repository. The repository must be public.
     ESP-IDF 5.3.2       857 kB firmware  10.1: Dino jumps like the Chrome original
     ESP-IDF 5.3.2       874 kB firmware  10.2: + AI chat (Claude, JSON parser)
     ESP-IDF 5.3.2       876 kB firmware  10.3: AI chat over OpenRouter, free models only
+    ESP-IDF 5.3.2       879 kB firmware  10.4: the battery curve learns the own cell
 
 Both IDF versions built 9.1 unchanged. 6.1 is smaller because it uses picolibc.
 From 10.2 on the build needs IDF 5.x: the AI chat uses its json (cJSON)
