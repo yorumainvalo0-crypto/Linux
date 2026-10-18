@@ -100,16 +100,16 @@ build, so photos of different builds can be compared.
   - 0 on the ruler is the top of the plate.
 - **Corner stop:** pushes the board into the corner at 0/0. It is held by two
   short pins.
-- **Pegs:** four pegs go into the four holes at the board's corner holes.
-  The board rests on their collars (1.5 mm above the plate).
+- **Pegs:** four pegs are printed with the plate, at the board's corner
+  holes. They hold the board in place; it rests on their collars, 1.5 mm
+  above the plate.
 
 | file | what | print |
 |---|---|---|
-| `photoplate_base.stl` + `photoplate_marks.stl` | the plate, 114 x 134 x 3 mm | flat, two colours |
+| `photoplate_base.stl` + `photoplate_marks.stl` | the plate, 114 x 134 x 3 mm, with the four pegs | flat, two colours |
 | `photoplate_ruler_base.stl` + `photoplate_ruler_marks.stl` | height ruler, 0..55 mm | flat, marks up, two colours (print 2) |
 | `photoplate_stop.stl` | corner stop | foot down |
 | `photoplate_stoppin.stl` | 2 pins for the stop | head down |
-| `photoplate_peg.stl` | 4 pegs for the board holes | as they stand |
 
 **Two colours with the CFS (Creality Print):**
 1. Open the base and the marks STL **together**.
