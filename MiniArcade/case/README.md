@@ -77,3 +77,51 @@ funnel floor - the switch bodies pass through the holes either way.
   (0.6 mm now) and print only the lid again.
 - USB-C: both sockets are reachable through the openings in the side walls
   (the ESP32 on the left, the charger on the right).
+
+## Photo plate (measuring board)
+
+![photo plate](photoplate.png)
+
+A 1:1 measuring board to put a build on and photograph, so the case can be
+designed from real sizes instead of guesses. It is the same plate for every
+build, so photos of different builds can be compared.
+
+![plate from above](photoplate_top.png)
+
+- **Board area:** the 70 x 90 mm outline with a 10 mm grid. All rulers count
+  from its bottom-left corner (the arrows X and Y), so a reading is directly
+  the board coordinate that `miniarcade_case.scad` uses.
+- **Rulers:** mm ticks on all four edges, numbers every 10 mm.
+- **Corner marks:** four of them, for straightening a slanted photo. The
+  square one marks the origin corner.
+- **Two slots for the height ruler:**
+  - left of the board: the ruler faces the bottom edge, for photos from the front;
+  - below the board: the ruler faces the side.
+  - 0 on the ruler is the top of the plate.
+- **Corner stop:** pushes the board into the corner at 0/0. It is held by two
+  short pins.
+- **Pegs:** four pegs go into the four holes at the board's corner holes.
+  The board rests on their collars (1.5 mm above the plate).
+
+| file | what | print |
+|---|---|---|
+| `photoplate_base.stl` + `photoplate_marks.stl` | the plate, 114 x 134 x 3 mm | flat, two colours |
+| `photoplate_ruler_base.stl` + `photoplate_ruler_marks.stl` | height ruler, 0..55 mm | flat, marks up, two colours (print 2) |
+| `photoplate_stop.stl` | corner stop | foot down |
+| `photoplate_stoppin.stl` | 2 pins for the stop | head down |
+| `photoplate_peg.stl` | 4 pegs for the board holes | as they stand |
+
+**Two colours with the CFS (Creality Print):**
+1. Open the base and the marks STL **together**.
+2. When Creality Print asks whether to load them as one object with several
+   parts, answer **yes**.
+3. Give the base a light filament (white) and the marks a dark one (black).
+
+The marks are inlaid flush into the top 0.6 mm, so only the last three
+layers change colour. Use the 0.20 mm preset with supports off.
+
+**Taking photos:**
+- **From above:** hold the phone straight above the plate, far enough away
+  that all four corner marks are in the picture.
+- **Heights:** take a photo from the front or the side, with the height
+  ruler standing right next to the part.
