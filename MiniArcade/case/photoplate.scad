@@ -11,14 +11,16 @@
 // dark. The marks are inlaid flush into the top 0.6 mm, so the surface is
 // flat and nothing casts shadows.
 //
+// Four fixed pegs at the board's corner holes hold the board in place; it
+// rests on their collars (peg_h above the plate).
+//
 // Plug-ins (one colour):
 //   ruler  - height ruler that stands in one of the two slots; 0 = plate top
 //   stop   - L-shaped corner stop: push the board into the corner at 0/0;
 //            held by two of the short pins ("stoppin")
-//   peg    - pins for the four corner holes of the board (holds it in place)
 //
 // Render:  openscad -D 'part="plate_base"' -o photoplate_base.stl photoplate.scad
-// parts:   plate_base, plate_marks, ruler_base, ruler_marks, stop, stoppin, peg, all
+// parts:   plate_base, plate_marks, ruler_base, ruler_marks, stop, stoppin, all
 
 part = "all";
 
@@ -31,7 +33,9 @@ T     = 3.0;              // plate thickness
 R     = 4;                // corner radius
 inlay = 0.6;              // depth of the coloured marks (3 layers of 0.2)
 holes = [[2.5, 3.2], [67.5, 3.2], [2.5, 86.8], [67.5, 86.8]];   // board corner holes
-hole_d = 3.0;             // for the pegs
+hole_d = 3.0;             // holes for the stop pins
+peg_h  = 1.5;             // fixed pegs: the board rests this high above the plate
+peg_d  = 2.1;             // pin through the board's corner hole (about 3 mm)
 
 // ticks: every mm, longer every 5 and 10 mm
 tick_w  = [0.5, 0.6, 0.7];      // 1 / 5 / 10 mm ticks (wider than the 0.4 nozzle)
@@ -125,7 +129,6 @@ module arrow(len) {
 
 // everything that goes through the plate
 module plate_holes_2d() {
-  for (h = holes) translate([M, M] + h) circle(d = hole_d);
   translate(slot_a) square(slot, center = true);
   translate(slot_b) square([slot[1], slot[0]], center = true);
   for (p = stop_pegs) translate(p) circle(d = hole_d);
@@ -134,15 +137,23 @@ module plate_holes_2d() {
 module plate_base() {
   difference() {
     linear_extrude(T) rounded([W, D], R);
-    translate([0, 0, T - inlay]) linear_extrude(inlay + 1) plate_marks_2d();
+    translate([0, 0, T - inlay]) linear_extrude(inlay + 1) plate_marks_2d();   // the pegs fill it again
     translate([0, 0, -1]) linear_extrude(T + 2) plate_holes_2d();
   }
+  for (h = holes) translate([M + h[0], M + h[1], T]) fixed_peg();
+}
+
+// a peg printed with the plate: collar the board rests on, pin through its hole
+module fixed_peg() {
+  translate([0, 0, -1.5]) cylinder(d = 4.6, h = 1.5 + peg_h);     // reaches well into the plate; 4.6 so it does not just touch the board outline
+  translate([0, 0, peg_h - 0.1]) cylinder(d = peg_d, h = 2.6);
+  translate([0, 0, peg_h + 2.4]) cylinder(d1 = peg_d, d2 = peg_d - 0.8, h = 0.5);   // easy to slip on
 }
 
 module plate_marks() {
   translate([0, 0, T - inlay]) linear_extrude(inlay)
     intersection() {
-      difference() { plate_marks_2d(); plate_holes_2d(); }
+      difference() { plate_marks_2d(); plate_holes_2d(); for (h = holes) translate([M, M] + h) circle(d = 4.6); }
       rounded([W, D], R);
     }
 }
@@ -208,15 +219,6 @@ module stoppin() {
   translate([0, 0, 1]) cylinder(d = hole_d - 0.15, h = foot_t + T - 0.3);
 }
 
-// ---------------- pegs for the board's corner holes ----------------
-// printed as it stands: the collar widens at 45 degrees, so no supports
-module peg() {
-  cylinder(d = hole_d - 0.15, h = T);                                  // into the plate
-  translate([0, 0, T]) cylinder(d1 = hole_d - 0.15, d2 = 5, h = 1.1);  // 45 degree flare
-  translate([0, 0, T + 1.1]) cylinder(d = 5, h = 0.4);                 // the board rests on it
-  translate([0, 0, T + 1.5]) cylinder(d = 2.1, h = 2.5);               // through the board hole
-}
-
 // ---------------- output ----------------
 if (part == "plate_base")  plate_base();
 if (part == "plate_marks") plate_marks();
@@ -224,17 +226,15 @@ if (part == "ruler_base")  ruler_base();
 if (part == "ruler_marks") ruler_marks();
 if (part == "stop")        stop();
 if (part == "stoppin")     for (i = [0 : 1]) translate([i * 8, 0, 0]) stoppin();
-if (part == "peg")         for (i = [0 : 3]) translate([i * 8, 0, 0]) peg();
 if (part == "plate") { color("white") plate_base(); color("black") plate_marks(); }
 if (part == "all") {
   color("white") plate_base();
   color("black") plate_marks();
-  // ruler standing in slot A (marks towards the bottom edge), stop in the corner, four pegs
+  // ruler standing in slot A (marks towards the bottom edge), stop in the corner
   multmatrix([[0, -1, 0, slot_a[0] + ruler_w / 2], [0, 0, -1, slot_a[1] + ruler_t / 2], [1, 0, 0, T], [0, 0, 0, 1]]) {
     color("white") ruler_base();
     color("black") ruler_marks();
   }
   color("orange") translate([M, M, T]) stop();
   for (p = stop_pegs) color("red") translate([p[0], p[1], T + foot_t + 1]) rotate([180, 0, 0]) stoppin();
-  for (h = holes) color("orange") translate([M, M] + h) translate([0, 0, 0]) peg();
 }
