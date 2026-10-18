@@ -106,6 +106,7 @@ build, so photos of different builds can be compared.
 
 | file | what | print |
 |---|---|---|
+| `photoplate_all.3mf` | **everything in one file**: plate and both rulers as two-part objects, stop and pins, laid out on one bed | as it is; give the "Markierungen" parts the dark filament |
 | `photoplate_base.stl` + `photoplate_marks.stl` | the plate, 114 x 134 x 3 mm, with the four pegs | flat, two colours |
 | `photoplate_ruler_base.stl` + `photoplate_ruler_marks.stl` | height ruler, 0..55 mm | flat, marks up, two colours (print 2) |
 | `photoplate_stop.stl` | corner stop | foot down |
@@ -125,3 +126,7 @@ layers change colour. Use the 0.20 mm preset with supports off.
   that all four corner marks are in the picture.
 - **Heights:** take a photo from the front or the side, with the height
   ruler standing right next to the part.
+
+`photoplate_all.3mf` is packed from the STLs by `photoplate_3mf.py`:
+
+    python3 photoplate_3mf.py . photoplate_all.3mf
