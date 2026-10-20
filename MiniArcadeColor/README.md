@@ -34,10 +34,14 @@ once away from you. In a game, tilting works like the arrow keys; the way the
 console is held when the game starts counts as level.
 
 Keys, buzzer and battery go on any free pin: the console asks for them at the
-first start. Several keys may share one ADC pin through resistors (for
-example a 10k pull-up and keys to GND directly, via 1k and via 2k): the key
-wizard learns each key by its voltage. OK then works with two keys on
-different pins (e.g. LEFT+RIGHT), or with an own OK key.
+first start. Several keys (up to all five) may share one ADC pin, each to
+GND through its own resistor, with or without a pull-up resistor to 3V3: the
+key wizard learns each key by its voltage (it shows it, e.g. "0.65 V").
+Without a pull-up resistor the levels lie close together (10k, 11k, 12k give
+about 50 mV steps) - that works, but a 10k pull-up to 3V3 with keys via 0,
+2.2k, 4.7k, 10k and 22k is sturdier. OK is two opposite keys on different
+pins, an own OK key, or - on a ladder - two keys pressed together, learned
+in the last step of the wizard.
 Free on the C3 with the wiring above: GPIO0..3, 6, 7 and 10 or 20; ladder
 keys and the battery need one of GPIO0..3 (ADC).
 
