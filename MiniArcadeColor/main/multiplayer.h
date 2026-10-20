@@ -525,61 +525,93 @@ static void mpWaiting(const char *msg) {
 #define MP_PGY(y) ((int16_t)(TOP_H + 2 + ((y) - RP_TOP) * 21 / 5))
 static void mpPongDraw(const char *msg) {
   const RtPong &g = mpRt->pg;
+  static int16_t tx[5], ty[5];                            // the ball's trail
+  static uint8_t tn = 0, seen[2] = { 0, 0 }, popWho = 0;   // a new point pops up for a moment
+  static uint32_t popAt = 0;
+  uint32_t now = millis();
+  for (uint8_t p = 0; p < 2; p++)
+    if (g.pts[p] != seen[p]) { if (g.pts[p] > seen[p]) { popWho = p == mpMe ? 1 : 2; popAt = now; } seen[p] = g.pts[p]; }
+  uint8_t pop = popWho && now - popAt < 900 ? (uint8_t)(255 - (now - popAt) * 255 / 900) : 0;
   int16_t y0 = MP_PGY(RP_TOP), y1 = MP_PGY(RP_BOT);
-  gfx.fill(0, TOP_H, SCR_W, SCR_H - TOP_H, rgb(0, 15, 40));
-  gfx.gradient(0, y0, SCR_W, y1 - y0, rgb(0, 40, 90), rgb(0, 15, 40));
-  gfx.hline(0, y0 - 1, SCR_W, C::LTGREY);
-  gfx.hline(0, y1, SCR_W, C::LTGREY);
-  for (int16_t y = y0 + 4; y < y1; y += 14) gfx.fill(SCR_W / 2 - 1, y, 3, 8, rgb(100, 140, 200));
-  char b[4];
-  snprintf(b, sizeof(b), "%u", g.pts[mpMe]);
-  gfx.text(SCR_W / 2 - 50, y0 + 10, b, rgb(100, 180, 255), F_BIG);
-  snprintf(b, sizeof(b), "%u", g.pts[1 - mpMe]);
-  gfx.text(SCR_W / 2 + 30, y0 + 10, b, rgb(255, 130, 130), F_BIG);
+  fxUpdate();
+  gfx.fill(0, TOP_H, SCR_W, SCR_H - TOP_H, rgb(0, 0, 51));
+  pgCourt(y0 - 1, y1);
+  pgScore(SCR_W / 2 - 50, y0 + 12, g.pts[mpMe], PG_ME, popWho == 1 ? pop : 0);
+  pgScore(SCR_W / 2 + 30, y0 + 12, g.pts[1 - mpMe], PG_CPU, popWho == 2 ? pop : 0);
   // we always play on the left: the other console sees it mirrored
   for (uint8_t p = 0; p < 2; p++)
-    gfx.rbox(p == mpMe ? MP_PGX(2) : MP_PGX(123), MP_PGY(g.pad[p]), 8, RP_PH * 21 / 5, 3, p == mpMe ? C::CYAN : C::PINK);
+    pgPaddle(p == mpMe ? MP_PGX(2) : MP_PGX(123), MP_PGY(g.pad[p]), 8, RP_PH * 21 / 5, p == mpMe ? C::CYAN : C::PINK);
   int16_t bx = g.bx >> 4;
   if (mpMe) bx = 126 - bx;
-  if (!g.wait || (g.wait / 5) % 2) gfx.disc(MP_PGX(bx) + 2, MP_PGY(g.by >> 4) + 4, 4, C::YELLOW);   // blinks before a serve
+  int16_t x = MP_PGX(bx) + 2, y = MP_PGY(g.by >> 4) + 4;
+  if (g.wait) tn = 0;
+  else {
+    if (tn < 5) tn++;
+    for (uint8_t i = tn - 1; i > 0; i--) { tx[i] = tx[i - 1]; ty[i] = ty[i - 1]; }
+    tx[0] = x; ty[0] = y;
+  }
+  if (!g.wait || (g.wait / 5) % 2) pgBall(x, y, tx, ty, tn);   // blinks before a serve
+  fxDraw();
+  fxShakeApply();
   mpWaiting(msg);
   mpScoreBar("PONG", g.pts[mpMe], g.pts[1 - mpMe], C::BLUE);
   gfx.send();
+}
+
+// sparks where the ball hits a wall or a paddle, a flash for a point
+static void mpPongFx(uint8_t ev) {
+  const RtPong &g = mpRt->pg;
+  int16_t bx = g.bx >> 4;
+  if (mpMe) bx = 126 - bx;
+  int16_t x = MP_PGX(bx) + 2, y = MP_PGY(g.by >> 4) + 4;
+  if (ev & RT_EV_WALL) fxBurst(x, y, 6, C::WHITE, C::CYAN, 120, 260, 0, 1, FX_STREAK);
+  if (ev & RT_EV_HIT) {
+    col c = (x < SCR_W / 2) ? C::CYAN : C::PINK;
+    fxBurst(x, y, 9, C::WHITE, c, 170, 300, 0, 1, FX_STREAK);
+    fxRing(x, y, 10, C::WHITE, c, 200);
+  }
+  if (ev & RT_EV_POINT) { fxShake(4, 350); fxFlash(C::WHITE, 260, 90); }
 }
 
 // Snake: the 32 x 12 field with 10 px fields; ours green, theirs orange
 #define MP_SNY (TOP_H + 48)
 static void mpSnakeDraw(const char *msg) {
   const RtSnake &g = mpRt->sn;
-  gfx.gradient(0, TOP_H, SCR_W, SCR_H - TOP_H, rgb(10, 40, 10), C::BLACK);
-  for (uint8_t y = 0; y < RS_H; y++)
-    for (uint8_t x = 0; x < RS_W; x++)
-      gfx.fill(x * 10, MP_SNY + y * 10, 10, 10, (x + y) & 1 ? rgb(34, 102, 34) : rgb(51, 128, 51));
-  gfx.frame(0, MP_SNY - 1, SCR_W, RS_H * 10 + 2, C::LTGREY);
-  for (uint8_t f = 0; f < RS_FOOD; f++) if (g.fx[f] < RS_W) snApple(g.fx[f] * 10, MP_SNY + g.fy[f] * 10);
-  static const int8_t DX[5] = { 0, 0, 0, -1, 1 }, DY[5] = { 0, -1, 1, 0, 0 };
-  for (uint8_t p = 0; p < 2; p++) {
-    bool own = p == mpMe;
-    col a = own ? rgb(153, 255, 51) : rgb(255, 170, 60), b = own ? rgb(102, 204, 0) : rgb(220, 110, 20);
-    for (int16_t i = g.len[p] - 1; i >= 0; i--) {
-      int16_t px = g.x[p][i] * 10, py = MP_SNY + g.y[p][i] * 10;
-      if (i == 0) {
-        gfx.rbox(px, py, 10, 10, 3, own ? C::LIME : C::ORANGE);
-        int16_t ex = DX[g.dir[p]], ey = DY[g.dir[p]];     // eyes look ahead
-        gfx.fill(px + 4 + ey * 2 + ex * 2, py + 4 + ex * 2 + ey * 2, 2, 2, C::BLACK);
-        gfx.fill(px + 4 - ey * 2 + ex * 2, py + 4 - ex * 2 + ey * 2, 2, 2, C::BLACK);
-      } else gfx.rbox(px + 1, py + 1, 8, 8, 2, i % 4 < 2 ? a : b);
-    }
-  }
-  gfx.rbox(10, TOP_H + 12, 12, 12, 3, C::LIME);
+  uint32_t now = millis();
+  fxUpdate();
+  snWall(0, MP_SNY, SCR_W, RS_H * 10);
+  gfx.fill(0, TOP_H, SCR_W, MP_SNY - TOP_H - 6, rgb(0, 42, 0));
+  gfx.fill(0, MP_SNY + RS_H * 10 + 6, SCR_W, SCR_H - MP_SNY - RS_H * 10 - 6, rgb(0, 42, 0));
+  snLawn(0, MP_SNY, RS_W, RS_H, 10);
+  for (uint8_t f = 0; f < RS_FOOD; f++) if (g.fx[f] < RS_W) snApple(g.fx[f] * 10, MP_SNY + g.fy[f] * 10, 10);
+  bool over = g.winner != 0;
+  for (uint8_t p = 0; p < 2; p++)
+    snSnake(g.x[p], g.y[p], g.len[p], 0, MP_SNY, 10, p == mpMe ? SN_GREEN : SN_ORANGE, over && g.winner != p + 1, now);
+  fxDraw();
+  fxShakeApply();
+  gfx.rbox(10, TOP_H + 12, 12, 12, 3, SN_GREEN[SNP_B]);
   gfx.text(28, TOP_H + 10, "YOU", C::WHITE);
-  gfx.rbox(SCR_W - 22, TOP_H + 12, 12, 12, 3, C::ORANGE);
+  gfx.rbox(SCR_W - 22, TOP_H + 12, 12, 12, 3, SN_ORANGE[SNP_B]);
   gfx.right(SCR_W - 28, TOP_H + 10, linkCore().opp.name, C::WHITE);
-  gfx.center(MP_SNY + RS_H * 10 + 14, "arrows steer - the longer one", C::GREY, F_SMALL);
-  gfx.center(MP_SNY + RS_H * 10 + 28, "wins when the other one crashes", C::GREY, F_SMALL);
+  gfx.center(MP_SNY + RS_H * 10 + 14, "arrows steer - the longer one", C::LTGREY, F_SMALL);
+  gfx.center(MP_SNY + RS_H * 10 + 28, "wins when the other one crashes", C::LTGREY, F_SMALL);
   mpWaiting(msg);
   mpScoreBar("SNAKE", g.len[mpMe], g.len[1 - mpMe], C::GREEN);
   gfx.send();
+}
+
+// apple bits where a snake ate, a burst and a shake where one crashed
+static void mpSnakeFx(const uint8_t lenBefore[2]) {
+  const RtSnake &g = mpRt->sn;
+  for (uint8_t p = 0; p < 2; p++) {
+    int16_t x = g.x[p][0] * 10 + 5, y = MP_SNY + g.y[p][0] * 10 + 5;
+    if (g.len[p] > lenBefore[p]) { fxBurst(x, y, 8, C::RED, rgb(102, 0, 0), 90, 400, 30, 2); fxText(x, y - 12, "+1", C::YELLOW); }
+    if (g.winner && g.winner != p + 1) {
+      fxBurst(x, y, 12, C::WHITE, p == mpMe ? C::LIME : C::ORANGE, 140, 450, 0, 1, FX_STREAK);
+      fxBurst(x, y, 5, C::YELLOW, C::RED, 60, 500, 0, 4, FX_DRAG | FX_GROW);
+      fxShake(5, 400);
+    }
+  }
 }
 
 // Pac-Man: the colour game's maze; ours yellow, theirs green
@@ -653,6 +685,7 @@ static uint8_t mpRealtime() {
   mpRbWho[mpMe] = "YOU"; mpRbWho[1 - mpMe] = L.opp.name;
   bombWho = mpRbWho; bombMe = mpMe;
   mpFace[0] = mpFace[1] = 3;
+  fxReset();
   void (*draw)(const char *) = pong ? mpPongDraw : (pac ? mpPacDraw : (bomb ? mpBombDraw : mpSnakeDraw));
   uint8_t  latch = 0;                                     // snake, pac-man: last direction pressed
   bool     bombKey = false;                               // bomberman: OK waits for the next input
@@ -681,7 +714,13 @@ static uint8_t mpRealtime() {
         if (bev & RB_EV_POWER) sfx(1300, 60);
         if (bev & RB_EV_DEAD)  sfx(200, 250);
         ev = 0;
-      } else ev = pong ? mpRt->pg.step(in) : (pac ? mpRt->pm.step(in) : mpRt->sn.step(in));
+      } else if (pong) { ev = mpRt->pg.step(in); mpPongFx(ev); }
+      else if (pac) ev = mpRt->pm.step(in);
+      else {
+        uint8_t len[2] = { mpRt->sn.len[0], mpRt->sn.len[1] };
+        ev = mpRt->sn.step(in);
+        mpSnakeFx(len);
+      }
       uint8_t mine = pong ? (uint8_t)((btnHeld(B_UP) ? 1 : 0) | (btnHeld(B_DOWN) ? 2 : 0)) :
                      bomb ? (uint8_t)(bombHeld() | (bombKey ? 8 : 0)) : latch;
       bombKey = false;
@@ -758,55 +797,30 @@ static void mpChLost(const ChPos &p, bool white, int16_t y) {
   int k = 0;
   for (int kind = CH_Q; kind >= CH_P; kind--)
     for (int j = cnt[kind]; j < START[kind]; j++, k++)
-      chPiece((int16_t)(MPC_PX + (k % 7) * 13), (int16_t)(y + (k / 7) * 13), (int8_t)(white ? kind : -kind), 1);
+      chPieceSmall((int16_t)(MPC_PX + (k % 7) * 13), (int16_t)(y + (k / 7) * 13), (int8_t)(white ? kind : -kind));
 }
 
 static void mpChDraw(const char *status, col statusCol, const char *msg) {
   MpChess &g = *mpCh;
   bool mine = (bool)g.pos.white != g.black;
-  gfx.gradient(0, TOP_H, SCR_W, SCR_H - TOP_H, rgb(60, 40, 20), rgb(20, 10, 0));
-  gfx.fill(MPC_X - 3, MPC_Y - 3, MPC_SQ * 8 + 6, MPC_SQ * 8 + 6, rgb(90, 60, 30));
-  int king = chInCheck(g.pos, g.pos.white) ? chKing(g.pos, g.pos.white) : -1;
-  for (int sq = 0; sq < 64; sq++) {
-    int16_t x, y;
-    mpChXY(sq, x, y);
-    bool light = ((sq / 8) + (sq % 8)) % 2 == 0;
-    col c = light ? rgb(255, 204, 153) : rgb(153, 102, 51);
-    if (sq == g.lastFrom || sq == g.lastTo) c = light ? rgb(230, 230, 120) : rgb(180, 180, 70);
-    if (sq == g.sel) c = rgb(110, 200, 110);
-    if (sq == king) c = rgb(230, 70, 70);
-    gfx.fill(x, y, MPC_SQ, MPC_SQ, c);
-    if (g.pos.b[sq]) chPiece(x, y, g.pos.b[sq]);
-  }
-  if (g.sel >= 0)                                       // where the picked piece can go
-    for (int i = 0; i < g.n; i++)
-      if (g.moves[i].from == g.sel) {
-        int16_t x, y;
-        mpChXY(g.moves[i].to, x, y);
-        if (g.pos.b[g.moves[i].to]) gfx.frame(x + 1, y + 1, MPC_SQ - 2, MPC_SQ - 2, rgb(40, 140, 40), 3);
-        else gfx.disc(x + MPC_SQ / 2, y + MPC_SQ / 2, 4, rgb(40, 140, 40));
-      }
-  if (mine && !msg) gfx.frame(MPC_X + g.cc * MPC_SQ, MPC_Y + g.cr * MPC_SQ, MPC_SQ, MPC_SQ, C::YELLOW, 3);
-  for (int i = 0; i < 8; i++) {                         // files and ranks along the board
-    char f[2] = { (char)('a' + (g.black ? 7 - i : i)), 0 }, r[2] = { (char)('8' - (g.black ? 7 - i : i)), 0 };
-    gfx.text(MPC_X + i * MPC_SQ + 1, MPC_Y + MPC_SQ * 8 - 9, f, C::BLACK, F_SMALL);
-    gfx.text(MPC_X + 1, MPC_Y + i * MPC_SQ + 1, r, C::BLACK, F_SMALL);
-  }
+  fxUpdate();
+  chBoard(g.pos, g.black, g.sel, g.lastFrom, g.lastTo, g.moves, g.n, mine && !msg ? g.cr : -1, g.cc);
   // the panel: the other one on top, we at the bottom, each with the pieces taken from the other
   for (uint8_t k = 0; k < 2; k++) {
     bool white = k ? !g.black : g.black;                 // k 0 = the other one, 1 = we
     bool act = (bool)g.pos.white == white && !msg;
     int16_t y = k ? SCR_H - 44 : MPC_Y;
-    gfx.rbox(MPC_PX - 2, y, SCR_W - MPC_PX - 2, 40, 6, act ? colDark(C::BROWN) : rgb(45, 28, 12));
+    gfx.rbox(MPC_PX - 2, y, SCR_W - MPC_PX - 2, 40, 6, act ? rgb(102, 42, 0) : GREY2);
     if (act) gfx.rframe(MPC_PX - 2, y, SCR_W - MPC_PX - 2, 40, 6, C::YELLOW);
-    gfx.disc(MPC_PX + 10, y + 20, 7, white ? C::WHITE : rgb(40, 40, 40));
-    gfx.circle(MPC_PX + 10, y + 20, 7, C::GREY);
+    gfx.disc(MPC_PX + 10, y + 20, 7, white ? rgb(255, 255, 204) : C::BLACK);
+    gfx.circle(MPC_PX + 10, y + 20, 7, white ? rgb(51, 42, 0) : GREY4);
     gfx.text(MPC_PX + 22, y + 4, k ? "YOU" : linkCore().opp.name, C::WHITE, k ? F_TEXT : F_SMALL);
-    gfx.text(MPC_PX + 22, y + 26, white ? "white" : "black", C::LTGREY, F_SMALL);
+    gfx.text(MPC_PX + 22, y + 26, white ? "white" : "black", GREY4, F_SMALL);
     mpChLost(g.pos, !white, k ? SCR_H - 86 : MPC_Y + 44);   // what this side has taken
   }
-  if (status) gfx.text(MPC_PX, 118, status, statusCol, F_TEXT);
-  if (g.last[0]) gfx.text(MPC_PX, 140, g.last, C::LTGREY, F_SMALL);
+  if (status) gfx.textShadow(MPC_PX, 118, status, statusCol, C::BLACK, F_TEXT);
+  if (g.last[0]) gfx.text(MPC_PX, 140, g.last, GREY4, F_SMALL);
+  fxDraw();
   if (msg) {
     int16_t w = Gfx::width(msg, F_BOLD) + 28, x = MPC_X + (MPC_SQ * 8 - w) / 2;
     gfx.rbox(x + 4, 120, w, 42, 10, C::BLACK);
@@ -832,7 +846,8 @@ static uint8_t mpChPromo() {
     panel(60, 80, 200, 90, "PROMOTE", C::BROWN);
     for (int i = 0; i < 4; i++) {
       int16_t x = 74 + i * 46, y = 120;
-      gfx.fill(x, y, MPC_SQ, MPC_SQ, i == k ? rgb(110, 200, 110) : rgb(255, 204, 153));
+      chSquare(x, y, (uint8_t)i, i == k ? rgb(204, 255, 153) : CH_LT, i == k ? rgb(153, 255, 102) : rgb(255, 212, 102));
+      if (i == k) gfx.frame(x, y, MPC_SQ, MPC_SQ, C::YELLOW, 2);
       chPiece(x, y, (int8_t)(mpCh->black ? -P[i] : P[i]));
     }
     gfx.send();
@@ -843,8 +858,11 @@ static uint8_t mpChPromo() {
 static void mpChPlay(const ChMove &m) {
   MpChess &g = *mpCh;
   snprintf(g.last, sizeof(g.last), "%c%c-%c%c", 'a' + m.from % 8, '8' - m.from / 8, 'a' + m.to % 8, '8' - m.to / 8);
-  bool take = g.pos.b[m.to] || (abs(g.pos.b[m.from]) == CH_P && m.to == g.pos.ep);
+  int8_t taken = g.pos.b[m.to];
+  if (abs(g.pos.b[m.from]) == CH_P && m.to == g.pos.ep) taken = (int8_t)(g.pos.white ? -CH_P : CH_P);
+  bool take = taken != 0;
   chPlay(g.pos, m);
+  if (take) { int16_t x, y; mpChXY(m.to, x, y); chBurst(x, y, taken); }
   g.lastFrom = (int8_t)m.from; g.lastTo = (int8_t)m.to;
   g.sel = -1;
   g.n = chMoves(g.pos, g.moves);
@@ -863,6 +881,7 @@ static uint8_t mpChess() {
   g.cr = 6; g.cc = 4;                                   // on our king's pawn (as drawn)
   g.n = chMoves(g.pos, g.moves);
   mpQn = 0;
+  fxReset();
   mpChWhy = NULL;
   int16_t first = -1;                                   // the first half of their move
   uint8_t ret = 0;

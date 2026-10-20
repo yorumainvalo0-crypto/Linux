@@ -197,6 +197,53 @@ static bool chTooLittle(const ChPos &p) {
 }
 
 // ---------------- drawing ----------------
+/* The pieces fill a square: 20 x 22 sprites, x the outline, o the body,
+   h its lit side, s its shaded side. White ones are ivory with a dark
+   outline, black ones nearly black with a light rim, so both stand out
+   on both colours of square. Pawn, knight, bishop, rook, queen, king. */
+static const char *const CH_BIG[6][22] = {
+  { "....................", "....................", "....................", "....................",
+    "........xxxx........", ".......xhhoox.......", "......xhhooosx......", "......xhooooox......",
+    "......xhoooossx.....", ".......xhoossx......", "......xxxxxxxxx.....", ".......xhooosx......",
+    ".......xhooosx......", "......xhhoooosx.....", ".....xhhoooooosx....", ".....xhoooooooosx...",
+    "....xhhooooooooosx..", "...xxxxxxxxxxxxxxx..", "...xhhoooooooooosx..", "..xhoooooooooooossx.",
+    "..xxxxxxxxxxxxxxxxx.", "...................." },   // pawn
+  { "....................", ".......xx.xx........", "......xhxxhox.......", ".....xhhoohoxx......",
+    "....xhhooooooxx.....", "...xhhoxooooooxx....", "...xhooooooooooxx...", "..xhoooooooooooosx..",
+    ".xhooooooooooooossx.", ".xhooooxxooooooossx.", ".xxoooxx.xhooooossx.", "..xxxx..xhoooooossx.",
+    ".......xhoooooosssx.", "......xhooooooossx..", ".....xhooooooosssx..", ".....xhoooooooossx..",
+    "....xxxxxxxxxxxxxx..", "....xhhoooooooossx..", "...xxxxxxxxxxxxxxxx.", "...xhhooooooooooosx.",
+    "..xhoooooooooooooosx", "..xxxxxxxxxxxxxxxxxx" },   // knight
+  { ".........xx.........", "........xhox........", ".........xx.........", "........xhox........",
+    ".......xhoosx.......", "......xhhoxosx......", "......xhoxoosx......", "......xhxoooox......",
+    "......xhooooosx.....", ".......xhoooosx.....", "........xhoosx......", ".......xxxxxxxx.....",
+    ".......xhooossx.....", ".......xxxxxxxx.....", "........xhoosx......", ".......xhooooosx....",
+    "......xhhoooooosx...", "....xxxxxxxxxxxxxx..", "....xhhoooooooossx..", "...xhooooooooooossx.",
+    "...xxxxxxxxxxxxxxxx.", "...................." },   // bishop
+  { "....................", "..xxxx..xxxx..xxxx..", "..xhox..xhox..xhsx..", "..xhoxxxxhoxxxxosx..",
+    "..xhhoooooooooossx..", "..xxxxxxxxxxxxxxxx..", "...xhhoooooooossx...", "....xhoooooooosx....",
+    "....xhoooooooosx....", "....xhoooooooosx....", "....xhoooooooosx....", "....xhoooooooosx....",
+    "....xhoooooooosx....", "....xhoooooooosx....", "....xhoooooooosx....", "...xxxxxxxxxxxxxx...",
+    "...xhhoooooooossx...", "..xxxxxxxxxxxxxxxx..", "..xhhooooooooooosx..", ".xhoooooooooooooossx",
+    ".xxxxxxxxxxxxxxxxxxx", "...................." },   // rook
+  { "..xx.....xx.....xx..", ".xhox...xhox...xhox.", "..xx.....xx.....xx..", "..xx.....xx.....xx..",
+    "..xox...xoox...xox..", "..xhox..xhox..xhsx..", "...xhoxxhooxxxhosx..", "...xhooohooooooosx..",
+    "...xhoooooooooossx..", "....xhoooooooossx...", "....xxxxxxxxxxxxx...", "....xhhoooooooosx...",
+    "....xxxxxxxxxxxxx...", ".....xhoooooooosx...", ".....xhoooooooosx...", "....xhhooooooooosx..",
+    "....xxxxxxxxxxxxxx..", "...xhhoooooooooossx.", "..xxxxxxxxxxxxxxxxxx", "..xhhoooooooooooossx",
+    "..xxxxxxxxxxxxxxxxxx", "...................." },   // queen
+  { "........xxxx........", "........xhox........", "......xxxhoxxx......", "......xhhoooox......",
+    "......xxxhoxxx......", "..xxxx..xhox..xxxx..", ".xhhoox.xhox.xhooox.", "xhhoooxxxhoxxxooossx",
+    "xhooooooxhoxoooooosx", "xhoooooooooooooooosx", ".xhoooooooooooooosx.", "..xhoooooooooooosx..",
+    "...xxxxxxxxxxxxxx...", "...xhhoooooooossx...", "...xxxxxxxxxxxxxx...", "....xhoooooooosx....",
+    "....xhoooooooosx....", "...xhhoooooooossx...", "..xxxxxxxxxxxxxxxx..", "..xhhoooooooooossx..",
+    "..xxxxxxxxxxxxxxxx..", "...................." },   // king
+};
+static const char CH_BKEYS[] = "xohs";
+static const col  CH_BW[4] = { rgb(51, 42, 0), rgb(255, 255, 204), C::WHITE, rgb(204, 170, 102) };
+static const col  CH_BB[4] = { GREY4, GREY1, GREY2, C::BLACK };
+
+// the same small (12 x 12) for the taken pieces and the menu
 static const char *const CH_ICON[6][12] = {
   { "............", "............", ".....xx.....", "....xoox....", "....xoox....", ".....xx.....",
     "....xoox....", "...xoooox...", "...xoooox...", "..xoooooox..", "..xxxxxxxx..", "............" },   // pawn
@@ -217,13 +264,106 @@ static const char *const IC_CHESS[12] = {
 #define CH_SQ 26                                    // square size
 #define CH_X0 8                                     // board corner
 #define CH_Y0 (TOP_H + 4)
+#define CH_LT rgb(255, 212, 153)                    // the board: maple ...
+#define CH_DK rgb(153, 85, 51)                      // ... and walnut
 
 static const char CH_KEYS[] = "xo";               // outline, body
-static const col  CH_WHITE[2] = { C::BLACK, C::WHITE };
-static const col  CH_BLACK[2] = { C::LTGREY, rgb(40, 40, 40) };
+static const col  CH_WHITE[2] = { rgb(51, 42, 0), rgb(255, 255, 204) };
+static const col  CH_BLACK[2] = { GREY4, GREY1 };
 
-static void chPiece(int16_t x, int16_t y, int8_t pc, uint8_t scale = 2) {
-  gfx.sprite(x + 1, y + 1, CH_ICON[abs(pc) - 1], 12, CH_KEYS, pc > 0 ? CH_WHITE : CH_BLACK, scale);
+static void chPiece(int16_t x, int16_t y, int8_t pc) {        // on the square at (x, y)
+  gfx.sprite(x + 3, y + 2, CH_BIG[abs(pc) - 1], 22, CH_BKEYS, pc > 0 ? CH_BW : CH_BB);
+}
+static void chPieceSmall(int16_t x, int16_t y, int8_t pc) {
+  gfx.sprite(x + 1, y + 1, CH_ICON[abs(pc) - 1], 12, CH_KEYS, pc > 0 ? CH_WHITE : CH_BLACK);
+}
+
+// a square of wood, n gives it its own grain
+static void chSquare(int16_t x, int16_t y, uint8_t n, col c, col grain) {
+  gfx.fill(x, y, CH_SQ, CH_SQ, c);
+  uint32_t h = n * 2654435761u + 0x9E3779B9u;
+  for (uint8_t k = 0; k < 4; k++) {
+    h = h * 1103515245u + 12345u;
+    int16_t gy = (int16_t)(1 + (h >> 16) % (CH_SQ - 3)), gx = (int16_t)((h >> 8) % 12), gw = (int16_t)(6 + (h >> 24) % 16);
+    if (gx + gw > CH_SQ) gw = CH_SQ - gx;
+    gfx.hline(x + gx, y + gy, gw, grain);
+    if (gw > 12) gfx.hline(x + gx + gw / 2, y + gy + 1, gw / 2, grain);   // the streak bends
+  }
+}
+
+/* The board in its frame with the ranks beside it and the files in the
+   bottom row; flip = black at the bottom. The last move and the picked
+   piece tint their squares, a king in check glows red, the picked
+   piece's moves get dots (corners on a capture). cr < 0: no cursor.  */
+static void chBoard(const ChPos &p, bool flip, int sel, int lastFrom, int lastTo, const ChMove *mv, int n, int cr, int cc) {
+  int16_t bw = CH_SQ * 8;
+  gfx.fill(0, TOP_H, SCR_W, SCR_H - TOP_H, GREY1);
+  gfx.fill(0, TOP_H, CH_X0 + bw + 5, SCR_H - TOP_H, rgb(102, 42, 0));
+  gfx.hline(0, TOP_H, CH_X0 + bw + 5, rgb(153, 85, 51));
+  gfx.vline(CH_X0 + bw + 5, TOP_H, SCR_H - TOP_H, rgb(51, 0, 0));
+  gfx.frame(CH_X0 - 1, CH_Y0 - 1, bw + 2, bw + 2, rgb(51, 0, 0));
+  int king = chInCheck(p, p.white) ? chKing(p, p.white) : -1;
+  for (int sq = 0; sq < 64; sq++) {
+    int r = sq / 8, c = sq % 8, dr = flip ? 7 - r : r, dc = flip ? 7 - c : c;
+    int16_t x = (int16_t)(CH_X0 + dc * CH_SQ), y = (int16_t)(CH_Y0 + dr * CH_SQ);
+    bool light = (r + c) % 2 == 0;
+    col base = light ? CH_LT : CH_DK, grain = light ? rgb(255, 212, 102) : rgb(102, 85, 51);
+    if (sq == lastFrom || sq == lastTo) { base = light ? rgb(255, 255, 153) : rgb(204, 170, 51); grain = light ? rgb(255, 255, 102) : rgb(153, 127, 51); }
+    if (sq == sel) { base = light ? rgb(204, 255, 153) : rgb(102, 170, 51); grain = light ? rgb(153, 255, 102) : rgb(102, 128, 51); }
+    chSquare(x, y, (uint8_t)(dr * 8 + dc), base, grain);
+    if (sq == king) {                               // the king in check glows
+      uint8_t pulse = (uint8_t)((gameMillis() / 300) % 2);
+      fxDitherDisc(x + 13, y + 13, 13, C::RED, pulse);
+      gfx.disc(x + 13, y + 13, 10, rgb(204, 0, 0));
+      gfx.disc(x + 13, y + 13, 7 + pulse, rgb(255, 85, 0));
+      gfx.disc(x + 13, y + 13, 3 + pulse, rgb(255, 212, 0));
+    }
+    if (p.b[sq]) {                                  // a soft shadow, then the piece
+      col sh = colDark(base);
+      const col SH[4] = { sh, sh, sh, sh };
+      gfx.sprite(x + 5, y + 3, CH_BIG[abs(p.b[sq]) - 1], 22, CH_BKEYS, SH);
+      chPiece(x, y, p.b[sq]);
+    }
+    if (dr == 7) {                                  // the files in the bottom row
+      char f[2] = { (char)('a' + c), 0 };
+      gfx.text(x + 1, y + CH_SQ - 9, f, light ? CH_DK : CH_LT, F_SMALL);
+    }
+    if (dc == 0) {                                  // the ranks beside the board
+      char rk[2] = { (char)('8' - r), 0 };
+      gfx.text(2, y + 9, rk, CH_LT, F_SMALL);
+    }
+  }
+  if (sel >= 0)                                     // where the picked piece can go
+    for (int i = 0; i < n; i++)
+      if (mv[i].from == sel) {
+        int to = mv[i].to, dr = flip ? 7 - to / 8 : to / 8, dc = flip ? 7 - to % 8 : to % 8;
+        int16_t x = (int16_t)(CH_X0 + dc * CH_SQ), y = (int16_t)(CH_Y0 + dr * CH_SQ);
+        if (p.b[to] || (abs(p.b[sel]) == CH_P && to == p.ep)) {
+          col c = rgb(0, 170, 0);
+          gfx.triangle(x, y, x + 7, y, x, y + 7, c);
+          gfx.triangle(x + CH_SQ - 1, y, x + CH_SQ - 8, y, x + CH_SQ - 1, y + 7, c);
+          gfx.triangle(x, y + CH_SQ - 1, x + 7, y + CH_SQ - 1, x, y + CH_SQ - 8, c);
+          gfx.triangle(x + CH_SQ - 1, y + CH_SQ - 1, x + CH_SQ - 8, y + CH_SQ - 1, x + CH_SQ - 1, y + CH_SQ - 8, c);
+        } else {
+          gfx.disc(x + 13, y + 13, 5, rgb(0, 85, 0));
+          gfx.disc(x + 13, y + 13, 4, rgb(51, 170, 0));
+          gfx.fill(x + 11, y + 11, 2, 2, rgb(153, 255, 102));
+        }
+      }
+  if (cr >= 0) {
+    int16_t x = (int16_t)(CH_X0 + cc * CH_SQ), y = (int16_t)(CH_Y0 + cr * CH_SQ);
+    gfx.frame(x - 1, y - 1, CH_SQ + 2, CH_SQ + 2, C::BLACK);
+    gfx.frame(x, y, CH_SQ, CH_SQ, C::YELLOW, 2);
+    gfx.frame(x + 2, y + 2, CH_SQ - 4, CH_SQ - 4, rgb(153, 85, 0));
+  }
+}
+
+// a taken piece flies apart on its square at (x, y)
+static void chBurst(int16_t x, int16_t y, int8_t taken) {
+  int16_t cx = x + CH_SQ / 2, cy = y + CH_SQ / 2;
+  fxBurst(cx, cy, 16, taken > 0 ? rgb(255, 255, 204) : GREY2, taken > 0 ? rgb(204, 170, 102) : GREY1, 170, 650, 40, 3);
+  fxBurst(cx, cy, 10, C::WHITE, C::ORANGE, 220, 380, 0, 1, FX_STREAK);
+  fxRing(cx, cy, 22, C::WHITE, C::ORANGE, 350);
 }
 
 struct ChGame {
@@ -261,65 +401,35 @@ static void chXY(int sq, int16_t &x, int16_t &y) {
 
 static void chDraw(const char *status, col statusCol) {
   static const char *const LV[3] = { "vs CPU easy", "vs CPU normal", "vs CPU hard" };
+  fxUpdate();
   gfx.gradient(0, 0, SCR_W, TOP_H, colLight(C::BROWN), colDark(C::BROWN, 2));   // a bar without score
   gfx.textShadow(6, 5, "CHESS", C::WHITE, C::BLACK, F_TEXT);
   gfx.right(SCR_W - 34, 9, ch->human < 0 ? "2 players" : LV[ch->level], C::LTGREY, F_SMALL);
   batIcon(SCR_W - 28, 7);
-  gfx.gradient(0, TOP_H, SCR_W, SCR_H - TOP_H, rgb(60, 40, 20), rgb(20, 10, 0));
-  gfx.fill(CH_X0 - 3, CH_Y0 - 3, CH_SQ * 8 + 6, CH_SQ * 8 + 6, rgb(90, 60, 30));
-  int kingInCheck = chInCheck(ch->pos, ch->pos.white) ? chKing(ch->pos, ch->pos.white) : -1;
-  for (int sq = 0; sq < 64; sq++) {
-    int16_t x, y;
-    chXY(sq, x, y);
-    bool light = ((sq / 8) + (sq % 8)) % 2 == 0;
-    col c = light ? rgb(255, 204, 153) : rgb(153, 102, 51);
-    if (sq == ch->lastFrom || sq == ch->lastTo) c = light ? rgb(230, 230, 120) : rgb(180, 180, 70);
-    if (sq == ch->sel) c = rgb(110, 200, 110);
-    if (sq == kingInCheck) c = rgb(230, 70, 70);
-    gfx.fill(x, y, CH_SQ, CH_SQ, c);
-  }
-  for (int sq = 0; sq < 64; sq++) {
-    int16_t x, y;
-    chXY(sq, x, y);
-    if (ch->pos.b[sq]) chPiece(x, y, ch->pos.b[sq]);
-  }
-  if (ch->sel >= 0)                                 // where the picked piece can go
-    for (int i = 0; i < ch->nMoves; i++)
-      if (ch->moves[i].from == ch->sel) {
-        int16_t x, y;
-        chXY(ch->moves[i].to, x, y);
-        if (ch->pos.b[ch->moves[i].to]) gfx.frame(x + 1, y + 1, CH_SQ - 2, CH_SQ - 2, rgb(40, 140, 40), 3);
-        else gfx.disc(x + CH_SQ / 2, y + CH_SQ / 2, 4, rgb(40, 140, 40));
-      }
-  if (!chCpuGo() || chEnd) {                        // the cursor, not while the CPU thinks
-    int16_t cx = (int16_t)(CH_X0 + ch->cc * CH_SQ), cy = (int16_t)(CH_Y0 + ch->cr * CH_SQ);
-    gfx.frame(cx, cy, CH_SQ, CH_SQ, C::YELLOW, 3);
-  }
-  // files and ranks along the board
-  for (int i = 0; i < 8; i++) {
-    char f[2] = { (char)('a' + (chFlipped() ? 7 - i : i)), 0 }, r[2] = { (char)('8' - (chFlipped() ? 7 - i : i)), 0 };
-    gfx.text(CH_X0 + i * CH_SQ + 1, CH_Y0 + CH_SQ * 8 - 9, f, C::BLACK, F_SMALL);
-    gfx.text(CH_X0 + 1, CH_Y0 + i * CH_SQ + 1, r, C::BLACK, F_SMALL);
-  }
-  // the panel on the right
-  int16_t px = CH_X0 + CH_SQ * 8 + 8;
-  gfx.rbox(px, CH_Y0, SCR_W - px - 4, 64, 6, ch->pos.white ? C::WHITE : rgb(40, 40, 40));
-  gfx.text(px + 8, CH_Y0 + 8, ch->pos.white ? "WHITE" : "BLACK", ch->pos.white ? C::BLACK : C::WHITE, F_BOLD);
+  bool cursor = !chCpuGo() || chEnd;                // not while the CPU thinks
+  chBoard(ch->pos, chFlipped(), ch->sel, ch->lastFrom, ch->lastTo, ch->moves, ch->nMoves, cursor ? ch->cr : -1, ch->cc);
+  // the panel on the right: whose go, the state, the last move, the pieces taken
+  int16_t px = CH_X0 + CH_SQ * 8 + 10, pw = SCR_W - px - 4;
+  bool w = ch->pos.white;
+  gfx.rbox(px, CH_Y0, pw, 62, 6, w ? rgb(255, 255, 204) : C::BLACK);
+  gfx.rframe(px, CH_Y0, pw, 62, 6, w ? rgb(153, 127, 51) : GREY3);
+  gfx.text(px + 7, CH_Y0 + 8, w ? "WHITE" : "BLACK", w ? rgb(51, 42, 0) : C::WHITE, F_BOLD);
   const char *who = ch->human < 0 ? "to move" : (chCpuGo() ? "CPU's go" : "your go");
-  gfx.text(px + 8, CH_Y0 + 38, who, ch->pos.white ? C::DKGREY : C::LTGREY);
+  gfx.text(px + 7, CH_Y0 + 37, who, w ? rgb(102, 85, 51) : GREY3);
   if (status) {                                    // one or two lines (split at the space)
     char a[16];
     strncpy(a, status, sizeof(a) - 1); a[sizeof(a) - 1] = 0;
     char *sp = strchr(a, ' ');
     if (sp) *sp = 0;
-    gfx.text(px + 4, CH_Y0 + 72, a, statusCol, Gfx::width(a, F_TEXT) <= SCR_W - px - 8 ? F_TEXT : F_SMALL);
-    if (sp) gfx.text(px + 4, CH_Y0 + 92, sp + 1, statusCol, F_TEXT);
+    gfx.textShadow(px + 2, CH_Y0 + 70, a, statusCol, C::BLACK, Gfx::width(a, F_TEXT) <= pw - 2 ? F_TEXT : F_SMALL);
+    if (sp) gfx.textShadow(px + 2, CH_Y0 + 90, sp + 1, statusCol, C::BLACK, F_TEXT);
   }
-  if (ch->lastText[0]) gfx.text(px + 4, CH_Y0 + 114, ch->lastText, C::LTGREY, F_SMALL);
-  // taken pieces, small
-  for (int i = 0; i < ch->nTakenB; i++) chPiece((int16_t)(px + (i % 6) * 13), (int16_t)(CH_Y0 + 128 + (i / 6) * 13), ch->takenB[i], 1);
-  for (int i = 0; i < ch->nTakenW; i++) chPiece((int16_t)(px + (i % 6) * 13), (int16_t)(CH_Y0 + 160 + (i / 6) * 13), ch->takenW[i], 1);
-  gfx.text(px, SCR_H - 12, "OK pick / move", C::GREY, F_SMALL);
+  if (ch->lastText[0]) gfx.text(px + 2, CH_Y0 + 113, ch->lastText, GREY4, F_SMALL);
+  if (ch->nTakenB || ch->nTakenW) gfx.rbox(px - 2, CH_Y0 + 125, pw + 4, 64, 5, GREY2);
+  for (int i = 0; i < ch->nTakenB; i++) chPieceSmall((int16_t)(px + (i % 6) * 13), (int16_t)(CH_Y0 + 128 + (i / 6) * 13), ch->takenB[i]);
+  for (int i = 0; i < ch->nTakenW; i++) chPieceSmall((int16_t)(px + (i % 6) * 13), (int16_t)(CH_Y0 + 160 + (i / 6) * 13), ch->takenW[i]);
+  gfx.text(px, SCR_H - 12, "OK pick / move", GREY3, F_SMALL);
+  fxDraw();
 }
 
 // the promoted piece: LEFT/RIGHT, OK
@@ -334,7 +444,8 @@ static uint8_t chPickPromo() {
     panel(60, 80, 200, 90, "PROMOTE", C::BROWN);
     for (int i = 0; i < 4; i++) {
       int16_t x = 74 + i * 46, y = 120;
-      gfx.fill(x, y, CH_SQ, CH_SQ, i == k ? rgb(110, 200, 110) : rgb(255, 204, 153));
+      chSquare(x, y, (uint8_t)i, i == k ? rgb(204, 255, 153) : CH_LT, i == k ? rgb(153, 255, 102) : rgb(255, 212, 102));
+      if (i == k) gfx.frame(x, y, CH_SQ, CH_SQ, C::YELLOW, 2);
       chPiece(x, y, (int8_t)(ch->pos.white ? P[i] : -P[i]));
     }
     gfx.send();
@@ -616,6 +727,13 @@ static col chApply(ChMove m) {
   if (chFlipped() != turnedBefore) { ch->cr = (uint8_t)(7 - ch->cr); ch->cc = (uint8_t)(7 - ch->cc); }   // cursor stays on its square
   ch->nMoves = chMoves(ch->pos, ch->moves);
   bool check = chInCheck(ch->pos, ch->pos.white);
+  int16_t bx, by;
+  if (taken) { chXY(m.to, bx, by); chBurst(bx, by, taken); }
+  if (check && !ch->nMoves) {                       // mate: the king's square bursts in red
+    chXY(chKing(ch->pos, ch->pos.white), bx, by);
+    fxBurst(bx + CH_SQ / 2, by + CH_SQ / 2, 18, C::YELLOW, C::RED, 150, 800, 0, 2);
+    fxRing(bx + CH_SQ / 2, by + CH_SQ / 2, 30, C::WHITE, C::RED, 400);
+  }
   sfx(taken ? 500 : 900, taken ? 80 : 40);
   col endCol = C::CYAN;
   if (!ch->nMoves) {
@@ -664,12 +782,13 @@ void chessRun() {
   memset(ch, 0, sizeof(*ch));
   if (!chSetup() || (ch->human >= 0 && !(che = (ChEngine *)malloc(sizeof(ChEngine))))) { free(ch); ch = NULL; return; }
   col endCol = C::WHITE;
+  fxReset();
   btnClear();
   while (poll()) {
     if (chEnd) {                                     // finished: OK starts a new game
       chDraw(chEnd, endCol);
-      gfx.fill(CH_X0 + CH_SQ * 8 + 6, SCR_H - 14, 90, 14, rgb(20, 10, 0));
-      gfx.text(CH_X0 + CH_SQ * 8 + 8, SCR_H - 12, "OK new game", C::YELLOW, F_SMALL);
+      gfx.fill(CH_X0 + CH_SQ * 8 + 6, SCR_H - 14, 90, 14, GREY1);
+      gfx.text(CH_X0 + CH_SQ * 8 + 10, SCR_H - 12, "OK new game", C::YELLOW, F_SMALL);
       gfx.send();
       if (btn(B_OK)) { chNew(); btnClear(); }
       continue;
