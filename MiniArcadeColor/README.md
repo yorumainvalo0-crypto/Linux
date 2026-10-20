@@ -11,9 +11,19 @@ Rocks, Racer, Frogger, 4 wins, Tic Tac Toe, 2048, Minesweeper, Pac-Man,
 Shooter, Jump & Run, Sokoban, Battleship, Sudoku, Lights Out, Match 3,
 Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
 the CPU or two players on one console (no online multiplayer yet). Plus
-Chess for two players on one console, with all rules (castling, en passant,
-promotion, check, mate, stalemate, 50 moves); the board can turn round for
-black.
+Chess with all rules (castling, en passant, promotion, check, mate,
+stalemate, 50 moves), against the CPU or for two players on one console
+(the board can turn round for black):
+
+- **vs CPU easy / normal / hard**: you pick white or black, the board faces
+  you. The CPU searches with alpha-beta (material, piece-square tables, takes
+  searched on to the end) for up to 0.5 / 1 / 2.5 s: easy looks one move
+  ahead and now and then plays any move, normal 3 plies, hard up to 5.
+  Holding OK while it thinks opens the pause menu as usual.
+- **saved game**: a game in progress is kept in flash after every move and
+  when you leave it (also through sleep or switching off); the next start of
+  Chess offers "continue saved game" first. A finished game, "restart" in
+  the pause menu or a new game clear it.
 
 ## Boards
 
