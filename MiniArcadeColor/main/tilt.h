@@ -89,7 +89,7 @@ bool tiltSaveLevel() {
 
 static void tiltUpdate() {
   static uint32_t next = 0;
-  if (!tiltGame || !gyroReady) { memset(tiltKey, 0, sizeof(tiltKey)); return; }
+  if (!tiltGame || !gyroReady) { memset(tiltKey, 0, sizeof(tiltKey)); memset(tiltAn, 0, sizeof(tiltAn)); return; }
   if ((int32_t)(millis() - next) < 0) return;
   next = millis() + 20;
   int16_t a[3];
@@ -97,7 +97,11 @@ static void tiltUpdate() {
   int16_t x = tiltAxis(a, tiltAx[0]), y = tiltAxis(a, tiltAx[1]);
   const uint8_t K[4] = { B_RIGHT, B_LEFT, B_UP, B_DOWN };
   const int16_t V[4] = { x, (int16_t)-x, y, (int16_t)-y };
-  for (uint8_t i = 0; i < 4; i++) tiltKey[K[i]] = V[i] > (tiltKey[K[i]] ? tiltOff() : tiltOn());
+  const int16_t dead = (int16_t)(tiltOn() * 4 / 10), full = (int16_t)(tiltOn() * 2);   // stepless: from about 6 to 30 degrees
+  for (uint8_t i = 0; i < 4; i++) {
+    tiltKey[K[i]] = V[i] > (tiltKey[K[i]] ? tiltOff() : tiltOn());
+    tiltAn[K[i]] = V[i] <= dead ? 0 : V[i] >= full ? 256 : (int16_t)((int32_t)(V[i] - dead) * 256 / (full - dead));
+  }
 }
 
 void tiltStart() {                              // at the start and when switched on

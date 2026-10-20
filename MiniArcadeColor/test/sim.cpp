@@ -1286,6 +1286,8 @@ int main(int argc, char **argv) {
     check("level saved in the settings", seen("LEVEL SAVED") && cfgTiltFix);
     check("pause menu offers a new level", seen("tilt: level here"));
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
+    printf("   stepless: up %d, left-right %d\n", keyAxis(B_DOWN, B_UP), keyAxis(B_LEFT, B_RIGHT));
+    check("stepless tilt: nearly full up, nothing sideways", keyAxis(B_DOWN, B_UP) > 200 && keyAxis(B_LEFT, B_RIGHT) == 0);
   }
   if (scenario == "fps") {
     int fps = 0;

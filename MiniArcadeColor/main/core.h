@@ -122,6 +122,7 @@ void applyPinModes() {
 }
 
 static bool tiltKey[4];                  // the gyroscope tilts like a key (tilt.h)
+static int16_t tiltAn[4];                // ... and how far: 0..256 towards each key
 static void (*tiltHook)() = NULL;        // reads the gyroscope, before the keys
 static int8_t gyroSda = -1, gyroScl = -1; // its pins, saved as "gsda" / "gscl" (+1, 0 = none)
 static bool   cfgTilt = false;           // tilt control switched on (saved as "tilt")
@@ -193,6 +194,19 @@ bool btn(uint8_t i)     { if (bEdge[i]) { bEdge[i] = false; return true; } retur
 // so that a long press can mean "back")
 bool btnTap(uint8_t i)  { if (bTap[i]) { bTap[i] = false; return true; } return false; }
 bool btnHeld(uint8_t i) { return i == B_OK ? okDown : (kDown[i] && !kChord[i]); }
+
+/* Steering without steps: -256..256 for a pair of keys. A key gives the
+   full value, tilting as much as the console is tilted.               */
+int16_t keyAxis(uint8_t neg, uint8_t pos) {
+  if (btnHeld(pos) && !tiltKey[pos]) return 256;
+  if (btnHeld(neg) && !tiltKey[neg]) return -256;
+  return (int16_t)(tiltAn[pos] - tiltAn[neg]);
+}
+// whole steps of up to `full` per tick from an axis, the rest carried over
+struct AxisStep {
+  int32_t rest = 0;
+  int32_t operator()(int16_t a, int32_t full) { rest += a * full; int32_t s = rest / 256; rest -= s * 256; return s; }
+};
 
 /* Called whenever a screen is entered or left: a key still held is muted
    until it is released - letting go of OK after "hold to leave" would

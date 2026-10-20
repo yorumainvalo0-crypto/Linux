@@ -27,8 +27,7 @@ void pongRun() {
       if (dt > 40) dt = 40;
       last = now;
       // the player's paddle
-      if (btnHeld(B_UP))   py -= (int32_t)dt * 256 * 22 / 100;     // 220 px/s
-      if (btnHeld(B_DOWN)) py += (int32_t)dt * 256 * 22 / 100;
+      py += (int32_t)dt * 22 * keyAxis(B_UP, B_DOWN) / 100;           // up to 220 px/s
       int32_t lo = (PG_Y0 + PG_PH / 2) * 256, hi = (PG_Y1 - PG_PH / 2) * 256;
       if (py < lo) py = lo;
       if (py > hi) py = hi;
