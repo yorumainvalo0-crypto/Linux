@@ -41,7 +41,9 @@ enum Font : uint8_t {
 class Gfx {
 public:
   void     begin();                       // panel on (tft_spi.cpp)
-  void     send();                        // frame to the panel, unchanged rows are skipped
+  void     send();                        // frame to the panel, only the parts that changed
+  void     setSpeed(uint8_t mhz);         // SPI clock for the pictures (tft_spi.cpp)
+  void   (*overlay)() = nullptr;          // drawn over every frame just before it goes out
   void     setBacklight(uint8_t pct);     // only with a backlight pin
   void     setOrientation(bool flip, bool bgr, bool invert);   // panel mounted the other way, colours swapped
   void     sleep(bool off);

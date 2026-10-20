@@ -150,7 +150,9 @@ void Gfx::begin() {}
 void Gfx::setBacklight(uint8_t) {}
 void Gfx::setOrientation(bool, bool, bool) {}
 void Gfx::sleep(bool) {}
+void Gfx::setSpeed(uint8_t) {}
 void Gfx::send() {
+  if (overlay) overlay();
   frames++;
   memcpy(lastFrame, fb, sizeof(fb));
   if (grabNext) { grabNext = 0; captureAt.insert(frames + 3); }
@@ -1033,7 +1035,7 @@ int main(int argc, char **argv) {
     // then Snake: the pause menu offers a new level, tilting steers
     simGyro = true; simNvsU16["snd"] = 255;                      // GPIO7 is the gyroscope's here
     press(M, UP); press(M + 400, OK, 80);
-    for (int i = 0; i < 7; i++) press(M + 800 + 250 * i, DN);
+    for (int i = 0; i < 9; i++) press(M + 800 + 220 * i, DN);
     press(M + 2900, RT);
     accScript = { { M + 5000, 8000, 0 }, { M + 6000, 0, 0 }, { M + 7500, 0, -8000 }, { M + 8500, 0, 0 },
                   { M + 20000, 0, -8000 } };                     // the last one: tilt up in the game
@@ -1044,6 +1046,15 @@ int main(int argc, char **argv) {
     press(M + 19500, OK, 80);                                    // ... continue
     simEnd = M + 21000;
     setenv("GRAB", "TILT SETUP", 1);
+  } else if (scenario == "fps") {
+    // settings -> show fps on, then Snake shows its frame rate
+    press(M, UP); press(M + 400, OK, 80);
+    for (int i = 0; i < 5; i++) press(M + 800 + 220 * i, DN);
+    press(M + 2200, RT);
+    press(M + 2800, OK, 900);                                    // leave the settings
+    press(M + 4200, DN); press(M + 4600, OK, 80);                // Snake
+    simEnd = M + 9000;
+    setenv("GRAB", "SNAKE", 1);
   } else if (scenario == "g2048") {
     uint32_t t = openGameNamed("2048", M); simEnd = t + 150000;
     autoplay = true; autoplayFrom = t + 300; captureMs = { t + 6000, t + 6070 };
@@ -1275,6 +1286,16 @@ int main(int argc, char **argv) {
     check("level saved in the settings", seen("LEVEL SAVED") && cfgTiltFix);
     check("pause menu offers a new level", seen("tilt: level here"));
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
+  }
+  if (scenario == "fps") {
+    int fps = 0;
+    for (const std::string &t : seenTexts) {
+      int v;
+      if (sscanf(t.c_str(), "%d fps", &v) == 1 && t.find(" fps") != std::string::npos && seen("SNAKE")) fps = v > fps ? v : fps;
+    }
+    printf("   shown: %d fps\n", fps);
+    check("fps setting saved", simNvsU16.count("fps") && simNvsU16["fps"] == 1);
+    check("frame rate shown in a game (30..62)", fps >= 30 && fps <= 62);
   }
   if (scenario == "ladder5") {
     printf("   OK key %u/%u, buzzer %u\n", BTN_PIN[4], BTN_MV[4], simNvsU16["snd"]);

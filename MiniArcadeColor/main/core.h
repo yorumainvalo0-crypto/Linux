@@ -214,6 +214,8 @@ static uint8_t  cfgClock  = 160;      // cpu clock in MHz
 static uint8_t  cfgSleep  = 5;        // minutes without a key press, 0 = never
 static bool     cfgMute   = false;
 static uint8_t  cfgDisp   = 0;        // 1 = upside down, 2 = red/blue swapped, 4 = inverted
+static uint8_t  cfgSpi    = CONFIG_ARCADE_TFT_MHZ;   // panel clock for the pictures
+static bool     cfgFps    = false;    // frames per second in the corner
 static uint32_t lastInput = 0;        // for the sleep timer
 static uint8_t  runClock  = 160;      // the clock this start runs at
 
@@ -226,12 +228,29 @@ void saveCfg() {
   prefs.putUShort("slp", cfgSleep);
   prefs.putUShort("mut", cfgMute);
   prefs.putUShort("dsp", cfgDisp);
+  prefs.putUShort("spi", cfgSpi);
+  prefs.putUShort("fps", cfgFps);
   prefs.end();
+}
+
+// the frames that really went out in the last second, bottom right
+static void fpsOverlay() {
+  static uint32_t t0 = 0;
+  static uint16_t n = 0, shown = 0;
+  uint32_t now = millis();
+  n++;
+  if (now - t0 >= 1000) { shown = (uint16_t)(n * 1000UL / (now - t0)); n = 0; t0 = now; }
+  char b[12];
+  snprintf(b, sizeof(b), "%u fps", shown);
+  int16_t w = gfx.width(b, F_SMALL) + 4;
+  gfx.fill(SCR_W - w, SCR_H - 11, w, 11, C::BLACK);
+  gfx.text(SCR_W - w + 2, SCR_H - 10, b, C::LIME, F_SMALL);
 }
 
 void applyDisplay() {
   gfx.setOrientation(cfgDisp & 1, !(cfgDisp & 2), cfgDisp & 4);
   gfx.setBacklight(cfgBright);
+  gfx.overlay = cfgFps ? fpsOverlay : nullptr;
 }
 
 static uint8_t  sndPin = 255;          // 255 = no buzzer
@@ -285,6 +304,8 @@ bool loadPins() {
   cfgSleep  = (uint8_t)prefs.getUShort("slp", 5);
   cfgMute   = prefs.getUShort("mut", 0) != 0;
   cfgDisp   = (uint8_t)prefs.getUShort("dsp", 0);
+  cfgSpi    = (uint8_t)prefs.getUShort("spi", CONFIG_ARCADE_TFT_MHZ);
+  cfgFps    = prefs.getUShort("fps", 0) != 0;
   bool ok = prefs.getUShort("pset", 0) == 3;      // version 3 = four keys + optional OK
   if (ok)
     for (uint8_t i = 0; i < B_COUNT; i++) {

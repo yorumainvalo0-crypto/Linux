@@ -338,6 +338,7 @@ void setup() {
   // keys: first start, or a key held while starting
   bool held = false;
   if (havePins) { delay(300); for (uint8_t i = 0; i < 4; i++) if (rawPressed(i)) held = true; }
+  if (held && cfgSpi != CONFIG_ARCADE_TFT_MHZ) { cfgSpi = CONFIG_ARCADE_TFT_MHZ; saveCfg(); }   // way back from a white screen
   if (!havePins || held) learnKeys();
   if (!soundAsked) {
     soundSetup();
@@ -348,6 +349,7 @@ void setup() {
   batDetect();
   applyPinModes();
   tiltStart();
+  gfx.setSpeed(cfgSpi);
   fwUnconfirmed = fwPending();
   versionRun(true);
 }

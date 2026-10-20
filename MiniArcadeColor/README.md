@@ -35,6 +35,14 @@ With SDO wired the console finds the display's pins by itself at the start
 too; the result is saved. Without SDO the table above is used.
 Touch and SD card stay unconnected for now.
 
+Speed: only the parts of the picture that changed go to the display (blocks
+of 32 x 1 pixels), so most games run at the 60 fps limit. Games that redraw
+the whole screen (Doom, Tunnel 3D, Racer) depend on the SPI clock: about
+15 fps at 20 MHz, 28 fps at 40 MHz. Settings -> "screen speed" tries a faster
+clock and keeps it only if OK is pressed within 10 s; a key held while
+switching on goes back to the safe default. "show fps" puts the frame rate in
+the corner.
+
 MPU6050 gyroscope (GY-521): SDA and SCL on any two free pins (S3: GPIO8 /
 GPIO18 are kept for it), VCC 3V3, GND. Settings -> "tilt control" switches it
 on: the console finds the sensor, then asks to tilt it once to the right and
