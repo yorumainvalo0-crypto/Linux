@@ -16,10 +16,10 @@ ESP32-C3 SuperMini or ESP32-S3 WROOM-1. The firmware is built for both.
 | VCC, LED | 3V3      | 3V3      |
 | GND      | GND      | GND      |
 | SCK      | GPIO8    | GPIO12   |
-| SDI/MOSI | GPIO9    | GPIO11   |
-| SDO/MISO | any free | GPIO13   |
+| SDI/MOSI | GPIO10   | GPIO11   |
+| SDO/MISO | GPIO9    | GPIO13   |
 | CS       | GPIO21   | GPIO10   |
-| DC       | GPIO4    | GPIO9    |
+| DC       | GPIO0    | GPIO9    |
 | RESET    | GPIO5    | 3V3      |
 
 With SDO wired the console finds the display's pins by itself at the start
@@ -42,15 +42,16 @@ about 50 mV steps) - that works, but a 10k pull-up to 3V3 with keys via 0,
 2.2k, 4.7k, 10k and 22k is sturdier. OK is two opposite keys on different
 pins, an own OK key, or - on a ladder - two keys pressed together, learned
 in the last step of the wizard.
-Free on the C3 with the wiring above: GPIO0..3, 6, 7 and 10 or 20; ladder
-keys and the battery need one of GPIO0..3 (ADC).
+Free on the C3 with the wiring above: GPIO1..4, 6, 7 and 20; ladder keys and
+the battery need one of GPIO1..4 (ADC). The plans use: ladder keys GPIO4,
+RIGHT GPIO3, battery GPIO1, buzzer GPIO20, gyroscope GPIO6/7, GPIO2 free.
 
 ## Building it on a perfboard
 
 `docs/verdrahtung.png` shows every connection for the ESP32-C3 SuperMini
-(display, three ladder keys on GPIO3, RIGHT on GPIO10, buzzer GPIO1, battery
-GPIO0, gyroscope GPIO6/7, charger and switch); `docs/aufbau.png` where the
-parts go on a 7 x 9 cm perfboard.
+(display, ladder keys on GPIO4, RIGHT on GPIO3, buzzer GPIO20, battery GPIO1,
+gyroscope GPIO6/7, charger and switch); `docs/aufbau.png` where the parts go
+on a 7 x 9 cm perfboard.
 
 ## Playing
 

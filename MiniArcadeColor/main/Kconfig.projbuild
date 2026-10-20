@@ -27,11 +27,11 @@ menu "MiniArcade Color"
         config ARCADE_TFT_MOSI
             int "SDI (MOSI) pin"
             default 11 if IDF_TARGET_ESP32S3
-            default 9
+            default 10
         config ARCADE_TFT_MISO
             int "SDO (MISO) pin, -1 = not wired"
             default 13 if IDF_TARGET_ESP32S3
-            default 20
+            default 9
             help
                 Not needed for the picture. Kept for the SD card and touch,
                 which share the bus.
@@ -42,7 +42,7 @@ menu "MiniArcade Color"
         config ARCADE_TFT_DC
             int "DC pin"
             default 9 if IDF_TARGET_ESP32S3
-            default 4
+            default 0
         config ARCADE_TFT_RST
             int "RESET pin (-1 = wired to 3V3)"
             default -1 if IDF_TARGET_ESP32S3
