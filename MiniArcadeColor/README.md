@@ -41,6 +41,13 @@ different pins (e.g. LEFT+RIGHT), or with an own OK key.
 Free on the C3 with the wiring above: GPIO0..3, 6, 7 and 10 or 20; ladder
 keys and the battery need one of GPIO0..3 (ADC).
 
+## Building it on a perfboard
+
+`docs/verdrahtung.png` shows every connection for the ESP32-C3 SuperMini
+(display, three ladder keys on GPIO3, RIGHT on GPIO10, buzzer GPIO1, battery
+GPIO0, gyroscope GPIO6/7, charger and switch); `docs/aufbau.png` where the
+parts go on a 7 x 9 cm perfboard.
+
 ## Playing
 
     UP/DOWN/LEFT/RIGHT
