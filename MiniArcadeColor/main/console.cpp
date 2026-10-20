@@ -47,6 +47,11 @@
 #include "game_sudoku.h"
 #include "game_lightsout.h"
 #include "game_match3.h"
+#include "game_dino.h"
+#include "game_racer.h"
+#include "game_frogger.h"
+#include "game_jump.h"
+#include "game_stack.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -108,6 +113,11 @@ static const Game GAMES[] = {
   { "Sudoku",      "SUD", sudokuRun,    IC_SUDOKU,  C::CYAN,   NULL },
   { "Lights Out",  "LGT", lightsOutRun, IC_LIGHTS,  C::YELLOW, NULL },
   { "Match 3",     "M3X", match3Run,    IC_MATCH3,  C::PINK,   NULL },
+  { "Dino",     "DNO", dinoRun,     IC_DINO,     C::GREEN,  NULL },
+  { "Racer",    "RCR", racerRun,    IC_RACER,    C::RED,    NULL },
+  { "Frogger",  "FRG", froggerRun,  IC_FROGGER,  C::LIME,   NULL },
+  { "Jump & Run", "JMP", jumpRun,   IC_JUMP,     C::BLUE,   NULL },
+  { "Stack",    "STK", stackRun,    IC_STACK,    C::CYAN,   NULL },
   // more games come here (before the entries with a tag)
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };

@@ -12,6 +12,8 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <functional>
+#include <unordered_set>
 
 std::map<std::string, uint16_t>    simNvsU16;
 std::map<std::string, std::string> simNvsBlob;
@@ -397,9 +399,162 @@ static uint8_t colsInFrame() {                                  // how many colo
   return (uint8_t)c.size();
 }
 
+// ---------------- game logic without the UI (fairness) ----------------
+/* Dino: tries every way to press the keys, step by step (jump held or
+   not, DOWN or not), with the game's own collision. Two obstacles gap px
+   apart (left edges), the dino on the ground well before them.        */
+static bool dnoPass(uint8_t ta, uint8_t ha, uint8_t tb, uint8_t hb, int32_t gap, uint16_t spd, bool canJump = true) {
+  std::unordered_set<uint64_t> been;
+  int32_t step = spd * DNO_MOVE;
+  std::function<bool(DnoJump, int32_t)> go = [&](DnoJump j, int32_t ax) -> bool {
+    if ((ax >> 7) + gap + 40 < DNO_X) return true;                 // both are behind
+    uint64_t key = ((uint64_t)((ax + (1 << 20)) & 0xFFFFF) << 40) | ((uint64_t)((j.y + 32768) & 0xFFFF) << 24) |
+                   ((uint64_t)((j.vy + 32768) & 0xFFFF) << 8) | (j.air ? 1 : 0) | (j.reached ? 2 : 0) | (j.drop ? 4 : 0);
+    if (!been.insert(key).second) return false;
+    for (int k = 0; k < 4; k++) {
+      if (!canJump && (k & 1)) continue;
+      bool held = k & 1, down = k & 2;
+      DnoJump n = j;
+      dnoStep(n, held, down, spd);
+      bool duck = down && !n.air;
+      if (dnoHit(n, duck, ax - step, ta, ha) || dnoHit(n, duck, ax - step + (gap << 7), tb, hb)) continue;
+      if (go(n, ax - step)) return true;
+    }
+    return false;
+  };
+  return go(DnoJump{ 0, 0, false, false, false }, (DNO_X + 130) << 7);
+}
+
+static int logicTest() {
+  if (scenario == "dinofair") {
+    static const uint8_t KT[6] = { 0, 1, 2, 3, 3, 3 }, KH[6] = { 0, 0, 0, 0, 1, 2 };
+    bool ok = true;
+    for (uint16_t spd = DNO_VMIN; spd <= DNO_VMAX; spd += 2) {
+      int16_t bad = -1;                                              // the game uses dnoGap .. dnoGap + 99
+      for (int16_t gap = dnoGap(spd); gap < dnoGap(spd) + 100 && bad < 0; gap++)
+        for (int a = 0; a < 6 && bad < 0; a++)
+          for (int b = 0; b < 6 && bad < 0; b++)
+            if (!dnoPass(KT[a], KH[a], KT[b], KH[b], gap, spd)) bad = gap;
+      int16_t need = 0;                                              // the smallest gap from which on all pass
+      if (spd % 8 == 0)
+        for (int16_t g = dnoGap(spd); g >= 20 && !need; g -= 2)
+          for (int a = 0; a < 6 && !need; a++)
+            for (int b = 0; b < 6 && !need; b++)
+              if (!dnoPass(KT[a], KH[a], KT[b], KH[b], g, spd)) need = g + 2;
+      if (spd % 8 == 0 || bad >= 0) printf("      speed %u (%d px/s): the game keeps gaps from %d (needed %d)%s\n", spd,
+                                          spd * DNO_MOVE * 1000 / DNO_TICK / 128, dnoGap(spd), need, bad >= 0 ? "  <- too small" : "");
+      if (bad >= 0) { ok = false; printf("        first gap that cannot be passed: %d\n", bad); }
+    }
+    check("dino: every pair of obstacles can be passed at every speed", ok);
+    check("dino (the check itself): a cactus needs a jump, a middle bird a duck",
+          !dnoPass(2, 0, 2, 0, 150, 40, false) && dnoPass(3, 1, 3, 1, 150, 40, false) && dnoPass(2, 0, 2, 0, 150, 40));
+    auto apex = [](int holdSteps, int downAt) {                      // a tap hops, holding jumps high, DOWN drops fast
+      DnoJump j = { 0, 0, false, false, false };
+      int top = 0, t = 0;
+      do { dnoStep(j, t < holdSteps, downAt >= 0 && t >= downAt, 40); if (-j.y > top) top = -j.y; t++; } while (j.air && t < 200);
+      return std::make_pair(top / 128, t);
+    };
+    auto tap = apex(1, -1), hold = apex(60, -1), dropped = apex(60, 8);
+    printf("      tap: %d px high, %d ms in the air; held: %d px, %d ms; DOWN after 120 ms: %d ms\n",
+           tap.first, tap.second * DNO_TICK, hold.first, hold.second * DNO_TICK, dropped.second * DNO_TICK);
+    check("dino: a tap hops, holding jumps high, DOWN drops fast",
+          tap.first >= 32 && tap.first <= 43 && hold.first >= 55 && hold.first <= 68 && dropped.second < hold.second - 12);
+    return failures ? 1 : 0;
+  }
+  if (scenario == "racerfair") {
+    /* Plays the real car spawning at every speed and keeps the set of all
+       positions the player could be in. If that set ever runs empty, the
+       road was closed - an impossible situation.                        */
+    int stuck = 0; long steps = 0; int top = 0;
+    for (int g = 0; g < 60; g++) {
+      randomSeed(1000 + g);
+      rcrStart();
+      std::set<int32_t> can = { (rcrMid(RCR_CARY) - RCR_CW / 2) * RCR_Q };
+      for (int t = 0; t < 10000; t++, steps++) {
+        std::set<int32_t> nx;
+        for (int32_t x : can) {
+          nx.insert(x);
+          if (x > 4 * RCR_Q) nx.insert(x - RCR_STEP);
+          if (x < (SCR_W - RCR_CW - 4) * RCR_Q) nx.insert(x + RCR_STEP);
+        }
+        rcrAdvance();
+        can.clear();
+        for (int32_t x : nx) if (!rcrCrash(x)) can.insert(x);
+        if (can.empty()) { stuck++; printf("      game %d: no way through after %d steps at speed %u\n", g, t, rcr.spd); break; }
+      }
+      if (rcr.spd > top) top = rcr.spd;
+    }
+    printf("      %ld steps checked, top speed %d\n", steps, top);
+    check("racer: the road never closes up (60 games up to top speed)", stuck == 0 && top == RCR_VMAX);
+    return failures ? 1 : 0;
+  }
+  if (scenario == "frogroll") {
+    /* Rolls lanes for every difficulty and level and checks them: objects
+       never overlap, every gap has the promised size, the road always
+       leaves room for the frog, and neighbouring lanes move opposite ways. */
+    int bad = 0, rolls = 0;
+    for (uint8_t diff = 0; diff < 3; diff++)
+      for (int round = 0; round < 3000; round++) {
+        randomSeed(7 + round * 3 + diff);
+        frgRollAll(diff, (uint8_t)(round % 12));
+        for (uint8_t l = 0; l < FRG_LANES; l++, rolls++) {
+          const FrgLane &L = frgL[l];
+          bool water = frgWater(l);
+          int glo = water ? 15 : (diff == 0 ? 55 : 40);
+          int ghi = water ? (diff == 0 ? 55 : (diff == 1 ? 70 : 85)) : 999;
+          if (L.n < 2 || L.n > FRG_MAXO) { bad++; continue; }
+          for (int k = 0; k < L.n; k++) {                            // gap after object k, around the ring
+            int a = L.x[k] / FRG_Q, b = L.x[(k + 1) % L.n] / FRG_Q;
+            int gap = ((b - a + SCR_W) % SCR_W) - L.w[k];
+            if (gap < glo || gap > ghi) { bad++; if (bad < 5) printf("      diff %u lane %u: gap %d not in %d..%d\n", diff, l, gap, glo, ghi); }
+          }
+          if (!L.spd) bad++;
+          if (l && (L.spd > 0) == (frgL[l - 1].spd > 0)) bad++;
+        }
+      }
+    printf("      %d lanes rolled\n", rolls);
+    check("frogger: lanes always valid (gaps, room for the frog, directions)", bad == 0);
+    return failures ? 1 : 0;
+  }
+  if (scenario == "jrfair") {
+    // the jump itself: how high and how far, straight from the constants
+    int vy = -JMP_JUMP, y = 0, top = 0, t = 0;
+    do { y += vy; vy += JMP_G; if (y < top) top = y; t++; } while (y < 0);
+    int high = -top / JMP_Q, far = t * JMP_RUN / JMP_Q;
+    printf("      jump: %d px high, %d px far at full speed\n", high, far);
+    check("jump & run: steps up are within the jump", high >= JMP_UP * JMP_T + 10);
+    check("jump & run: gaps are within the jump", far >= JMP_GAP * JMP_T + 20);
+    // and the level: never a wider gap or a higher step than that
+    int bad = 0; long cols = 0;
+    for (int g = 0; g < 200; g++) {
+      randomSeed(300 + g); jmpMade = 0; jmpCur = 1; jmpLeft = 0; jmpMode = 0; jmpDiff = (uint8_t)(g % 6);
+      memset(jmpE, 0, sizeof(jmpE));
+      int gap = 0, lastLand = 1;
+      for (int c = 0; c < 3000; c++, cols++) {
+        jmpMake();
+        uint8_t i = c % JMP_RING, land = jmpH[i] ? jmpH[i] : jmpP[i];
+        for (uint8_t k = 0; k < JMP_EN; k++) jmpE[k].on = false;
+        if (!land) { gap++; continue; }
+        if (gap > JMP_GAP) { bad++; if (bad < 5) printf("      gap of %d at %d\n", gap, c); }
+        if (land > lastLand + JMP_UP || (gap >= 2 && land > lastLand + 1)) { bad++; if (bad < 5) printf("      step %d->%d after gap %d\n", lastLand, land, gap); }
+        gap = 0; lastLand = land;
+      }
+    }
+    printf("      %ld columns made\n", cols);
+    check("jump & run: the level never asks for an impossible jump", bad == 0);
+    return failures ? 1 : 0;
+  }
+  return -1;
+}
+
 int main(int argc, char **argv) {
   scenario = argc > 1 ? argv[1] : "menu";
   srand(1);
+  if (scenario.find("fair") != std::string::npos || scenario == "frogroll") {
+    printf("== %s\n", scenario.c_str());
+    int r = logicTest();
+    if (r >= 0) return r;
+  }
   // a console that was set up before: four keys, a buzzer, a battery
   simNvsU16["pset"] = 3; simNvsU16["sset"] = 1; simNvsU16["snd"] = SND; simNvsU16["bat"] = BAT;
   for (int i = 0; i < 4; i++) { simNvsU16["p" + std::to_string(i)] = KEYS[i]; simNvsU16["a" + std::to_string(i)] = 1; }
@@ -481,6 +636,35 @@ int main(int argc, char **argv) {
     for (uint32_t k = t + 2000; k < simEnd; k += 2300) press(k, OK, 80);   // a bomb now and then
     autoplay = true; autoplayFrom = t + 1500; captureAt = { 330, 450 };
     setenv("GRAB", "best ", 1);
+  } else if (scenario == "dino") {
+    uint32_t t = openGameNamed("Dino", M); simEnd = t + 40000;
+    autoplay = true; autoplayFrom = t + 300;
+    captureMs = { t + 1200, t + 1700 };
+    setenv("GRAB", "best ", 1);                              // the game over panel
+  } else if (scenario == "racer") {
+    uint32_t t = openGameNamed("Racer", M); simEnd = t + 60000;
+    press(t + 2500, RT, 100);                                    // then straight on until a car comes
+    captureMs = { t + 3000, t + 7000 };
+    setenv("GRAB", "best ", 1);                              // the game over panel
+  } else if (scenario == "frogger") {
+    uint32_t t = openGameNamed("Frogger", M); simEnd = t + 40000;
+    press(t + 400, OK, 80);                                      // easy
+    press(t + 1200, UP); press(t + 1600, UP); press(t + 2000, UP);
+    autoplay = true; autoplayFrom = t + 3000; captureMs = { t + 1100, t + 2300 };
+    setenv("GRAB", "best ", 1);                              // the game over panel
+  } else if (scenario == "jump") {
+    uint32_t t = openGameNamed("Jump & Run", M); simEnd = t + 60000;
+    for (uint32_t k = t + 300; k < t + 10000; k += 700) {        // run right, jumping now and then
+      script.push_back({ k, RT }); script.push_back({ k + 450, RT | UP });
+    }
+    script.push_back({ t + 10000, RT });                         // then just run: into the gaps
+    captureMs = { t + 2500, t + 5000 };
+    setenv("GRAB", "best ", 1);                              // the game over panel
+  } else if (scenario == "stack") {
+    uint32_t t = openGameNamed("Stack", M); simEnd = t + 60000;
+    for (uint32_t k = t + 700; k < t + 60000; k += 730) press(k, DN, 50);
+    captureMs = { t + 1600, t + 2600 };
+    setenv("GRAB", "best ", 1);                              // the game over panel
   } else if (scenario == "settings") {
     simEnd = M + 3000; press(M, UP); press(M + 400, OK, 80); captureAt = { 200 };
     setenv("GRAB", "SETTINGS", 1);
@@ -633,6 +817,11 @@ int main(int argc, char **argv) {
     check("chains happen", seen("x2"));
     check("game ends when the moves are used up", seen("END") && over() && simNvsU16["hM3X"] > 0);
   }
+  if (scenario == "dino")      check("dino ran and ended", seen("DINO") && overShown);
+  if (scenario == "racer")     check("racer ran and ended", seen("RACER") && overShown);
+  if (scenario == "frogger")   check("frogger: level chosen, ran and ended", seen("easy") && seen("FROGGER") && seen("LEVEL 1") && overShown);
+  if (scenario == "jump")      check("jump & run ran and ended", seen("JUMP") && overShown);
+  if (scenario == "stack")     check("stack ran and ended", seen("STACK") && overShown);
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);
