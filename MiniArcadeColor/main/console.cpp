@@ -31,6 +31,33 @@
 #include "game_pong.h"
 #include "game_flappy.h"
 #include "game_breakout.h"
+#include "game_invaders.h"
+#include "game_rocks.h"
+#include "game_shooter.h"
+#include "game_cave.h"
+#include "game_lander.h"
+#include "game_doom.h"
+#include "game_mine.h"
+#include "game_tunnel.h"
+#include "game_pacman.h"
+#include "game_bomber.h"
+#include "game_2048.h"
+#include "game_mines.h"
+#include "game_sokoban.h"
+#include "game_sudoku.h"
+#include "game_lightsout.h"
+#include "game_match3.h"
+#include "game_dino.h"
+#include "game_racer.h"
+#include "game_frogger.h"
+#include "game_jump.h"
+#include "game_stack.h"
+#include "game_connect4.h"
+#include "game_tictactoe.h"
+#include "game_battleship.h"
+#include "game_checkers.h"
+#include "game_maumau.h"
+#include "game_minigolf.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -71,11 +98,38 @@ static const char *const IC_SETTINGS[12] = {
   "ssss....ssss", ".sss....sss.", "..sss..sss..", ".ssssssssss.", "..s.ssss.s..", ".....ss....." };
 
 static const Game GAMES[] = {
-  { "Snake",    "SNK", snakeRun,    IC_SNAKE,    C::GREEN,  NULL },
-  { "Tetris",   "TET", tetrisRun,   IC_TETRIS,   C::PURPLE, NULL },
-  { "Pong",     "PNG", pongRun,     IC_PONG,     C::BLUE,   NULL },
-  { "Flappy",   "FLP", flappyRun,   IC_FLAPPY,   C::ORANGE, NULL },
-  { "Breakout", "BRK", breakoutRun, IC_BREAKOUT, C::RED,    NULL },
+  { "Snake",       "SNK", snakeRun,       IC_SNAKE,       C::GREEN,         NULL },
+  { "Tetris",      "TET", tetrisRun,      IC_TETRIS,      C::PURPLE,        NULL },
+  { "Pong",        "PNG", pongRun,        IC_PONG,        C::BLUE,          NULL },
+  { "Doom",        "DOM", doomRun,        IC_DOOM,        C::RED,           NULL },
+  { "Mine",        "MIN", mineRun,        IC_MINE,        C::GREEN,         NULL },
+  { "Tunnel 3D",   "TUN", tunnelRun,      IC_TUNNEL,      C::CYAN,          NULL },
+  { "Flappy",      "FLP", flappyRun,      IC_FLAPPY,      C::ORANGE,        NULL },
+  { "Invaders",    "INV", invadersRun,    IC_INVADERS,    C::GREEN,         NULL },
+  { "Dino",        "DNO", dinoRun,        IC_DINO,        C::GREEN,         NULL },
+  { "Breakout",    "BRK", breakoutRun,    IC_BREAKOUT,    C::RED,           NULL },
+  { "Rocks",       "RCK", asteroidsRun,   IC_ROCKS,       C::BROWN,         NULL },
+  { "Racer",       "RCR", racerRun,       IC_RACER,       C::RED,           NULL },
+  { "Frogger",     "FRG", froggerRun,     IC_FROGGER,     C::LIME,          NULL },
+  { "4 wins",      "C4W", connect4Run,    IC_CONNECT4,    C::BLUE,          NULL },
+  { "Tic Tac Toe", "TTT", tictactoeRun,   IC_TICTACTOE,   C::PINK,          NULL },
+  { "2048",        "2K4", g2048Run,       IC_2048,        C::ORANGE,        NULL },
+  { "Minesweeper", "MSW", minesRun,       IC_MINES,       C::BLUE,          NULL },
+  { "Pac-Man",     "PAC", pacmanRun,      IC_PACMAN,      C::YELLOW,        NULL },
+  { "Shooter",     "SHT", shooterRun,     IC_SHOOTER,     C::CYAN,          NULL },
+  { "Jump & Run",  "JMP", jumpRun,        IC_JUMP,        C::BLUE,          NULL },
+  { "Sokoban",     "SOK", sokobanRun,     IC_SOKOBAN,     C::BROWN,         NULL },
+  { "Battleship",  "BSH", battleshipRun,  IC_BATTLESHIP,  rgb(0,102,204),   NULL },
+  { "Sudoku",      "SUD", sudokuRun,      IC_SUDOKU,      C::CYAN,          NULL },
+  { "Lights Out",  "LGT", lightsOutRun,   IC_LIGHTS,      C::YELLOW,        NULL },
+  { "Match 3",     "M3X", match3Run,      IC_MATCH3,      C::PINK,          NULL },
+  { "Checkers",    "CHK", checkersRun,    IC_CHECKERS,    C::BROWN,         NULL },
+  { "Mau-Mau",     "MAU", maumauRun,      IC_MAUMAU,      C::RED,           NULL },
+  { "Bomberman",   "BMB", bomberRun,      IC_BOMBER,      C::ORANGE,        NULL },
+  { "Cave",        "CAV", caveRun,        IC_CAVE,        C::BROWN,         NULL },
+  { "Stack",       "STK", stackRun,       IC_STACK,       C::CYAN,          NULL },
+  { "Minigolf",    "GLF", minigolfRun,    IC_MINIGOLF,    C::GREEN,         NULL },
+  { "Lander",      "LND", landerRun,      IC_LANDER,      C::GREY,          NULL },
   // more games come here (before the entries with a tag)
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };
@@ -123,7 +177,7 @@ void menu() {
         curHigh = real ? loadHigh(sel) : 0;
         pauseOk = real;
         tiltGame = real;
-        tiltLevel();                             // as it is held now = level
+        tiltGameStart();                         // level: as held now, or the saved position
         GAMES[sel].run();
         tiltGame = pauseOk = false;
       } while (wantRestart);

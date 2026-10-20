@@ -40,7 +40,7 @@ void breakoutRun() {
       uint32_t dt = now - last;
       if (dt > 40) dt = 40;
       last = now;
-      int32_t pv = (int32_t)dt * 256 * 30 / 100;                // about 300 px/s
+      int32_t pv = (int32_t)dt * 256 * 24 / 100;                // about 240 px/s
       if (btnHeld(B_LEFT))  px -= pv;
       if (btnHeld(B_RIGHT)) px += pv;
       int32_t lo = (pw / 2 + 2) * 256, hi = (SCR_W - pw / 2 - 2) * 256;
@@ -51,8 +51,8 @@ void breakoutRun() {
         bx = px; by = (BR_PY - BR_BALL - 1) * 256;
         if (btn(B_UP) || btnTap(B_OK)) {
           stuck = false;
-          int32_t sp = 50 + level * 6;
-          if (sp > 90) sp = 90;
+          int32_t sp = 30 + level * 4;                           // about 130 px/s at the start
+          if (sp > 60) sp = 60;
           vx = (random(2) ? 1 : -1) * sp / 2;
           vy = -sp;
           sfx(900, 20);
@@ -72,8 +72,8 @@ void breakoutRun() {
           // paddle: the angle comes from where the ball hits it
           int16_t pc = (int16_t)(px / 256);
           if (vy > 0 && y + BR_BALL >= BR_PY && oy / 256 + BR_BALL <= BR_PY + 2 && abs(x - pc) <= pw / 2 + BR_BALL) {
-            int32_t sp = 50 + level * 6 + (int32_t)(BR_ROWS * BR_COLS - left) / 6;
-            if (sp > 110) sp = 110;
+            int32_t sp = 30 + level * 4 + (int32_t)(BR_ROWS * BR_COLS - left) / 10;
+            if (sp > 75) sp = 75;
             int32_t off = (int32_t)(x - pc) * 100 / (pw / 2 + BR_BALL);   // -100..100
             vx = sp * off / 120;
             vy = -(sp - abs(vx) / 3);

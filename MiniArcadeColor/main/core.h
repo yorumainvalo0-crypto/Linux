@@ -124,6 +124,10 @@ void applyPinModes() {
 static bool tiltKey[4];                  // the gyroscope tilts like a key (tilt.h)
 static void (*tiltHook)() = NULL;        // reads the gyroscope, before the keys
 static int8_t gyroSda = -1, gyroScl = -1; // its pins, saved as "gsda" / "gscl" (+1, 0 = none)
+static bool   cfgTilt = false;           // tilt control switched on (saved as "tilt")
+static bool   gyroReady = false;         // ... and the sensor answers
+static bool   tiltGame = false;          // tilting counts only in a game
+static void   tiltLevel();               // tilt.h: the way it is held now counts as level
 
 bool rawPressed(uint8_t i) {
   uint32_t u = vKeyUntil[i];
@@ -530,10 +534,13 @@ uint8_t chooseMode(const char *title, const char *const *opts, uint8_t n, col ac
 }
 
 static bool pauseMenu() {
-  static const char *const OPT[3] = { "continue", "restart", "quit to menu" };
+  static const char *const OPT[4] = { "continue", "restart", "quit to menu", "tilt: level here" };
+  const uint8_t n = cfgTilt && gyroReady ? 4 : 3;       // with tilt control: set the level anew
   uint32_t t0 = millis();
   uint8_t sel = 0;
   NoPause np;
+  bool wasTilt = tiltGame;
+  tiltGame = false;                                     // the menu is steered by the keys only
   noTone(sndPin);
   gfx.dim(0, 0, SCR_W, SCR_H);                          // the game stays visible behind the menu
   btnClear();
@@ -544,22 +551,24 @@ static bool pauseMenu() {
     sfxUpdate();
     if (pollHook) pollHook();
     if (wantExit) { wantExit = false; quit = true; break; }  // hold again = quit
-    if (btn(B_UP))   { sel = sel ? sel - 1 : 2; sfx(700, 15); }
-    if (btn(B_DOWN)) { sel = (sel + 1) % 3;     sfx(700, 15); }
+    if (btn(B_UP))   { sel = sel ? sel - 1 : n - 1; sfx(700, 15); }
+    if (btn(B_DOWN)) { sel = (sel + 1) % n;        sfx(700, 15); }
     if (btn(B_OK))   {
       sfx(1200, 50);
       if (sel == 1) { wantRestart = true; quit = true; }
       if (sel == 2) quit = true;
+      if (sel == 3) tiltLevel();
       break;
     }
-    panel(80, 50, 160, 140, "PAUSE", C::BLUE);
-    for (uint8_t i = 0; i < 3; i++) {
-      int16_t y = 92 + i * 30;
-      if (i == sel) gfx.rbox(92, y - 4, 136, 26, 5, C::CYAN);
+    panel(70, 40, 180, 110 + n * 30, "PAUSE", C::BLUE);
+    for (uint8_t i = 0; i < n; i++) {
+      int16_t y = 82 + i * 30;
+      if (i == sel) gfx.rbox(82, y - 4, 156, 26, 5, C::CYAN);
       gfx.center(y, OPT[i], i == sel ? C::BLACK : C::WHITE);
     }
     gfx.send();
   }
+  tiltGame = wasTilt;
   pausedMs += millis() - t0;
   btnClear();
   return quit;

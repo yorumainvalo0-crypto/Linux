@@ -2,6 +2,43 @@
 // not compiled on its own. LEFT/RIGHT change the value of a line, OK runs
 // the setups, holding OK leaves.
 
+static bool tiltFixKnown() {                     // a level was saved once
+  return tiltFix[0] || tiltFix[1] || tiltFix[2];
+}
+
+// OK on "tilt level": hold the console as you like, then it is saved
+static void tiltLevelScreen() {
+  if (!cfgTilt || !gyroReady) {
+    gfx.clear(C::NAVY);
+    gfx.center(100, "TILT IS OFF", C::ORANGE, F_BOLD);
+    gfx.center(140, "switch tilt control on first", C::LTGREY);
+    gfx.send();
+    delay(1800);
+    btnClear();
+    return;
+  }
+  for (int8_t s = 3; s > 0; s--) {                 // three seconds to hold it right
+    gfx.gradient(0, 0, SCR_W, SCR_H, C::DKGRN, C::BLACK);
+    gfx.center(14, "TILT LEVEL", C::WHITE, F_BOLD);
+    gfx.center(70, "hold the console the way", C::LTGREY);
+    gfx.center(94, "you want to play", C::LTGREY);
+    char b[4];
+    snprintf(b, sizeof(b), "%d", s);
+    gfx.center(130, b, C::YELLOW, F_BIG);
+    gfx.send();
+    sfx(900, 40);
+    delay(1000);
+  }
+  tiltSaveLevel();
+  sfx(1500, 120);
+  gfx.gradient(0, 0, SCR_W, SCR_H, C::DKGRN, C::BLACK);
+  gfx.center(100, "LEVEL SAVED", C::LIME, F_BOLD);
+  gfx.center(140, "games use this position", C::LTGREY);
+  gfx.send();
+  delay(1500);
+  btnClear();
+}
+
 // switching tilt on finds the sensor and learns the axes the first time
 static void tiltToggle() {
   if (cfgTilt) { cfgTilt = false; gyroClose(); }
@@ -18,7 +55,7 @@ void settingsRun() {
   static const uint8_t CLOCKS[3] = { 40, 80, 160 };
 #endif
   static const uint8_t MINS[5] = { 0, 1, 5, 15, 30 };
-  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_KEYS, L_BUZZER, L_BAT, L_WLAN, L_VERSION, L_BACK, L_N };
+  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_TLEVEL, L_TSENS, L_KEYS, L_BUZZER, L_BAT, L_WLAN, L_VERSION, L_BACK, L_N };
   uint8_t sel = 0, top = 0;
   const uint8_t ROWS = 7;
   btnClear();
@@ -50,6 +87,8 @@ void settingsRun() {
       else if (sel == L_SWAP)   { cfgDisp ^= 2; applyDisplay(); }
       else if (sel == L_INVERT) { cfgDisp ^= 4; applyDisplay(); }
       else if (sel == L_TILT)   tiltToggle();
+      else if (sel == L_TLEVEL) { cfgTiltFix = !cfgTiltFix && tiltFixKnown(); tiltSave(); }
+      else if (sel == L_TSENS)  { cfgTiltSens = (uint8_t)((cfgTiltSens + (right ? 1 : 2)) % 3); tiltSave(); }
       saveCfg();
     }
     if (btn(B_OK)) {
@@ -60,6 +99,7 @@ void settingsRun() {
       else if (sel == L_WLAN)    wlanRun();
       else if (sel == L_VERSION) versionRun(false);
       else if (sel == L_TILT)    { if (tiltSetup()) { cfgTilt = true; tiltSave(); } tiltStart(); }
+      else if (sel == L_TLEVEL)  tiltLevelScreen();
       else if (sel == L_BACK)    return;
       else if (sel == L_SOUND)   { cfgMute = !cfgMute; saveCfg(); }
       else if (sel >= L_FLIP && sel <= L_INVERT) { cfgDisp ^= (uint8_t)(1 << (sel - L_FLIP)); saveCfg(); applyDisplay(); }
@@ -77,6 +117,9 @@ void settingsRun() {
     snprintf(line[L_SWAP], 36, "red/blue     %s", cfgDisp & 2 ? "swapped" : "normal");
     snprintf(line[L_INVERT], 36, "colours      %s", cfgDisp & 4 ? "inverted" : "normal");
     snprintf(line[L_TILT], 36, "tilt control %s", !cfgTilt ? "off" : gyroReady ? "on" : "on (no sensor)");
+    snprintf(line[L_TLEVEL], 36, "tilt level   %s", cfgTiltFix ? "saved" : "game start");
+    static const char *const SENS[3] = { "weak", "normal", "strong" };
+    snprintf(line[L_TSENS], 36, "tilt         %s", SENS[cfgTiltSens % 3]);
     snprintf(line[L_KEYS], 36, "set up keys...");
     snprintf(line[L_BUZZER], 36, "set up sound...");
     snprintf(line[L_BAT], 36, "set up battery...");
@@ -98,6 +141,8 @@ void settingsRun() {
       gfx.text(16, y + 1, line[k], on ? C::BLACK : C::WHITE);
     }
     if (sel == L_TILT) gfx.center(SCR_H - 14, "LEFT / RIGHT on/off - OK set up again", C::GREY, F_SMALL);
+    else if (sel == L_TLEVEL) gfx.center(SCR_H - 14, "OK = save how you hold it now as level", C::GREY, F_SMALL);
+    else if (sel == L_TSENS) gfx.center(SCR_H - 14, "LEFT / RIGHT: how far to tilt", C::GREY, F_SMALL);
     else if (sel <= L_INVERT) gfx.center(SCR_H - 14, "LEFT / RIGHT change", C::GREY, F_SMALL);
     gfx.send();
   }

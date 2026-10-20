@@ -3,17 +3,20 @@
 /* Switched on in the settings. The sensor is searched on every free pair
    of pins (the GY-521 answers on I2C), then the player tilts the console
    once to the right and once away from the body, so the mounting of the
-   board does not matter. In a game, tilting works like the arrow keys;
-   the way the console is held when the game starts counts as level.     */
+   board does not matter. In a game, tilting works like the arrow keys.
+   Level is either the way the console is held when a game starts, or a
+   position saved once in the settings; the pause menu sets it anew.     */
 
-static bool    cfgTilt = false;                  // saved as "tilt"
 static uint8_t tiltAx[2] = { 0xFF, 0xFF };       // axis for left/right and up/down, bit 7 = turned round
-static bool    gyroReady = false;
-static bool    tiltGame = false;                 // tilting counts only in a game
-static int16_t tiltZero[3];
+static int16_t tiltZero[3];                      // level right now
+static bool    cfgTiltFix = false;               // level = the saved position (else: at the game start)
+static int16_t tiltFix[3];                       // that position
+static uint8_t cfgTiltSens = 1;                  // 0 weak, 1 normal, 2 strong
 
-#define TILT_ON  4100                            // about 15 degrees (16384 = 1 g)
-#define TILT_OFF 2500
+// how far to tilt: about 21, 15 or 10 degrees (16384 = 1 g); let go a bit earlier
+static const int16_t TILT_ON[3] = { 5800, 4100, 2800 };
+static int16_t tiltOn()  { return TILT_ON[cfgTiltSens % 3]; }
+static int16_t tiltOff() { return (int16_t)(tiltOn() * 6 / 10); }
 
 static void tiltSave() {
   prefs.begin("arcade", false);
@@ -21,6 +24,9 @@ static void tiltSave() {
   prefs.putUShort("gsda", (uint16_t)(gyroSda + 1));
   prefs.putUShort("gscl", (uint16_t)(gyroScl + 1));
   prefs.putUShort("gax", (uint16_t)(tiltAx[0] | tiltAx[1] << 8));
+  prefs.putUShort("gfix", cfgTiltFix);
+  prefs.putUShort("gsen", cfgTiltSens);
+  prefs.putBytes("gzero", tiltFix, sizeof(tiltFix));
   prefs.end();
 }
 
@@ -30,6 +36,9 @@ static void tiltLoad() {
   gyroSda = (int8_t)(prefs.getUShort("gsda", 0) - 1);
   gyroScl = (int8_t)(prefs.getUShort("gscl", 0) - 1);
   uint16_t ax = prefs.getUShort("gax", 0xFFFF);
+  cfgTiltFix  = prefs.getUShort("gfix", 0) != 0;
+  cfgTiltSens = (uint8_t)prefs.getUShort("gsen", 1);
+  if (prefs.getBytes("gzero", tiltFix, sizeof(tiltFix)) != sizeof(tiltFix)) cfgTiltFix = false;
   prefs.end();
   tiltAx[0] = (uint8_t)ax;
   tiltAx[1] = (uint8_t)(ax >> 8);
@@ -63,6 +72,21 @@ static void tiltLevel() {                        // the way it is held now count
   if (gyroReady && gyroAccel(a)) memcpy(tiltZero, a, sizeof(tiltZero));
 }
 
+void tiltGameStart() {                           // the library starts a game
+  if (cfgTiltFix) memcpy(tiltZero, tiltFix, sizeof(tiltZero));
+  else tiltLevel();
+}
+
+// settings: the position now becomes the fixed level
+bool tiltSaveLevel() {
+  if (!gyroReady) return false;
+  tiltLevel();
+  memcpy(tiltFix, tiltZero, sizeof(tiltFix));
+  cfgTiltFix = true;
+  tiltSave();
+  return true;
+}
+
 static void tiltUpdate() {
   static uint32_t next = 0;
   if (!tiltGame || !gyroReady) { memset(tiltKey, 0, sizeof(tiltKey)); return; }
@@ -73,7 +97,7 @@ static void tiltUpdate() {
   int16_t x = tiltAxis(a, tiltAx[0]), y = tiltAxis(a, tiltAx[1]);
   const uint8_t K[4] = { B_RIGHT, B_LEFT, B_UP, B_DOWN };
   const int16_t V[4] = { x, (int16_t)-x, y, (int16_t)-y };
-  for (uint8_t i = 0; i < 4; i++) tiltKey[K[i]] = V[i] > (tiltKey[K[i]] ? TILT_OFF : TILT_ON);
+  for (uint8_t i = 0; i < 4; i++) tiltKey[K[i]] = V[i] > (tiltKey[K[i]] ? tiltOff() : tiltOn());
 }
 
 void tiltStart() {                              // at the start and when switched on
