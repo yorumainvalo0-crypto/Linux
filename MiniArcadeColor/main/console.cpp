@@ -59,6 +59,7 @@
 #include "game_checkers.h"
 #include "game_maumau.h"
 #include "game_minigolf.h"
+#include "game_palace.h"
 #include "game_chess.h"
 
 // =========================================================
@@ -135,6 +136,7 @@ static const Game GAMES[] = {
   { "Stack",       "STK", stackRun,       IC_STACK,       C::CYAN,          NULL },
   { "Minigolf",    "GLF", minigolfRun,    IC_MINIGOLF,    C::GREEN,         NULL },
   { "Lander",      "LND", landerRun,      IC_LANDER,      C::GREY,          NULL },
+  { "Palace",      "PAL", palaceRun,      IC_PALACE,      rgb(210,150,40),  NULL },
   // more games come here (before the entries with a tag)
   { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
   { "Online",      "ONL", onlineRun,      IC_ONLINE,      MP_ACCENT,        "nearby" },

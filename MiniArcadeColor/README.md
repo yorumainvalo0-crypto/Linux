@@ -11,7 +11,8 @@ Rocks, Racer, Frogger, 4 wins, Tic Tac Toe, 2048, Minesweeper, Pac-Man,
 Shooter, Jump & Run, Sokoban, Battleship, Sudoku, Lights Out, Match 3,
 Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
 the CPU or two players on one console (and online, see below). Plus
-Mine 3D, a block world in first person (below), and Chess with all rules
+Mine 3D, a block world in first person, Palace, a platformer (both below),
+and Chess with all rules
 (castling, en passant, promotion, check, mate, stalemate, 50 moves), against
 the CPU, for two players on one console or online (the board can turn round
 for black):
@@ -52,6 +53,28 @@ to play:
 Ore glints in the dark; whatever else you dig goes into the bag (grass gives
 dirt). Every pixel is a ray through the block grid, all in integers, drawn at
 160 x 92 and doubled.
+
+## Palace
+
+![Palace](docs/palace.png)
+
+A nameless runner escapes from a palace dungeon: four levels (the cellars,
+the old wells, the guard halls, the sky tower), ten minutes for all of them.
+A level is a grid of rooms of 10 x 3 tiles; the screen flips at a room's
+edge. Loose tiles crumble, spikes spring out, plates open gates (others shut
+them again), one plate opens the exit door. One floor down is safe, two cost
+a flask of health, three kill - climbing down first saves a floor. Potions
+heal or add a flask. The sword lies in the first level; guards get better
+level by level, the last one is their captain. Dying starts the level again,
+the clock runs on. Score: 100 per level, plus the seconds left at the end.
+
+    LEFT/RIGHT           run
+    DOWN + LEFT/RIGHT    careful step (safe on spikes, stops at an edge)
+    UP + LEFT/RIGHT      jump: standing 1-2 tiles, running 3 tiles of gap
+    UP                   jump up to a ledge above; hold UP to climb on
+    DOWN at an edge      climb down and hang; DOWN again lets go
+    OK                   draw the sword (it comes out by itself near a guard)
+    with the sword       LEFT/RIGHT step, OK strike, UP parry, DOWN put away
 
 ## Boards
 

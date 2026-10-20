@@ -15,6 +15,7 @@
 #include <vector>
 #include <functional>
 #include <unordered_set>
+#include <queue>
 
 std::map<std::string, uint16_t>    simNvsU16;
 std::map<std::string, std::string> simNvsBlob;
@@ -1110,6 +1111,386 @@ static void golfBot(uint32_t t) {
   else { botPress(t, OK, 120); golfFor = 255; botFree = t + 600; }
 }
 
+// ---------------- Palace: a planner over the tiles, the rules alone, and a player ----------------
+/* The planner searches the tiles (cheapest first): (tile, gates open,
+   exit open) with the moves the runner has - a step to the next tile, a
+   jump of 2..4 tiles (4 needs a tile of run-up), down into a hole (one
+   floor, or up to three when climbing down first), through a loose tile,
+   up to a ledge over a hole. Plates change the gates on the way. Walking
+   is cheap, the rest dearer, so the way found is the natural one.     */
+enum { PL_WALK, PL_JUMP, PL_DROP, PL_HANG, PL_LOOSE, PL_CLIMB, PL_EXIT };
+struct PlMove { uint8_t type; int8_t dir; uint8_t len; int16_t c, r; };
+static const char *const PL_NAME[] = { "walk", "jump", "drop", "hang", "loose", "climb", "exit" };
+
+static uint8_t plApply(uint8_t m, char ch) {                    // bits 0..3 gates open, bit 4 exit open
+  if (ch >= '1' && ch <= '4') m |= (uint8_t)(1 << (ch - '1'));
+  if (ch >= '5' && ch <= '8') m &= (uint8_t)~(1 << (ch - '5'));
+  if (ch == 'X') m |= 16;
+  return m;
+}
+static bool plOpen(char ch, uint8_t m) { return !(ch >= 'a' && ch <= 'd') || (m >> (ch - 'a') & 1); }
+static bool plStand(char ch, uint8_t m) { return palIsFloor(ch) && plOpen(ch, m); }
+
+static std::vector<PlMove> plPlan(int16_t c0, int16_t r0, uint8_t m0) {
+  static const int COST[6] = { 2, 7, 4, 8, 5, 6 };                // walk jump drop hang loose climb
+  const int N = PAL_MAXR * PAL_MAXC * 32;
+  static std::vector<int> from, dist; static std::vector<PlMove> how;
+  from.assign(N, -2); dist.assign(N, 1 << 30); how.resize(N);
+  auto id = [](int c, int r, int m) { return (r * PAL_MAXC + c) * 32 + m; };
+  std::priority_queue<std::pair<int, int>, std::vector<std::pair<int, int>>, std::greater<std::pair<int, int>>> q;
+  int s0 = id(c0, r0, plApply(m0, palAt(c0, r0)));
+  from[s0] = -1; dist[s0] = 0; q.push({ 0, s0 });
+  int goal = -1;
+  while (!q.empty() && goal < 0) {
+    int ds = q.top().first, s = q.top().second;
+    q.pop();
+    if (ds > dist[s]) continue;
+    int m = s % 32, cell = s / 32, r = cell / PAL_MAXC, c = cell % PAL_MAXC;
+    char here = palAt(c, r);
+    if (here == 'E' && (m & 16)) { goal = s; break; }
+    auto go = [&](int c1, int r1, PlMove mv) {
+      int t = id(c1, r1, plApply((uint8_t)m, palAt(c1, r1))), dt = ds + COST[mv.type] + (mv.type == PL_JUMP ? mv.len : 0);
+      if (dt >= dist[t]) return;
+      dist[t] = dt; from[t] = s; how[t] = mv; q.push({ dt, t });
+    };
+    bool loose = here == '~';
+    for (int d = -1; d <= 1; d += 2) {
+      char n = palAt(c + d, r);
+      if (plStand(n, m)) go(c + d, r, { PL_WALK, (int8_t)d, 1, (int16_t)(c + d), (int16_t)r });
+      if (loose) continue;                                      // nobody stops on a loose tile
+      for (int L = 2; L <= 4; L++) {
+        char x = palAt(c + d * (L - 1), r);
+        if (x == '#' || !plOpen(x, m)) break;
+        if (L == 4 && (!plStand(palAt(c - d, r), m) || palAt(c - d, r) == '~')) continue;
+        char t = palAt(c + d * L, r);
+        if (plStand(t, m) && t != '^') go(c + d * L, r, { PL_JUMP, (int8_t)d, (uint8_t)L, (int16_t)(c + d * L), (int16_t)r });
+      }
+      if (n == ' ') {
+        int rr = r + 1;
+        while (rr < palH && palAt(c + d, rr) == ' ') rr++;
+        char t = palAt(c + d, rr);
+        if (rr < palH && palIsFloor(t) && t != '^' && plOpen(t, m) && rr - r <= 3)
+          go(c + d, rr, { (uint8_t)(rr - r == 1 ? PL_DROP : PL_HANG), (int8_t)d, (uint8_t)(rr - r), (int16_t)(c + d), (int16_t)rr });
+      }
+      if (r > 0 && palAt(c, r - 1) == ' ' && plStand(palAt(c + d, r - 1), m))
+        go(c + d, r - 1, { PL_CLIMB, (int8_t)d, 1, (int16_t)(c + d), (int16_t)(r - 1) });
+    }
+    if (loose) {
+      int rr = r + 1;
+      while (rr < palH && palAt(c, rr) == ' ') rr++;
+      char t = palAt(c, rr);
+      if (rr < palH && palIsFloor(t) && t != '^' && rr - r <= 2) go(c, rr, { PL_LOOSE, 0, (uint8_t)(rr - r), (int16_t)c, (int16_t)rr });
+    }
+  }
+  std::vector<PlMove> path;
+  if (goal < 0) return path;
+  for (int s = goal; from[s] >= 0; s = from[s]) path.insert(path.begin(), how[s]);
+  int gc = goal / 32 % PAL_MAXC, gr = goal / 32 / PAL_MAXC;
+  path.push_back({ PL_EXIT, 0, 0, (int16_t)gc, (int16_t)gr });
+  return path;
+}
+
+static PalIn plIn(bool l, bool r, bool u, bool d, bool uT = false, bool dT = false, bool okT = false) {
+  PalIn in; in.l = l; in.r = r; in.u = u; in.d = d; in.uT = uT; in.dT = dT; in.okT = okT; return in;
+}
+static void plRun(PalIn in, int n) { for (int i = 0; i < n; i++) { palStep(in); in.uT = in.dT = in.okT = false; } }
+static bool plGround() { uint8_t s = palHero.st; return s == PH_STAND || s == PH_RUN || s == PH_STEP || s == PH_LAND; }
+
+static void palaceLogic() {
+  int bad = 0;
+  // ---- the levels: well formed, and the exit can be reached ----
+  for (uint8_t lv = 0; lv < PAL_LEVELS; lv++) {
+    const PalLevel &L = PAL_LEVEL[lv];
+    int W = L.w * 10, H = L.h * 3, starts = 0, doors = 0, xs = 0, guards = 0;
+    if (W > PAL_MAXC || H > PAL_MAXR) { bad++; printf("      level %u too big\n", lv + 1); continue; }
+    for (int r = 0; r < H; r++) {
+      if ((int)strlen(L.rows[r]) != W) { bad++; printf("      level %u row %d: %d tiles\n", lv + 1, r, (int)strlen(L.rows[r])); continue; }
+      for (int c = 0; c < W; c++) {
+        char ch = L.rows[r][c], below = r + 1 < H ? L.rows[r + 1][c] : ' ';
+        if (!strchr(" _#t|^~abcd12345678XEhHSGC@", ch)) { bad++; printf("      level %u: tile '%c'\n", lv + 1, ch); }
+        starts += ch == '@'; doors += ch == 'E'; xs += ch == 'X'; guards += ch == 'G' || ch == 'C';
+        if ((ch == ' ' || ch == '~') && below == '#') { bad++; printf("      level %u (%d,%d): a hole or loose tile on a wall\n", lv + 1, c, r); }
+        if (ch >= 'a' && ch <= 'd') {
+          bool plate = false;
+          for (int rr = 0; rr < H; rr++) if (strchr(L.rows[rr], '1' + (ch - 'a'))) plate = true;
+          if (!plate) { bad++; printf("      level %u: gate %c has no plate\n", lv + 1, ch); }
+        }
+      }
+    }
+    if (starts != 1 || doors != 1 || xs < 1 || guards > PAL_NG) { bad++; printf("      level %u: %d starts, %d doors, %d exit plates, %d guards\n", lv + 1, starts, doors, xs, guards); }
+    palStartHp = 3; palStartSword = lv > 0;
+    palLoad(lv);
+    std::vector<PlMove> p = plPlan(palColOf(palHero.x), palRowOf(palHero.y), 0);
+    int n[7] = { 0, 0, 0, 0, 0, 0, 0 };
+    for (auto &m : p) n[m.type]++;
+    printf("      level %u %-16s %dx%d rooms, %d guards: %s in %d moves (%d jumps, %d drops, %d climbs, %d hangs)\n", lv + 1,
+           L.name, L.w, L.h, guards, p.empty() ? "NO WAY OUT" : "exit", (int)p.size(), n[PL_JUMP], n[PL_DROP] + n[PL_LOOSE], n[PL_CLIMB], n[PL_HANG]);
+    if (p.empty()) bad++;
+    if (lv == 0) {                                              // the sword lies on the way, before the guard
+      bool sword = false, ok = true;
+      for (auto &m : p) {
+        if (palAt(m.c, m.r) == 'S') sword = true;
+        for (uint8_t g = 0; g < palNG; g++) if (palG[g].row == m.r && abs(palColOf(palG[g].x) - m.c) <= 1 && !sword) ok = false;
+      }
+      if (!sword || !ok) { bad++; printf("      level 1: the sword is not found before the guard\n"); }
+    }
+  }
+  check("palace: levels well formed, every exit can be reached", bad == 0);
+
+  // ---- falling: one floor is safe, two hurt, three kill; climbing down first saves one ----
+  {
+    static const char *const R0 = "#@_ ##", *const RM = "### ##", *const RL = "###_##", *const RB = "######";
+    int got[2][4];
+    for (int hang = 0; hang < 2; hang++)
+      for (int k = 1; k <= 4; k++) {
+        const char *rows[7];
+        int n = 0;
+        rows[n++] = R0;
+        for (int i = 1; i < k; i++) rows[n++] = RM;
+        rows[n++] = RL; rows[n++] = RB;
+        palStartHp = 3; palStartSword = false;
+        palLoadRows(rows, 6, (uint8_t)n, 0);
+        if (hang) {
+          plRun(plIn(false, true, false, true), 60);           // careful steps to the edge
+          plRun(plIn(false, false, false, false, false, true), 25);   // climb down ...
+          plRun(plIn(false, false, false, false, false, true), 1);    // ... and let go
+        } else plRun(plIn(false, true, false, false), 40);    // run off
+        plRun(plIn(false, false, false, false), 150);
+        got[hang][k - 1] = palHero.st == PH_DEAD ? -1 : palHero.hp;
+      }
+    printf("      flasks left after a fall of 1..4 floors: run off %d %d %d %d, climbed down %d %d %d %d\n",
+           got[0][0], got[0][1], got[0][2], got[0][3], got[1][0], got[1][1], got[1][2], got[1][3]);
+    check("palace: one floor safe, two hurt, three kill", got[0][0] == 3 && got[0][1] == 2 && got[0][2] == -1);
+    check("palace: climbing down first: two floors safe, three hurt", got[1][0] == 3 && got[1][1] == 3 && got[1][2] == 2 && got[1][3] == -1);
+  }
+
+  // ---- jumps: a running jump clears three tiles, a standing jump one or two ----
+  {
+    static const char *const RJ[2] = { "#@_____   ______#", "#_______________#" };
+    int lo = -1, hi = -1;
+    for (int xp = 60; xp <= 230; xp += 2) {
+      palStartHp = 3; palLoadRows(RJ, 17, 2, 0);
+      bool pressed = false;
+      for (int i = 0; i < 400; i++) {
+        bool now = !pressed && palHero.st == PH_RUN && (palHero.x >> 8) >= xp;
+        if (now) pressed = true;
+        palStep(plIn(false, !pressed || now, palHero.st == PH_HANG || palHero.st == PH_CLIMB, false, now));
+        if (pressed && plGround() && palHero.st != PH_LAND) break;
+      }
+      bool ok = pressed && palRowOf(palHero.y) == 0 && palColOf(palHero.x) >= 10 && palHero.st != PH_DEAD;
+      if (ok && lo < 0) lo = xp;
+      if (ok) hi = xp;
+    }
+    printf("      running jump over three tiles works when UP comes at x %d..%d (the edge at 224)\n", lo, hi);
+    check("palace: a running jump clears three tiles, with room for timing", lo > 0 && hi - lo >= 24);
+    static const char *const R2[2] = { "#@____ ______#", "#____________#" }, *const R3[2] = { "#@____  _____#", "#____________#" };
+    palLoadRows(R2, 14, 2, 0);
+    palHero.x = (int32_t)(palEdge(5, 1) - 26) << 8;
+    plRun(plIn(false, true, false, false, true), 1); plRun(plIn(false, false, false, false), 80);
+    int c2 = palColOf(palHero.x), r2 = palRowOf(palHero.y);
+    palLoadRows(R3, 14, 2, 0);
+    palHero.x = (int32_t)(palEdge(5, 1) - 6) << 8;
+    plRun(plIn(false, true, false, false, true), 1); plRun(plIn(false, false, false, false), 80);
+    int c3 = palColOf(palHero.x), r3 = palRowOf(palHero.y);
+    printf("      standing jumps: from the back of a tile to tile %d (row %d), from the edge to tile %d (row %d)\n", c2, r2, c3, r3);
+    check("palace: a standing jump clears one tile from the back, two from the edge", c2 == 7 && r2 == 0 && c3 == 8 && r3 == 0);
+  }
+
+  // ---- loose floor, spikes, a gate and its plates, climbing up ----
+  {
+    static const char *const RL[2] = { "#__@__#", "#_____#" }, *const RR[2] = { "#@_~__#", "#_____#" };
+    palLoadRows(RL, 7, 2, 0);
+    palMap[0][3] = '~';
+    plRun(plIn(false, false, false, false), 15);
+    bool still = palMap[0][3] == '~' && palRowOf(palHero.y) == 0;
+    plRun(plIn(false, false, false, false), 80);
+    check("palace: a loose tile holds a moment, then falls with the runner onto rubble",
+          still && palMap[0][3] == ' ' && palMap[1][3] == '-' && palRowOf(palHero.y) == 1 && palHero.hp == 3 && plGround());
+    palLoadRows(RR, 7, 2, 0);
+    plRun(plIn(false, true, false, false), 60);
+    plRun(plIn(false, false, false, false), 60);
+    check("palace: running over it is fast enough", palRowOf(palHero.y) == 0 && palMap[0][3] == ' ');
+
+    static const char *const RS[1] = { "#@_^___#" };
+    palLoadRows(RS, 8, 1, 0);
+    plRun(plIn(false, true, false, false), 60);
+    bool runDead = palHero.st == PH_DEAD && palHero.spiked;
+    palLoadRows(RS, 8, 1, 0);
+    plRun(plIn(false, true, false, true), 150);
+    check("palace: spikes kill a running runner, a careful step passes", runDead && palHero.st != PH_DEAD && palColOf(palHero.x) >= 5);
+
+    static const char *const RG[1] = { "#@__a____#" }, *const RP[1] = { "#@1_a_5__#" };
+    palLoadRows(RG, 10, 1, 0);
+    plRun(plIn(false, true, false, false), 80);
+    int blocked = (int)(palHero.x >> 8);
+    palLoadRows(RP, 10, 1, 0);
+    plRun(plIn(false, true, false, false), 55);
+    bool through = (palHero.x >> 8) > 4 * PAL_TW + 16;
+    plRun(plIn(false, true, false, false), 60);
+    printf("      a shut gate stops the runner at x %d (gate at %d)\n", blocked, 4 * PAL_TW + 16);
+    check("palace: a shut gate stops, its plate opens it, the other plate shuts it again",
+          blocked <= 4 * PAL_TW + 7 && through && palGateWant == 0 && palGate[0] == 0 && palColOf(palHero.x) >= 7);
+
+    static const char *const RC[2] = { "#__ __#", "#__@__#" };
+    palLoadRows(RC, 7, 2, 0);
+    plRun(plIn(false, false, true, false, true), 1); plRun(plIn(false, false, true, false), 60);
+    check("palace: UP under a hole jumps, catches the ledge and climbs on", palRowOf(palHero.y) == 0 && palColOf(palHero.x) == 4 && plGround());
+  }
+
+  // ---- a sword fight: hits cost a flask, a parry none; the level 1 guard can be beaten ----
+  {
+    static const char *const RF[1] = { "#@_____G__#" };
+    palStartHp = 3; palStartSword = true;
+    palLoadRows(RF, 11, 1, 0);
+    plRun(plIn(false, false, false, false), 300);              // just stand there
+    bool hurt = palHero.hp < 3, fought = palHero.st == PH_FIGHT || palHero.st == PH_DEAD;
+    palLoadRows(RF, 11, 1, 0);
+    int parries = 0, strikes = 0;
+    uint8_t ghp = palG[0].hp;
+    for (int i = 0; i < 3000 && palG[0].st < PG_DYING && palHero.st != PH_DEAD; i++) {
+      PalGuard &g = palG[0];
+      bool block = g.st == PG_STRIKE && g.t + 4 >= PAL_SKILL[g.sk].wind && palHero.act == PA_NONE;
+      bool hit = !block && palHero.st == PH_FIGHT && palHero.act == PA_NONE && g.st != PG_STRIKE && abs((g.x - palHero.x) >> 8) <= 46;
+      parries += block; strikes += hit;
+      palStep(plIn(false, palHero.st != PH_FIGHT, false, false, block, false, hit));
+    }
+    printf("      fight: %d strikes, %d parries, guard %u -> %u, runner %u flasks\n", strikes, parries, ghp, palG[0].hp, palHero.hp);
+    check("palace: a guard's blow hurts an idle runner", hurt && fought);
+    check("palace: parrying and striking beat the level 1 guard", palG[0].st >= PG_DYING && palHero.hp == 3);
+  }
+  palStartSword = false;
+}
+
+// ---- a player for the real game: plans with plPlan, presses the keys ----
+static uint8_t  pbMask = 0, pbTap = 0;
+static uint32_t pbTapStart = 0, pbTapEnd = 0, pbBusy = 0;
+static uint8_t  pbPre = 0;
+static bool     pbClimb = false, pbDrop = false;
+static int      pbShots = 0;
+static std::set<std::string> pbShot;
+static void pbSnap(const char *name) {                          // a named screenshot of the last frame
+  if (pbShot.count(name)) return;
+  pbShot.insert(name);
+  char fn[96];
+  snprintf(fn, sizeof(fn), "frames/palace_%s.ppm", name);
+  FILE *f = fopen(fn, "wb");
+  if (!f) return;
+  fprintf(f, "P6\n%d %d\n255\n", SCR_W, SCR_H);
+  for (int i = 0; i < SCR_W * SCR_H; i++) { uint8_t v[3]; colToRgb(lastFrame[i], v[0], v[1], v[2]); fwrite(v, 1, 3, f); }
+  fclose(f);
+  pbShots++;
+}
+// a press of k for len ms; a key that is down already is let go first (a new press is what counts)
+static void pbPress(uint32_t t, uint8_t k, uint32_t len) {
+  uint8_t fresh = k == OK ? OK : (uint8_t)(k & (UP | DN));
+  pbPre = (uint8_t)(pbMask & ~fresh);
+  pbTap = k; pbTapStart = (pbMask & fresh) ? t + 40 : t; pbTapEnd = pbTapStart + len; pbBusy = pbTapEnd + 40;
+}
+
+static void palaceBot(uint32_t t) {
+  PalHero &h = palHero;
+  uint8_t hold = 0;
+  if (t < pbTapEnd) {}                                          // a press runs
+  else if (palPhase == 0) { if (t >= pbBusy) pbPress(t, OK, 90); }
+  else if (palPhase == 1 && t >= pbBusy) {
+    int16_t c = palColOf(h.x), r = palRowOf(h.y);
+    int16_t x = (int16_t)(h.x >> 8);
+    PalGuard *g = h.st == PH_FIGHT ? palFoe(150) : NULL;
+    if (h.st == PH_FIGHT && g) {
+      int16_t dist = (int16_t)abs((g->x - h.x) >> 8);
+      if (g->st == PG_STRIKE && g->t + 7 >= PAL_SKILL[g->sk].wind && h.act == PA_NONE) pbPress(t, UP, 80);
+      else if (h.act == PA_NONE && dist <= 46 && g->st != PG_STRIKE && g->st != PG_BLOCK) pbPress(t, OK, 80);
+      else if (dist > 46 && h.act == PA_NONE) hold = g->x > h.x ? RT : LT;
+    } else if (h.st == PH_HANG) {
+      if (pbDrop) { pbDrop = false; pbPress(t, DN, 90); }
+      else hold = UP;
+    } else if (h.st == PH_JUP || h.st == PH_CLIMB) {
+      hold = pbClimb ? UP : 0;
+    } else if (h.st == PH_STAND || h.st == PH_RUN || h.st == PH_STEP || h.st == PH_FIGHT) {
+      pbClimb = false;
+      uint8_t m = palGateWant | (palExitOn ? 16 : 0);
+      std::vector<PlMove> p = plPlan(c, r, m);
+      if (!p.empty()) {
+        PlMove mv = p[0];
+        uint8_t dk = mv.dir > 0 ? RT : LT;
+        if (mv.type == PL_WALK) {
+          // on or onto spikes: careful steps to the first tile past them; else run up to the next spikes
+          bool spikes = palAt(c, r) == '^' || palAt(mv.c, mv.r) == '^';
+          size_t k = 0;
+          for (; k < p.size() && p[k].type == PL_WALK && p[k].dir == mv.dir; k++) {
+            char ch = palAt(p[k].c, p[k].r);
+            if (spikes ? ch != '^' : (ch == '^' && k > 0)) { k += spikes; break; }
+          }
+          if (k > p.size()) k = p.size();
+          while (k > 1 && palAt(p[k - 1].c, p[k - 1].r) == '~' && !(k < p.size() && p[k].type == PL_LOOSE)) k--;
+          int16_t tx = (int16_t)(p[k - 1].c * PAL_TW + PAL_TW / 2), dx = (int16_t)(tx - x);
+          if (h.st == PH_FIGHT) hold = dx > 0 ? RT : LT;
+          else if (abs(dx) <= 5) hold = 0;
+          else hold = (uint8_t)((dx > 0 ? RT : LT) | (spikes || abs(dx) < 14 ? DN : 0));
+        } else if (mv.type == PL_JUMP) {
+          int16_t b = palEdge(c, mv.dir);
+          if (mv.len < 4) {
+            int16_t tx = (int16_t)(b - mv.dir * (mv.len == 2 ? 26 : 6)), dx = (int16_t)(tx - x);
+            if (abs(dx) > 2) hold = (uint8_t)((dx > 0 ? RT : LT) | DN);
+            else if (h.vx == 0) { hold = dk; pbPress(t, (uint8_t)(UP | dk), 150); pbBusy = t + 400; }
+          } else {
+            int16_t start = (int16_t)(b - mv.dir * 50), press = (int16_t)(b - mv.dir * 30);
+            if (h.st == PH_RUN && h.dir == mv.dir && mv.dir * (x - (b - mv.dir * 56)) > 0) {
+              hold = dk;
+              if (mv.dir * (x - press) >= 0) { pbPress(t, (uint8_t)(UP | dk), 150); pbBusy = t + 400; }
+            } else if (mv.dir * (x - start) > 3) hold = (uint8_t)((mv.dir > 0 ? LT : RT) | (abs(x - start) < 14 ? DN : 0));
+            else hold = dk;
+          }
+        } else if (mv.type == PL_DROP) hold = dk;
+        else if (mv.type == PL_HANG) {
+          int16_t b = palEdge(c, mv.dir);
+          if (abs(b - mv.dir * 4 - x) > 1) hold = (uint8_t)(dk | DN);
+          else if (h.vx == 0) { pbDrop = true; pbPress(t, DN, 90); pbBusy = t + 300; }
+        } else if (mv.type == PL_LOOSE) {
+          int16_t dx = (int16_t)(c * PAL_TW + PAL_TW / 2 - x);
+          if (abs(dx) > 3) hold = (uint8_t)((dx > 0 ? RT : LT) | DN);
+        } else if (mv.type == PL_CLIMB) {
+          int16_t dx = (int16_t)(c * PAL_TW + PAL_TW / 2 - x);
+          if (abs(dx) > 6) hold = (uint8_t)((dx > 0 ? RT : LT) | DN);
+          else if (h.dir != mv.dir) { pbPress(t, dk, 30); pbBusy = t + 120; }
+          else if (h.vx == 0) { pbClimb = true; pbPress(t, UP, 150); }
+        } else if (mv.type == PL_EXIT) { pbPress(t, UP, 90); pbBusy = t + 600; }
+      }
+    }
+    if (pbClimb && (h.st == PH_JUP || h.st == PH_HANG || h.st == PH_CLIMB)) hold = UP;
+  } else hold = palPhase == 1 && pbClimb ? UP : 0;              // waiting for the game to answer
+  uint8_t m = t < pbTapStart ? pbPre : (t < pbTapEnd ? pbTap : hold);
+  if (m != pbMask) { applyMask(m); pbMask = m; }
+  // PALDBG=<from ms> [PALSTEP=<every ms>] ./colorsim palace: a trace of the runner and the plan
+  static const bool dbg = getenv("PALDBG") != NULL;
+  static uint32_t dbgFrom = getenv("PALDBG") ? (uint32_t)atoi(getenv("PALDBG")) : 0, dbgStep = getenv("PALSTEP") ? (uint32_t)atoi(getenv("PALSTEP")) : 250;
+  if (dbg && t >= dbgFrom && t % dbgStep == 0 && palPhase == 1) {
+    std::vector<PlMove> p = plPlan(palColOf(h.x), palRowOf(h.y), palGateWant | (palExitOn ? 16 : 0));
+    printf("      %6u L%u st %2u x %4d y %4d (%2d,%d) vx %4d hp %u keys %02x  %s %d,%d\n", t, palLv + 1, h.st, (int)(h.x >> 8),
+           (int)(h.y >> 8), palColOf(h.x), palRowOf(h.y), (int)h.vx, h.hp, pbMask, p.empty() ? "-" : PL_NAME[p[0].type],
+           p.empty() ? 0 : p[0].c, p.empty() ? 0 : p[0].r);
+  }
+
+  static bool ending = false;                                   // free (or out of time): see the score, then stop
+  if (!ending && palPhase == 2 && (seen("FREE AT LAST!") || seen("TIME IS UP"))) { ending = true; simEnd = t + 9000; }
+  // pictures of the moments worth showing
+  if (palPhase == 0 && t % 1000 == 999) pbSnap("1_title");
+  if (palPhase != 1) {
+    if (palPhase == 2 && palLv == 0 && seen("LEVEL 1 COMPLETE")) pbSnap("6_level_done");
+    return;
+  }
+  if (palLv == 0 && h.st == PH_RUN && abs(h.vx) == PAL_RUN && palColOf(h.x) >= 3) pbSnap("2_run");
+  if (h.st == PH_JUMP && h.t == 17) { char n[24]; snprintf(n, sizeof(n), "3_jump_%u", palLv + 1); pbSnap(n); }
+  for (uint8_t k = 0; k < PAL_NF; k++)
+    if (palF[k].on && palF[k].vy >= 575) { char n[24]; snprintf(n, sizeof(n), "5_loose_%u", palLv + 1); pbSnap(n); }
+  PalGuard *fg = h.st == PH_FIGHT ? palFoe(80) : NULL;
+  if (fg && !h.hurt && fg->st == PG_STRIKE && fg->t + 3 == PAL_SKILL[fg->sk].wind) { char n[24]; snprintf(n, sizeof(n), "4_fight_%u", palLv + 1); pbSnap(n); }
+  if (fg && !h.hurt && h.act == PA_STRIKE && h.at == 4) { char n[24]; snprintf(n, sizeof(n), "4_lunge_%u", palLv + 1); pbSnap(n); }
+  if (fg && h.act == PA_BLOCK && h.at == 3) { char n[24]; snprintf(n, sizeof(n), "4_parry_%u", palLv + 1); pbSnap(n); }
+  if (h.st == PH_HANG && h.t == 3) { char n[24]; snprintf(n, sizeof(n), "7_hang_%u", palLv + 1); pbSnap(n); }
+  if (h.st == PH_STEP && palAt(palColOf(h.x), palRowOf(h.y)) == '^') { char n[24]; snprintf(n, sizeof(n), "5_spikes_%u", palLv + 1); pbSnap(n); }
+}
+
 // ---------------- the rules of the board games, without the screen ----------------
 static void boardLogic() {
   randomSeed(7);
@@ -1775,6 +2156,14 @@ int main(int argc, char **argv) {
     printf("== %s\n", scenario.c_str());
     mine3dLogic();
     return failures ? 1 : 0;
+  } else if (scenario == "palace") {
+    uint32_t t = openGameNamed("Palace", M); simEnd = t + 700000;   // the bot plays all four levels
+    simBot = palaceBot; botFrom = t + 600; pbBusy = t + 1600;
+    setenv("GRAB", "best ", 1);                                  // the game over panel
+  } else if (scenario == "palacelogic") {
+    printf("== %s\n", scenario.c_str());
+    palaceLogic();
+    return failures ? 1 : 0;
   } else if (scenario == "chesslogic") {
     printf("== %s\n", scenario.c_str());
     chessLogic();
@@ -1974,6 +2363,12 @@ int main(int argc, char **argv) {
     }
     check("no connection error", !seen("connection error"));
     check("back in the menu, radio off", !simOpen && pollHook == NULL && mpStep == mpSteps.size());
+  }
+  if (scenario == "palace") {
+    printf("      level %u reached, score %u, best stored %u, %d pictures\n", palLv + 1, palScore, simNvsU16["hPAL"], pbShots);
+    check("palace: title, then level 1 played through", seen("PALACE") && seen("THE CELLARS") && seen("LEVEL 1 COMPLETE"));
+    check("palace: the player escaped through all four levels", seen("LEVEL 2 COMPLETE") && seen("LEVEL 3 COMPLETE") && seen("FREE AT LAST!"));
+    check("palace: game over with the score kept", overShown && simNvsU16["hPAL"] > 400);
   }
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {
