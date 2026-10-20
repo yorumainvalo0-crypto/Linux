@@ -26,6 +26,7 @@
 #include "tilt.h"
 #include "wlan.h"
 #include "settings.h"
+#include "fx.h"
 #include "game_snake.h"
 #include "game_tetris.h"
 #include "game_pong.h"

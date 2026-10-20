@@ -449,6 +449,44 @@ static void chessLogic() {
   check("king and bishop against king is a draw", chTooLittle(p));
 }
 
+// the shared effects (fx.h): the pool fills, never overflows, empties again, at any frame rate
+static void fxLogic() {
+  fxReset();
+  fxBurst(160, 120, 20, C::YELLOW, C::RED, 200, 400);
+  check("fx: a burst takes 20 particles", fxCount() == 20);
+  fxBurst(160, 120, 200, C::YELLOW, C::RED, 200, 400);
+  check("fx: a full pool hands out its oldest, no overflow", fxCount() == FX_N);
+  for (int i = 0; i < 40; i++) { clockUs += 16000; fxUpdate(); }
+  check("fx: all particles die after their life", fxCount() == 0);
+  int16_t xs[2];                                               // 600 ms in 10 ms or in 30 ms frames
+  for (int run = 0; run < 2; run++) {
+    fxReset();
+    fxEmit(10, 100, 100, -150, 2000, C::WHITE, C::WHITE, 2, 30, 0);
+    for (int t = 0; t < 600; t += run ? 30 : 10) { clockUs += (run ? 30 : 10) * 1000; fxUpdate(); }
+    for (int i = 0; i < FX_N; i++) if (fxP[i].life) xs[run] = (int16_t)(fxP[i].y >> 8);
+    if (!run) check("fx: moves 60 px in 600 ms at 100 px/s", fxP[0].life && abs((int)(fxP[0].x >> 8) - 70) <= 1);
+  }
+  printf("      a falling particle after 600 ms: y %d (10 ms frames), %d (30 ms frames)\n", xs[0], xs[1]);
+  check("fx: the same path at any frame rate", abs(xs[0] - xs[1]) <= 2);
+  fxReset();
+  fxShake(6, 300);
+  bool moved = false;
+  for (int i = 0; i < 10; i++) { clockUs += 16000; fxUpdate(); if (fxSX || fxSY) moved = true; if (abs(fxSX) > 6 || abs(fxSY) > 6) moved = false; }
+  for (int i = 0; i < 20; i++) { clockUs += 16000; fxUpdate(); }
+  check("fx: a shake moves the picture, then dies away", moved && !fxSX && !fxSY);
+  fxText(100, 100, "+10", C::YELLOW);
+  fxFlash(C::WHITE, 200);
+  gfx.clear(C::NAVY);
+  fxBurst(100, TOP_H + 2, 40, C::YELLOW, C::RED, 300, 800);
+  for (int i = 0; i < 5; i++) { clockUs += 16000; fxUpdate(); }
+  fxDraw();
+  bool clean = true;
+  for (int i = 0; i < SCR_W * TOP_H; i++) if (gfx.buffer()[i] != C::NAVY) clean = false;
+  check("fx: drawing keeps out of the status bar", clean);
+  for (int i = 0; i < 80; i++) { clockUs += 16000; fxUpdate(); }
+  check("fx: texts and the flash end", !fxT[0].s[0] && !fxFlashT && fxCount() == 0);
+}
+
 static uint8_t colsInFrame() {                                  // how many colours one frame shows
   std::set<uint8_t> c(lastFrame, lastFrame + sizeof(lastFrame));
   return (uint8_t)c.size();
@@ -1147,11 +1185,17 @@ int main(int argc, char **argv) {
     press(t + 300, DN); press(t + 600, OK, 80);                  // board stays
     pzStart = t + 1400; pzBot = chessBot; captureMs = { t + 5000 };
     setenv("GRAB", "WINS", 1);
+  } else if (scenario == "fxlogic") {
+    printf("== %s\n", scenario.c_str());
+    fxLogic();
+    return failures ? 1 : 0;
   } else if (scenario == "chesslogic") {
     printf("== %s\n", scenario.c_str());
     chessLogic();
     return failures ? 1 : 0;
   } else { printf("unknown scenario %s\n", scenario.c_str()); return 2; }
+  if (const char *cap = getenv("CAP"))                        // more frames to look at: CAP=300,450,...
+    for (const char *c = cap; *c; ) { captureAt.insert(atol(c)); while (*c && *c != ',') c++; if (*c) c++; }
   printf("== %s\n", scenario.c_str());
   try {
     setup();
