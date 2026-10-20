@@ -30,9 +30,16 @@ for black):
 
 ![Mine 3D](docs/mine3d.png)
 
-A block world in first person, new every round: 32 x 32 x 16 blocks of grass
-hills, beaches, lakes, trees, caves and stone with ore. It wraps round at the
-edges. Three minutes to dig ore: coal 1, gold 5, crystal 20 points.
+A block world in first person: 32 x 32 x 16 blocks of grass hills, beaches,
+lakes, trees, caves and stone with ore. It wraps round at the edges. Two ways
+to play:
+
+- **free play**: no time, no score - dig and build what you like with every
+  kind of block (grass, dirt, stone, sand, wood, leaves, coal, gold, crystal)
+  without end. The world is kept in flash (its seed and up to 1000 changed
+  blocks, every 30 s and when you leave); "continue my world" brings it back.
+- **ore hunt**: a new world, three minutes to dig ore: coal 1, gold 5,
+  crystal 20 points; blocks to build with only from what you dug.
 
     LEFT/RIGHT           turn
     UP/DOWN held         walk forward / back (a step of one block is jumped)

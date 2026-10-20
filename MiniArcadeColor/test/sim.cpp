@@ -161,7 +161,7 @@ void Gfx::send() {
   memcpy(lastFrame, fb, sizeof(fb));
   if (grabNext) { grabNext = 0; captureAt.insert(frames + 3); }
   if (captureAt.count(frames)) writeFrame(fb);
-  if (vox && scenario == "mine3d") {                            // colours in a picture of the game
+  if (vox && (scenario == "mine3d" || scenario == "mine3dfree")) {                            // colours in a picture of the game
     bool u[256] = { false }; int n = 0;
     for (int i = 0; i < SCR_W * SCR_H; i++) if (!u[fb[i]]) { u[fb[i]] = true; n++; }
     if (n > mine3dCols) mine3dCols = n;
@@ -1326,6 +1326,7 @@ static bool voxHitIs(const VoxHit &h, int x, int y, int z, int qx, int qy, int q
 static void mine3dLogic() {
   vox = (VoxState *)malloc(sizeof(VoxState));
   check("state on the heap", vox != NULL);
+  memset(vox, 0, sizeof(VoxState));
   printf("      state %u bytes\n", (unsigned)sizeof(VoxState));
   voxInit();
   VoxHit h;
@@ -1510,7 +1511,8 @@ int main(int argc, char **argv) {
     for (uint32_t k = t + 3000; k < simEnd; k += 1100) press(k, OK, 80);
     autoplay = true; autoplayFrom = t + 3000; captureAt = { 300, 900 };
   } else if (scenario == "mine3d") {
-    uint32_t t = openGameNamed("Mine 3D", M); simEnd = t + 186000;
+    uint32_t t = openGameNamed("Mine 3D", M); simEnd = t + 187000;
+    press(t + 300, DN); press(t + 600, OK, 80); t += 1000;      // ore hunt
     press(t + 300, UP, 1300);                                    // walk
     press(t + 1800, RT, 450);                                    // turn
     press(t + 2500, DN, 40); press(t + 2900, DN, 40);            // look down, steep down
@@ -1527,6 +1529,20 @@ int main(int argc, char **argv) {
     simBot = mine3dBot; botFrom = t + 14600;                     // then dig for ore
     captureMs = { t + 6100, t + 9600, t + 12000, t + 20000, t + 60000 };   // the bag, building, the view, a pit, ore
     setenv("GRAB", "TIME UP", 1);
+  } else if (scenario == "mine3dfree") {
+    // free play: dig and build without time, leave, come back to the same world
+    uint32_t t = openGameNamed("Mine 3D", M); simEnd = t + 52000;
+    press(t + 300, OK, 80);                                      // free play: new world
+    press(t + 1000, DN, 40); press(t + 1400, DN, 40);            // look down, steep down
+    press(t + 1800, OK, 60); press(t + 2500, OK, 60);            // dig two
+    press(t + 4400, OK, 60); press(t + 4560, OK, 60);            // the bag
+    for (int i = 0; i < 8; i++) press(t + 5000 + 250 * i, RT);   // gold
+    press(t + 7200, OK, 60);
+    press(t + 7900, OK, 60); press(t + 8700, OK, 60);            // fill the pit with gold
+    press(t + 40000, OK, 900); press(t + 41500, OK, 900);        // pause, quit: after 40 s, no TIME UP
+    press(t + 43500, OK, 80);                                    // Mine 3D again
+    press(t + 44500, OK, 80);                                    // continue my world
+    captureMs = { t + 9000, t + 46000 };
   } else if (scenario == "tunnel") {
     uint32_t t = openGameNamed("Tunnel 3D", M); simEnd = t + 90000;
     autoplay = true; autoplayFrom = t + 300; captureAt = { 280 };
@@ -1817,6 +1833,13 @@ int main(int argc, char **argv) {
     check("the picture uses many colours", mine3dCols >= 40);
     check("the time ran out, game over", seen("TIME UP") && overShown);
     check("ore found: points kept as the best", simNvsU16["hMN3"] > 0);
+  }
+  if (scenario == "mine3dfree") {
+    printf("      kept: %u bytes, %u blocks changed, %d put, free %d\n", (unsigned)simNvsBlob["m3w"].size(), vox ? vox->edN : 0, mine3dPut, vox ? vox->free : 0);
+    check("free play: no time limit", !seen("TIME UP") && seen("free play   0% built"));
+    check("free play: blocks from the bag without end", seen("< gold >   UP+DOWN = take") && mine3dPut >= 1);
+    check("the world kept in flash", simNvsBlob.count("m3w") && simNvsBlob["m3w"].size() > sizeof(VoxSaveHead));
+    check("continued: the same world with its changes", seen("continue my world") && vox && vox->free && vox->edN >= 2);
   }
   if (scenario == "tunnel")    check("tunnel ran to game over", seen("TUNNEL") && seen("SPEED") && overShown);
   if (scenario == "pacman")    check("pac-man ran to game over", seen("PAC-MAN") && seen("READY!") && overShown);

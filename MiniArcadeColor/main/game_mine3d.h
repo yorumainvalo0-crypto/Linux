@@ -1,8 +1,10 @@
 // MiniArcade Color: Mine 3D. Part of console.cpp, which includes it.
 // A block world in first person: 32 x 32 x 16 blocks of grass hills,
 // beaches, lakes, trees, caves and stone with coal, gold and crystal ore,
-// new from a seed every round. The world wraps round at its edges.
-// Three minutes to dig ore: coal 1, gold 5, crystal 20 points.
+// new from a seed. The world wraps round at its edges. Free play: no
+// time, every kind of block without end, the world is kept in flash (the
+// seed and the blocks changed). Ore hunt: three minutes to dig ore,
+// coal 1, gold 5, crystal 20 points, blocks only from what was dug.
 // LEFT/RIGHT turn. UP/DOWN held walk forward / back (a step of one block
 // is jumped), tapped look up / down (four steps). OK: the pick digs the
 // block in the middle of the view (it goes into the bag), a block from
@@ -36,6 +38,8 @@
 #define VOX_TIME  180                    // seconds per round
 #define VOX_NT    13                     // textures
 #define VOX_SLOTS 6                      // the bag: pick + five kinds of block
+#define VOX_FSLOTS 10                    // free play: pick + nine kinds, no counting
+#define VOX_EDITS 1000                   // free play: blocks changed that are kept
 #define VOX_DBL   280                    // ms for a double OK
 #define VOX_TAPMS 150                    // UP/DOWN let go before this: a tap (look)
 
@@ -68,6 +72,10 @@ static const uint8_t VOX_RAMP[VOX_NT][4][3] = {
 static const uint16_t VOX_LIT[8] = { 256, 214, 180, 150, 168, 144, 124, 104 };
 static const uint8_t  VOX_FOGRGB[3] = { 186, 214, 240 }, VOX_ZENRGB[3] = { 64, 124, 222 };
 static const uint8_t  VOX_SLOT[VOX_SLOTS] = { VB_AIR, VB_DIRT, VB_STONE, VB_SAND, VB_WOOD, VB_LEAF };   // AIR = the pick
+static const uint8_t  VOX_FREE[VOX_FSLOTS] = { VB_AIR, VB_GRASS, VB_DIRT, VB_STONE, VB_SAND, VB_WOOD, VB_LEAF,
+                                               VB_COAL, VB_GOLD, VB_GEM };
+static const char *const VOX_NAME[13] = { "pick: dig", "grass", "dirt", "stone", "sand", "wood", "leaves", "coal",
+                                          "gold", "crystal", "bedrock", "water", "flowers" };
 static const char *const VOX_ORE[3] = { "coal", "gold", "crystal" };
 static const uint8_t  VOX_PTS[3] = { 1, 5, 20 };
 static const int16_t  VOX_PITCH[4] = { 72, 0, -80, -160 };          // look up, level, down, steep down
@@ -86,6 +94,12 @@ struct VoxState {
   bool     ground;
   uint16_t bag[VOX_SLOTS];                    // blocks per slot (0 = the pick)
   uint16_t score, dug, placed, ores[3];
+  bool     free;                              // free play
+  bool     dirty;                             // changed since kept
+  uint32_t seed;
+  uint16_t edN;                               // free play: the blocks changed, kept with the seed
+  uint16_t edIdx[VOX_EDITS];
+  uint8_t  edBlk[VOX_EDITS];
 };
 static VoxState *vox = NULL;
 static uint32_t voxSteps = 0, voxRays = 0, voxFrames = 0, voxStepsMax = 0;   // the speed check (steps: simulator only)
@@ -107,6 +121,26 @@ static void voxSet(int x, int y, int z, uint8_t b) {
   vox->world[voxIdx(x, y, z)] = b;
   voxColumn(x, z);
 }
+// a block changed by the player; free play remembers it for the flash
+static bool voxEdit(int x, int y, int z, uint8_t b) {
+  VoxState *s = vox;
+  if (s->free) {
+    uint16_t i = (uint16_t)voxIdx(x, y, z), k = 0;
+    while (k < s->edN && s->edIdx[k] != i) k++;
+    if (k == s->edN) {
+      if (s->edN >= VOX_EDITS) return false;                    // full: nothing more changes
+      s->edIdx[s->edN++] = i;
+    }
+    s->edBlk[k] = b;
+    s->dirty = true;
+  }
+  voxSet(x, y, z, b);
+  return true;
+}
+static uint8_t voxSlots() { return vox->free ? VOX_FSLOTS : VOX_SLOTS; }
+static uint8_t voxSlotBlk(uint8_t k) { return vox->free ? VOX_FREE[k] : VOX_SLOT[k]; }
+static bool voxHave(uint8_t k) { return vox->free || vox->bag[k]; }
+
 static bool voxSolid(int x, int y, int z) { uint8_t b = voxGet(x, y, z); return b && b != VB_WATER; }
 
 // ---------------- textures and colours ----------------
@@ -516,17 +550,18 @@ static uint8_t voxAct(uint8_t *got) {
   if (!voxTarget(&h)) return 0;
   if (s->sel == 0) {
     uint8_t b = voxGet(h.x, h.y, h.z);
-    if (b == VB_ROCK) return 3;
-    voxSet(h.x, h.y, h.z, VB_AIR);
+    if (b == VB_ROCK || !voxEdit(h.x, h.y, h.z, VB_AIR)) return 3;
     *got = b;
     s->dug++;
+    if (s->free) return 1;
     if (b >= VB_COAL && b <= VB_GEM) { s->ores[b - VB_COAL]++; s->score += VOX_PTS[b - VB_COAL]; return 1; }
     if (b == VB_GRASS || b == VB_BLOOM) b = VB_DIRT;
     for (uint8_t k = 1; k < VOX_SLOTS; k++) if (VOX_SLOT[k] == b && s->bag[k] < 999) s->bag[k]++;
     return 1;
   }
-  if (!s->bag[s->sel] || h.qy < 1 || h.qy > VOX_H - 2) return 3;
+  if (!voxHave(s->sel) || h.qy < 1 || h.qy > VOX_H - 2) return 3;
   if (voxSolid(h.qx, h.qy, h.qz)) return 3;
+  if (s->free && s->edN >= VOX_EDITS) return 3;
   // inside the player? Only under the feet: then the player goes up a block
   int32_t ox = ((h.qx * 256 + 128 - s->px + 4096) & 8191) - 4096, oz = ((h.qz * 256 + 128 - s->pz + 4096) & 8191) - 4096;
   bool inside = abs(ox) < 128 + VOX_HW && abs(oz) < 128 + VOX_HW && h.qy * 256 < s->py + VOX_PH && h.qy * 256 + 256 > s->py;
@@ -535,8 +570,8 @@ static uint8_t voxAct(uint8_t *got) {
     if (h.qy != (s->py >> 8) || voxBoxHit(s->px, ny, s->pz)) return 3;
     s->py = ny; s->vy = 0;
   }
-  voxSet(h.qx, h.qy, h.qz, VOX_SLOT[s->sel]);
-  s->bag[s->sel]--;
+  if (!voxEdit(h.qx, h.qy, h.qz, voxSlotBlk(s->sel))) return 3;
+  if (!s->free) s->bag[s->sel]--;
   s->placed++;
   return 2;
 }
@@ -576,11 +611,12 @@ static void voxBag(bool choosing, uint32_t now, int32_t left) {
   VoxState *s = vox;
   gfx.gradient(0, VOX_BAR, SCR_W, SCR_H - VOX_BAR, rgb(60, 60, 70), rgb(20, 20, 26));
   gfx.hline(0, VOX_BAR, SCR_W, GREY3);
-  for (uint8_t k = 0; k < VOX_SLOTS; k++) {
-    int16_t x = 3 + k * 31, y = VOX_BAR + 3;
+  for (uint8_t k = 0; k < voxSlots(); k++) {
+    int16_t x = 3 + k * 31 + (s->free ? 3 : 0), y = VOX_BAR + 3;
     bool on = k == s->sel;
     gfx.fill(x, y, 29, 25, on ? rgb(90, 90, 110) : rgb(36, 36, 44));
     if (k == 0) gfx.sprite(x + 7, y + 5, VOX_PICK, 14, "swnN", VOX_PICK_PAL, 1);
+    else if (s->free) voxCube(x + 14, y + 12, 9, VOX_FREE[k]);   // without end: no number
     else {
       voxCube(x + 14, y + 11, 8, VOX_SLOT[k]);
       if (!s->bag[k]) gfx.dim(x, y, 29, 25);
@@ -590,6 +626,7 @@ static void voxBag(bool choosing, uint32_t now, int32_t left) {
     }
     if (on) gfx.frame(x - 1, y - 1, 31, 27, choosing && (now / 200) % 2 ? C::WHITE : C::YELLOW, 2);
   }
+  if (s->free) return;
   // the ore found, the time left
   static const col ORE_C[3] = { rgb(30, 30, 36), rgb(255, 200, 40), rgb(80, 230, 255) };
   for (uint8_t k = 0; k < 3; k++) {
@@ -609,20 +646,84 @@ static void voxBag(bool choosing, uint32_t now, int32_t left) {
 
 struct VoxChip { int16_t x, y, vx, vy; col c; };
 
+/* Free play in flash ("m3w"): the seed, where the player stands and the
+   blocks changed - the rest of the world grows again from the seed.   */
+struct VoxSaveHead { uint8_t magic, sel, look, pad; uint32_t seed; int32_t px, py, pz; int16_t yaw; uint16_t n; };
+#define VOX_SAVE_MAX (sizeof(VoxSaveHead) + VOX_EDITS * 3)
+static void voxKeep() {
+  VoxState *s = vox;
+  uint8_t *buf = (uint8_t *)malloc(VOX_SAVE_MAX);
+  if (!buf) return;
+  VoxSaveHead h = { 0x3D, s->sel, s->look, 0, s->seed, s->px, s->py, s->pz, s->yaw, s->edN };
+  memcpy(buf, &h, sizeof(h));
+  for (uint16_t k = 0; k < s->edN; k++) {
+    uint8_t *e = buf + sizeof(h) + k * 3;
+    e[0] = (uint8_t)s->edIdx[k]; e[1] = (uint8_t)(s->edIdx[k] >> 8); e[2] = s->edBlk[k];
+  }
+  prefs.begin("arcade", false);
+  prefs.putBytes("m3w", buf, sizeof(h) + s->edN * 3);
+  prefs.end();
+  free(buf);
+  s->dirty = false;
+}
+// true: a kept world is there (only looks when s is NULL)
+static bool voxLoad(VoxState *s) {
+  uint8_t *buf = (uint8_t *)malloc(VOX_SAVE_MAX);
+  if (!buf) return false;
+  prefs.begin("arcade", true);
+  size_t n = prefs.getBytes("m3w", buf, VOX_SAVE_MAX);
+  prefs.end();
+  VoxSaveHead h;
+  bool ok = n >= sizeof(h);
+  if (ok) { memcpy(&h, buf, sizeof(h)); ok = h.magic == 0x3D && h.n <= VOX_EDITS && n == sizeof(h) + h.n * 3u; }
+  if (ok && s) {
+    voxGenerate(h.seed);
+    voxStart();
+    s->seed = h.seed;
+    for (uint16_t k = 0; k < h.n; k++) {
+      const uint8_t *e = buf + sizeof(h) + k * 3;
+      uint16_t i = (uint16_t)(e[0] | e[1] << 8);
+      if (i >= VOX_N || e[2] >= 13) continue;
+      s->edIdx[s->edN] = i; s->edBlk[s->edN++] = e[2];
+      s->world[i] = e[2];
+      voxColumn(i & 31, (i >> 5) & 31);
+    }
+    s->px = h.px; s->py = h.py; s->pz = h.pz; s->yaw = h.yaw;
+    s->sel = h.sel < VOX_FSLOTS ? h.sel : 0; s->look = h.look < 4 ? h.look : 1;
+    s->dirty = false;
+  }
+  free(buf);
+  return ok;
+}
+
 void mine3dRun() {
   vox = (VoxState *)malloc(sizeof(VoxState));
   if (!vox) return;
   VoxState *s = vox;
+  bool kept = voxLoad(NULL);
+  static const char *const MODES[3] = { "continue my world", "new world (free play)", "ore hunt (3 min)" };
+  static const char *const MODES_NEW[2] = { "free play: new world", "ore hunt (3 min)" };
+  uint8_t m = kept ? chooseMode("MINE 3D", MODES, 3, rgb(40, 170, 110)) : chooseMode("MINE 3D", MODES_NEW, 2, rgb(40, 170, 110));
+  if (m == 255) { free(vox); vox = NULL; return; }
+  if (!kept) m++;                                                // 0 continue, 1 new world, 2 ore hunt
   voxInit();
   bool again = true;
   while (again) {
     again = false;
-    voxGenerate((uint32_t)random(1, 0x7FFFFFFF));
-    voxStart();
+    s->free = m < 2;
+    s->edN = 0;
+    s->dirty = false;
+    if (m != 0 || !voxLoad(s)) {
+      s->seed = (uint32_t)random(1, 0x7FFFFFFF);
+      voxGenerate(s->seed);
+      voxStart();
+      s->dirty = s->free;                                        // a new world replaces the kept one
+    }
     uint32_t t0 = gameMillis(), next = t0, tapAt = 0, chooseAt = 0, swingUntil = 0, msgUntil = 0, chipUntil = 0, last = t0;
     uint32_t armAt[2] = { 0, 0 };
     bool tapWait = false, choosing = false, over = false, arm[2] = { false, false }, walkHeld[2] = { false, false };
     uint16_t steps = 0;
+    uint32_t keptAt = t0;
     char msg[24] = "";
     col msgC = C::WHITE;
     VoxChip chip[8];
@@ -630,7 +731,8 @@ void mine3dRun() {
     while (poll()) {
       uint32_t now = gameMillis(), dt = now - last;
       last = now;
-      int32_t left = VOX_TIME * 1000 - (int32_t)(now - t0);
+      int32_t left = s->free ? 1 : VOX_TIME * 1000 - (int32_t)(now - t0);
+      if (s->free && s->dirty && now - keptAt > 30000) { voxKeep(); keptAt = now; }   // now and then into the flash
       // UP / DOWN: tapped = look up / down, held = walk
       for (uint8_t k = 0; k < 2; k++) {
         uint8_t key = k ? B_DOWN : B_UP;
@@ -656,7 +758,7 @@ void mine3dRun() {
       if (tapWait && now - tapAt > VOX_DBL) { tapWait = false; act = !over; }
       bool l = btn(B_LEFT), r = btn(B_RIGHT);
       if (choosing) {
-        if (l || r) { s->sel = (uint8_t)((s->sel + (l ? VOX_SLOTS - 1 : 1)) % VOX_SLOTS); chooseAt = now; sfx(700, 10); }
+        if (l || r) { s->sel = (uint8_t)((s->sel + (l ? voxSlots() - 1 : 1)) % voxSlots()); chooseAt = now; sfx(700, 10); }
         if (now - chooseAt > 4000) choosing = false;
       }
       if (act) {
@@ -675,7 +777,10 @@ void mine3dRun() {
             msgUntil = now + 1100;
           }
         } else if (res == 2) sfx(600, 15);
-        else if (res == 3) sfx(150, 40);
+        else if (res == 3) {
+          sfx(150, 40);
+          if (s->free && s->edN >= VOX_EDITS) { snprintf(msg, sizeof(msg), "world is full"); msgC = C::ORANGE; msgUntil = now + 1100; }
+        }
       }
       // the world goes on in fixed steps
       if ((int32_t)(now - next) > 120) next = now - 120;
@@ -704,7 +809,7 @@ void mine3dRun() {
       bool swing = (int32_t)(swingUntil - now) > 0;
       int16_t hx = (int16_t)(236 + (swing ? -14 : 0) + ((DOOM_C(steps * 24) * 4) >> 14)), hy = (int16_t)(VOX_BAR - 50 + (swing ? 10 : 0) + abs(bob));
       if (s->sel == 0) gfx.sprite(hx + 12, hy - 6, VOX_PICK, 14, "swnN", VOX_PICK_PAL, 4);
-      else if (s->bag[s->sel]) voxCube(hx + 40, hy + 30, 26, VOX_SLOT[s->sel]);
+      else if (voxHave(s->sel)) voxCube(hx + 40, hy + 30, 26, voxSlotBlk(s->sel));
       // chips of the block just dug
       if ((int32_t)(chipUntil - now) > 0) {
         for (uint8_t i = 0; i < 8; i++) {
@@ -726,9 +831,8 @@ void mine3dRun() {
       }
       char hint[48];
       if (choosing) {
-        static const char *const NAME[VOX_SLOTS] = { "pick: dig", "dirt", "stone", "sand", "wood", "leaves" };
         gfx.rbox(40, VOX_BAR - 24, 240, 20, 5, C::BLACK);
-        snprintf(hint, sizeof(hint), "< %s >   %s = take", NAME[s->sel], okKeys());
+        snprintf(hint, sizeof(hint), "< %s >   %s = take", VOX_NAME[voxSlotBlk(s->sel)], okKeys());
         gfx.center(VOX_BAR - 19, hint, C::YELLOW, F_SMALL);
       } else if (now - t0 < 7000) {
         gfx.rbox(10, VOX_VY + 4, 300, 30, 5, C::BLACK);
@@ -741,9 +845,19 @@ void mine3dRun() {
         gfx.center(VOX_VY + 50, "TIME UP", C::YELLOW, F_BOLD);
       }
       voxBag(choosing, now, left);
-      statusBar("MINE 3D", s->score, curHigh, rgb(40, 170, 110));
+      if (s->free) {                                             // no score: the title and how full the world is
+        gfx.gradient(0, 0, SCR_W, TOP_H, colLight(rgb(40, 170, 110)), colDark(rgb(40, 170, 110), 2));
+        gfx.textShadow(6, 5, "MINE 3D", C::WHITE, C::BLACK, F_TEXT);
+        snprintf(hint, sizeof(hint), "free play   %u%% built", (unsigned)(s->edN * 100u / VOX_EDITS));
+        gfx.right(SCR_W - 34, 9, hint, C::WHITE, F_SMALL);
+        batIcon(SCR_W - 30, 8);
+      } else statusBar("MINE 3D", s->score, curHigh, rgb(40, 170, 110));
       gfx.send();
       if (over && left < -1500) break;
+    }
+    if (s->free) {                                               // left (or restarted): keep the world
+      if (s->dirty) voxKeep();
+      break;
     }
     if (!over) break;                                            // left from the pause menu
     again = gameOver(s->score);
