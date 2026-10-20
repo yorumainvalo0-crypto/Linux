@@ -149,6 +149,7 @@ void gyroClose() {}
 bool gyroAccel(int16_t a[3]) { if (!simGyro) return false; memcpy(a, simAcc, sizeof(simAcc)); return true; }
 
 static uint8_t lastFrame[SCR_W * SCR_H];
+static int mine3dCols = 0, mine3dDug = 0, mine3dPut = 0;
 void Gfx::begin() {}
 void Gfx::setBacklight(uint8_t) {}
 void Gfx::setOrientation(bool, bool, bool) {}
@@ -160,6 +161,13 @@ void Gfx::send() {
   memcpy(lastFrame, fb, sizeof(fb));
   if (grabNext) { grabNext = 0; captureAt.insert(frames + 3); }
   if (captureAt.count(frames)) writeFrame(fb);
+  if (vox && scenario == "mine3d") {                            // colours in a picture of the game
+    bool u[256] = { false }; int n = 0;
+    for (int i = 0; i < SCR_W * SCR_H; i++) if (!u[fb[i]]) { u[fb[i]] = true; n++; }
+    if (n > mine3dCols) mine3dCols = n;
+    if (vox->dug > mine3dDug) mine3dDug = vox->dug;              // a new round starts from 0 again
+    if (vox->placed > mine3dPut) mine3dPut = vox->placed;
+  }
   for (size_t i = 0; i < captureMs.size(); i++)
     if (clockUs / 1000 >= captureMs[i]) { writeFrame(fb); captureMs.erase(captureMs.begin() + i); break; }
 }
@@ -1285,6 +1293,148 @@ static void boardLogic() {
   }
 }
 
+// Mine 3D: digs a staircase down (looking steeply down), then a tunnel along the ore (looking down a bit)
+static uint32_t m3BotActs = 0;
+static void mine3dBot(uint32_t t) {
+  if (botBusy(t) || !vox) return;
+  bool deep = vox->py < 3 * 256;
+  uint8_t want = deep ? 2 : 3;
+  if (vox->look != want) { botPress(t, vox->look < want ? DN : UP, 40); botFree = t + 250; return; }
+  if (deep && ++m3BotActs % 25 == 0) { botPress(t, RT, 260); return; }   // a bend now and then
+  VoxHit h;
+  if (voxTarget(&h) && voxGet(h.x, h.y, h.z) != VB_ROCK) { botPress(t, OK, 60); botFree = t + 450; return; }
+  botPress(t, UP, 320);
+}
+
+// Mine 3D: rays, digging and building, walking and falling, the world - without the screen
+static void voxFlat() {                                         // bedrock, three layers of stone, air
+  memset(vox->world, 0, sizeof(vox->world));
+  for (int z = 0; z < VOX_W; z++) for (int x = 0; x < VOX_W; x++) {
+    vox->world[voxIdx(x, 0, z)] = VB_ROCK;
+    for (int y = 1; y < 4; y++) vox->world[voxIdx(x, y, z)] = VB_STONE;
+  }
+  for (int z = 0; z < VOX_W; z++) for (int x = 0; x < VOX_W; x++) voxColumn(x, z);
+}
+static void voxPlayer(int32_t x, int32_t y, int32_t z, int16_t yaw, int16_t pitch) {
+  vox->px = x; vox->py = y; vox->pz = z; vox->vy = 0; vox->yaw = yaw; vox->pitch = pitch; vox->ground = true;
+}
+static bool voxHitIs(const VoxHit &h, int x, int y, int z, int qx, int qy, int qz) {
+  bool ok = h.x == x && h.y == y && h.z == z && h.qx == qx && h.qy == qy && h.qz == qz;
+  if (!ok) printf("      hit %d %d %d front %d %d %d\n", h.x, h.y, h.z, h.qx, h.qy, h.qz);
+  return ok;
+}
+static void mine3dLogic() {
+  vox = (VoxState *)malloc(sizeof(VoxState));
+  check("state on the heap", vox != NULL);
+  printf("      state %u bytes\n", (unsigned)sizeof(VoxState));
+  voxInit();
+  VoxHit h;
+  // rays
+  voxFlat();
+  voxSet(10, 4, 12, VB_STONE);
+  check("ray straight ahead hits the block, front face", voxCast(10 * 256 + 128, 4 * 256 + 128, 8 * 256 + 128, 0, 0, 4096, VOX_MAXT, &h) && voxHitIs(h, 10, 4, 12, 10, 4, 11));
+  check("ray down hits the ground's top", voxCast(5 * 256 + 128, 6 * 256 + 150, 5 * 256 + 128, 0, -4096, 0, VOX_MAXT, &h) && voxHitIs(h, 5, 3, 5, 5, 4, 5));
+  voxSet(6, 4, 4, VB_STONE);
+  check("slanted ray: the x face of the right block", voxCast(3 * 256 + 128, 4 * 256 + 128, 3 * 256 + 128, 4096, 0, 2048, VOX_MAXT, &h) && voxHitIs(h, 6, 4, 4, 5, 4, 4));
+  voxSet(6, 4, 4, VB_AIR);
+  voxSet(10, 4, 11, VB_WATER);
+  check("water lets the ray through", voxCast(10 * 256 + 128, 4 * 256 + 128, 8 * 256 + 128, 0, 0, 4096, VOX_MAXT, &h) && voxHitIs(h, 10, 4, 12, 10, 4, 11));
+  voxSet(10, 4, 11, VB_AIR); voxSet(10, 4, 12, VB_AIR); voxSet(10, 4, 15, VB_STONE);
+  check("out of reach: 6.5 blocks", !voxCast(10 * 256 + 128, 4 * 256 + 128, 8 * 256 + 128, 0, 0, 4096, VOX_REACH, &h));
+  check("... seen from 6.5 blocks", voxCast(10 * 256 + 128, 4 * 256 + 128, 8 * 256 + 128, 0, 0, 4096, VOX_MAXT, &h) && h.z == 15);
+  voxSet(1, 4, 20, VB_STONE);
+  check("the world wraps round", voxCast(31 * 256 + 128, 4 * 256 + 128, 20 * 256 + 128, 4096, 0, 0, VOX_MAXT, &h) && voxHitIs(h, 1, 4, 20, 0, 4, 20));
+  voxSet(20, 5, 20, VB_LEAF);
+  check("leaves stop the aim", voxCast(20 * 256 + 128, 5 * 256 + 128, 17 * 256 + 128, 0, 0, 4096, VOX_REACH, &h) && voxHitIs(h, 20, 5, 20, 20, 5, 19));
+  check("up into the sky: nothing", !voxCast(20 * 256 + 128, 8 * 256, 20 * 256 + 128, 300, 4000, 0, VOX_MAXT, &h));
+  // dig and build, looking along +x at eye height
+  voxFlat();
+  voxStart();
+  voxPlayer(8 * 256 + 128, 4 * 256, 8 * 256 + 128, 0, 0);
+  uint8_t got = 0;
+  voxSet(10, 5, 8, VB_GOLD);
+  check("the block in the middle of the view", voxTarget(&h) && voxHitIs(h, 10, 5, 8, 9, 5, 8));
+  uint8_t r = voxAct(&got);
+  check("gold dug: 5 points, counted", r == 1 && got == VB_GOLD && vox->score == 5 && vox->ores[1] == 1 && !voxGet(10, 5, 8) && vox->dug == 1);
+  voxSet(10, 5, 8, VB_STONE);
+  r = voxAct(&got);
+  check("stone dug into the bag", r == 1 && vox->bag[2] == 1 && vox->score == 5 && !voxGet(10, 5, 8));
+  voxSet(10, 5, 8, VB_GRASS); voxAct(&got);
+  check("grass gives dirt", vox->bag[1] == 1);
+  voxSet(10, 5, 8, VB_ROCK);
+  check("bedrock stays", voxAct(&got) == 3 && voxGet(10, 5, 8) == VB_ROCK);
+  voxSet(10, 5, 8, VB_AIR);
+  voxSet(11, 5, 8, VB_DIRT);
+  vox->sel = 2;
+  r = voxAct(&got);
+  check("stone put on the face aimed at", r == 2 && voxGet(10, 5, 8) == VB_STONE && vox->bag[2] == 0 && vox->placed == 1);
+  check("an empty slot puts nothing", voxAct(&got) == 3 && vox->placed == 1);
+  vox->sel = 1;                                                  // dirt under the own feet: lifted
+  voxPlayer(8 * 256 + 128, 4 * 256, 8 * 256 + 128, 0, -256);
+  check("looking down at the ground", voxTarget(&h) && voxHitIs(h, 8, 3, 8, 8, 4, 8));
+  r = voxAct(&got);
+  check("a block under the feet lifts the player", r == 2 && voxGet(8, 4, 8) == VB_DIRT && vox->py == 5 * 256 && !voxBoxHit(vox->px, vox->py, vox->pz));
+  vox->bag[1] = 1;                                               // no room above the head: refused
+  voxSet(8, 4, 8, VB_AIR); voxSet(8, 6, 8, VB_STONE);
+  voxPlayer(8 * 256 + 128, 4 * 256, 8 * 256 + 128, 0, -256);
+  check("no lift under a roof", voxAct(&got) == 3 && vox->py == 4 * 256 && voxGet(8, 4, 8) == VB_AIR);
+  // walking, falling, steps, water
+  voxFlat();
+  voxPlayer(8 * 256 + 128, 9 * 256, 8 * 256 + 128, 0, 0);
+  vox->ground = false;
+  for (int i = 0; i < 80; i++) voxTick(0);
+  check("falls and lands on the ground", vox->py == 4 * 256 && vox->ground && vox->vy == 0);
+  for (int z = 0; z < VOX_W; z++) { voxSet(11, 4, z, VB_STONE); voxSet(11, 5, z, VB_STONE); }
+  for (int i = 0; i < 60; i++) voxTick(1);
+  printf("      at the wall: x %.2f\n", vox->px / 256.0);
+  check("a wall two blocks high stops the walk", vox->py == 4 * 256 && vox->px > 11 * 256 - VOX_HW - 26 && vox->px < 11 * 256 - VOX_HW);
+  for (int z = 0; z < VOX_W; z++) { voxSet(11, 5, z, VB_AIR); for (int x = 12; x < 16; x++) voxSet(x, 4, z, VB_STONE); }
+  for (int i = 0; i < 60; i++) voxTick(1);
+  printf("      over the step: x %.2f y %.2f\n", vox->px / 256.0, vox->py / 256.0);
+  check("a step of one block is jumped", vox->py == 5 * 256 && vox->px > 12 * 256);
+  voxPlayer(31 * 256 + 200, 4 * 256, 3 * 256 + 128, 0, 0);
+  for (int i = 0; i < 6; i++) voxTick(1);
+  check("walks round the edge of the world", vox->px < 256 && vox->py == 4 * 256);
+  voxPlayer(20 * 256 + 128, 4 * 256, 20 * 256 + 128, 512, 0);
+  for (int i = 0; i < 20; i++) voxTick(-1);
+  check("DOWN walks back", vox->px > 21 * 256);
+  for (int z = 0; z < VOX_W; z++) for (int x = 0; x < VOX_W; x++) for (int y = 4; y < 8; y++) voxSet(x, y, z, VB_WATER);
+  voxPlayer(5 * 256 + 128, 4 * 256, 5 * 256 + 128, 0, 0);
+  for (int i = 0; i < 40; i++) voxTick(1);
+  check("UP swims up in water", vox->py > 5 * 256);
+  // the world from seeds
+  int bad = 0, cnt[13] = { 0 };
+  for (uint32_t seed = 1; seed <= 20; seed++) {
+    voxGenerate(seed * 7919);
+    voxStart();
+    for (int i = 0; i < VOX_N; i++) cnt[vox->world[i]]++;
+    for (int z = 0; z < VOX_W; z++) for (int x = 0; x < VOX_W; x++) {
+      if (vox->world[voxIdx(x, 0, z)] != VB_ROCK) bad++;
+      uint8_t t = vox->top[z * VOX_W + x];
+      if (t < 1 || t > VOX_H || (t < VOX_H && voxSolid(x, t, z)) || !voxSolid(x, t - 1, z)) bad++;
+    }
+    if (voxBoxHit(vox->px, vox->py, vox->pz) || !voxBoxHit(vox->px, vox->py - 1, vox->pz)) { bad++; printf("      seed %u: spawn not on the ground\n", seed); }
+  }
+  printf("      20 worlds: coal %d gold %d crystal %d wood %d leaves %d water %d sand %d flowers %d air %d\n", cnt[VB_COAL] / 20,
+         cnt[VB_GOLD] / 20, cnt[VB_GEM] / 20, cnt[VB_WOOD] / 20, cnt[VB_LEAF] / 20, cnt[VB_WATER] / 20, cnt[VB_SAND] / 20, cnt[VB_BLOOM] / 20, cnt[0] / 20);
+  check("worlds: bedrock floor, heights right, spawn on the ground", bad == 0);
+  check("worlds: every kind of block", cnt[VB_COAL] > 20 * 40 && cnt[VB_GOLD] > 20 * 10 && cnt[VB_GEM] > 20 * 5 && cnt[VB_WOOD] > 20 * 12 &&
+        cnt[VB_LEAF] > 20 * 60 && cnt[VB_WATER] > 0 && cnt[VB_SAND] > 0 && cnt[VB_BLOOM] > 0 && cnt[VB_GRASS] > 0 && cnt[VB_DIRT] > 0);
+  static uint8_t a[VOX_N];
+  voxGenerate(4242); memcpy(a, vox->world, VOX_N); voxGenerate(4243);
+  bool differ = memcmp(a, vox->world, VOX_N) != 0;
+  voxGenerate(4242);
+  check("one seed, one world; another seed, another", differ && !memcmp(a, vox->world, VOX_N));
+  // the cost of a picture: DDA steps per frame at the start, all round
+  voxStart();
+  voxSteps = voxRays = voxFrames = voxStepsMax = 0;
+  for (int k = 0; k < 16; k++) for (int p = 0; p < 4; p++) voxRender(vox->px, voxEyeY(), vox->pz, (int16_t)(k * 64), VOX_PITCH[p], -1, 0);
+  printf("      64 views at the start: %u DDA steps per frame (max %u), %u rays\n", voxSteps / voxFrames, voxStepsMax, voxRays / voxFrames);
+  check("a picture costs less than 30 steps per ray", voxStepsMax < 30u * VOX_RW * VOX_RH);
+  free(vox);
+  vox = NULL;
+}
+
 int main(int argc, char **argv) {
   scenario = argc > 1 ? argv[1] : "menu";
   srand(1);
@@ -1359,6 +1509,24 @@ int main(int argc, char **argv) {
     press(t + 300, RT, 900); press(t + 1400, OK, 80); press(t + 1900, DN); press(t + 2400, UP);
     for (uint32_t k = t + 3000; k < simEnd; k += 1100) press(k, OK, 80);
     autoplay = true; autoplayFrom = t + 3000; captureAt = { 300, 900 };
+  } else if (scenario == "mine3d") {
+    uint32_t t = openGameNamed("Mine 3D", M); simEnd = t + 186000;
+    press(t + 300, UP, 1300);                                    // walk
+    press(t + 1800, RT, 450);                                    // turn
+    press(t + 2500, DN, 40); press(t + 2900, DN, 40);            // look down, steep down
+    for (uint32_t k = t + 3300; k < t + 5000; k += 650) press(k, OK, 60);   // dig
+    press(t + 5400, OK, 60); press(t + 5560, OK, 60);            // double OK: the bag
+    press(t + 6000, RT); press(t + 6300, RT); press(t + 6700, OK, 60);      // stone, take it
+    press(t + 7000, OK, 60); press(t + 7160, OK, 60);            // the bag again
+    press(t + 7500, LT); press(t + 7800, OK, 60);                // dirt
+    press(t + 8100, UP, 40);                                     // look down less
+    press(t + 8400, OK, 60); press(t + 9000, OK, 60);            // build
+    press(t + 9700, OK, 60); press(t + 9860, OK, 60); press(t + 10200, LT); press(t + 10500, OK, 60);   // the pick again
+    press(t + 10900, UP, 40);                                    // look level
+    press(t + 11300, LT, 900); press(t + 12400, UP, 2000);       // turn, walk on
+    simBot = mine3dBot; botFrom = t + 14600;                     // then dig for ore
+    captureMs = { t + 6100, t + 9600, t + 12000, t + 20000, t + 60000 };   // the bag, building, the view, a pit, ore
+    setenv("GRAB", "TIME UP", 1);
   } else if (scenario == "tunnel") {
     uint32_t t = openGameNamed("Tunnel 3D", M); simEnd = t + 90000;
     autoplay = true; autoplayFrom = t + 300; captureAt = { 280 };
@@ -1587,6 +1755,10 @@ int main(int argc, char **argv) {
     press(t + 20000, OK, 80);                                    // Chess again
     press(t + 21000, OK, 80);                                    // continue saved game
     captureMs = { t + 20600, t + 23000 };
+  } else if (scenario == "mine3dlogic") {
+    printf("== %s\n", scenario.c_str());
+    mine3dLogic();
+    return failures ? 1 : 0;
   } else if (scenario == "chesslogic") {
     printf("== %s\n", scenario.c_str());
     chessLogic();
@@ -1636,6 +1808,16 @@ int main(int argc, char **argv) {
   if (scenario == "cave")      { check("cave ran", seen("CAVE") && seen("hold UP to fly")); check("cave: game over reached", overShown); }
   if (scenario == "doom")      check("doom ran to game over", seen("DOOM") && seen("HEALTH") && overShown);
   if (scenario == "mine")      check("mine ran, blocks dug", seen("MINE") && seen("BAG 1"));
+  if (scenario == "mine3d") {
+    printf("      dug %d, put %d, best %u (y %.1f)\n", mine3dDug, mine3dPut, simNvsU16["hMN3"], vox->py / 256.0);
+    printf("      %u frames drawn: %u DDA steps per frame on average, %u at most, %u rays\n", voxFrames, voxSteps / voxFrames, voxStepsMax, voxRays / voxFrames);
+    printf("      colours in one picture: up to %d\n", mine3dCols);
+    check("mine 3d ran, blocks dug and put", seen("MINE 3D") && mine3dDug >= 3 && mine3dPut >= 1);
+    check("the bag was opened", seen("< stone >   UP+DOWN = take") && seen("< dirt >   UP+DOWN = take"));
+    check("the picture uses many colours", mine3dCols >= 40);
+    check("the time ran out, game over", seen("TIME UP") && overShown);
+    check("ore found: points kept as the best", simNvsU16["hMN3"] > 0);
+  }
   if (scenario == "tunnel")    check("tunnel ran to game over", seen("TUNNEL") && seen("SPEED") && overShown);
   if (scenario == "pacman")    check("pac-man ran to game over", seen("PAC-MAN") && seen("READY!") && overShown);
   if (scenario == "bomber")    check("bomberman ran to its end", seen("BOMBERMAN") && seen("BOMBER") && overShown &&
