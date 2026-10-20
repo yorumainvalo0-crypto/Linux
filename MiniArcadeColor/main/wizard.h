@@ -17,6 +17,7 @@ static uint8_t  liveU[sizeof(PINS_ALL)], liveD[sizeof(PINS_ALL)];
 static int16_t  baseMv[sizeof(PINS_ALL)], liveMv[sizeof(PINS_ALL)];
 static bool     blocked[sizeof(PINS_ALL)], mvNoisy[sizeof(PINS_ALL)];
 static int16_t  seenMv = -1;                 // voltage of the key just found (ladder)
+static int16_t  plainAgain = -1;             // a pin without ADC pressed again: no ladder there
 
 static bool candAdc(uint8_t i) { return adcPin(CAND[i]) && CAND[i] != batPin; }   // the battery is no key
 
@@ -58,7 +59,10 @@ static int8_t scanKey(const bool *used, uint8_t *act) {
   readAll(INPUT_PULLDOWN, liveD);
   int8_t hit = -1;
   uint8_t cnt = 0;
+  plainAgain = -1;
   for (uint8_t i = 0; i < CAND_N; i++) {
+    if (used[i] && !blocked[i] && mvNoisy[i] && ((liveU[i] == LOW && baseU[i] == HIGH) || (liveD[i] == HIGH && baseD[i] == LOW)))
+      plainAgain = CAND[i];
     if (used[i] || blocked[i]) continue;
     bool volts = !mvNoisy[i];                                // ADC pin: measured, not just high/low
     if (volts && abs(liveMv[i] - baseMv[i]) > 300) {
@@ -97,6 +101,15 @@ static void wizScreen(const char *msg, uint8_t step, int8_t seen, uint8_t act, i
   else if (secs >= 0) snprintf(b, sizeof(b), "no OK key? skipped in %d s", secs);
   else snprintf(b, sizeof(b), "waiting...");
   gfx.center(176, b, C::LTGREY);
+  if (plainAgain >= 0) {                                     // several keys on a pin that cannot measure
+    snprintf(b, sizeof(b), "GPIO%d has a key already and", plainAgain);
+    gfx.center(190, b, C::ORANGE, F_SMALL);
+#if CONFIG_IDF_TARGET_ESP32S3
+    gfx.center(200, "cannot measure volts: ladder on GPIO1..10", C::ORANGE, F_SMALL);
+#else
+    gfx.center(200, "cannot measure volts: ladder on GPIO0..3", C::ORANGE, F_SMALL);
+#endif
+  }
   // live pin map
   for (uint8_t i = 0; i < CAND_N; i++) {
     int16_t x = 6 + i * (308 / CAND_N);

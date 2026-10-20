@@ -216,6 +216,11 @@ int main(int argc, char **argv) {
     press(10500, 2 << 4, 120);                                   // DOWN: Snake -> Tetris
     script.push_back({ 11500, 1 << 4 }); script.push_back({ 11520, 5 << 4 }); script.push_back({ 11700, 0 });
     simEnd = 13500;
+  } else if (scenario == "plain2") {
+    // two keys on GPIO6, which has no ADC: the wizard says so
+    simNvsU16.erase("pset");
+    press(2500, RT, 400); press(3300, RT, 600);
+    simEnd = 4500;
   } else if (scenario == "tilt") {
     // settings -> tilt control on: sensor found, axes learned; then Snake steered by tilting
     simGyro = true; simNvsU16["snd"] = 255;                      // GPIO7 is the gyroscope's here
@@ -253,6 +258,7 @@ int main(int argc, char **argv) {
     check("tilt control switched on", cfgTilt);
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
   }
+  if (scenario == "plain2")    check("hint: no ladder on a pin without ADC", seen("cannot measure volts: ladder on GPIO0..3") && BTN_PIN[0] == 6);
   if (scenario == "ladder4") {
     printf("   keys: %u/%u %u/%u %u/%u %u/%u OK %u/%u\n", BTN_PIN[0], BTN_MV[0], BTN_PIN[1], BTN_MV[1],
            BTN_PIN[2], BTN_MV[2], BTN_PIN[3], BTN_MV[3], BTN_PIN[4], BTN_MV[4]);
@@ -269,7 +275,7 @@ int main(int argc, char **argv) {
     check("RIGHT on its own pin", BTN_PIN[3] == 6 && !BTN_MV[3]);
     check("LEFT+RIGHT opened a game", seen("SNAKE"));
   }
-  check("sounds played", scenario == "wizard" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
+  check("sounds played", scenario == "wizard" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }
