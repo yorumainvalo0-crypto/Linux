@@ -24,7 +24,7 @@ static long     toneCount = 0;
 static std::set<std::string> seenTexts;
 static std::string scenario;
 static const uint8_t KEYS[4] = { 1, 2, 3, 6 };   // UP DOWN LEFT RIGHT, active high
-static const uint8_t SND = 7, BAT = 0;
+static const uint8_t SND = 7, BAT = 4;
 struct KeyEv { uint32_t t; uint8_t mask; };
 static std::vector<KeyEv> script;
 static std::set<long> captureAt;
@@ -117,16 +117,16 @@ static void writeFrame(const uint8_t *fb) {
 }
 
 // the school wiring, as if the panel had answered
-TftPins tftPins = { 8, 9, 21, 4, 20, 5 };
+TftPins tftPins = { 8, 10, 21, 0, 9, 5 };
 bool tftFound = true;
 bool tftPinUsed(uint8_t p) {
   const TftPins &t = tftPins;
   return p == t.sck || p == t.mosi || p == t.cs || p == t.dc || p == t.miso || p == t.rst;
 }
 
-// the gyroscope: a sensor on GPIO10 (SDA) / GPIO7 (SCL) in the "tilt" scenario
+// the gyroscope: a sensor on GPIO20 (SDA) / GPIO7 (SCL) in the "tilt" scenario
 static bool    simGyro = false;
-bool gyroOpen(int8_t sda, int8_t scl) { return simGyro && sda == 10 && scl == 7; }
+bool gyroOpen(int8_t sda, int8_t scl) { return simGyro && sda == 20 && scl == 7; }
 void gyroClose() {}
 bool gyroAccel(int16_t a[3]) { if (!simGyro) return false; memcpy(a, simAcc, sizeof(simAcc)); return true; }
 
@@ -263,7 +263,7 @@ int main(int argc, char **argv) {
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);
-    check("sensor found on GPIO10 / GPIO7", gyroReady && gyroSda == 10 && gyroScl == 7);
+    check("sensor found on GPIO20 / GPIO7", gyroReady && gyroSda == 20 && gyroScl == 7);
     check("right = x, away = -y", tiltAx[0] == 0x00 && tiltAx[1] == 0x81);
     check("tilt control switched on", cfgTilt);
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);

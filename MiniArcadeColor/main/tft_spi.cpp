@@ -183,7 +183,8 @@ static bool search(TftPins &out, bool full) {
 #if CONFIG_IDF_TARGET_ESP32S3
     { 12, 11, 10, 9 },
 #else
-    { 8, 9, 21, 4 },                                     // the school plan
+    { 8, 10, 21, 0 },                                    // the school plan
+    { 8, 9, 21, 4 },
     { 6, 7, 10, 5 },                                     // MiniArcade Color 0.1
 #endif
   };
