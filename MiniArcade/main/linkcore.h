@@ -33,9 +33,11 @@ enum LkType  : uint8_t { LK_BEACON = 1, LK_INVITE, LK_ANSWER, LK_MOVE, LK_ACK, L
 enum LkState : uint8_t { LK_LOBBY, LK_INVITING, LK_INVITED, LK_PLAYING, LK_OVER };
 enum LkEnd   : uint8_t { LKE_NONE, LKE_DECLINED, LKE_BUSY, LKE_TIMEOUT, LKE_GONE, LKE_LEFT, LKE_ERROR };
 enum LkGame  : uint8_t { LKG_C4 = 1, LKG_TTT = 2, LKG_PONG = 3, LKG_SNAKE = 4, LKG_PAC = 5, LKG_SHIP = 6,
-                         LKG_DAME = 7, LKG_MAU = 8, LKG_BOMB = 9, LKG_LAST = LKG_BOMB };
+                         LKG_DAME = 7, LKG_MAU = 8, LKG_BOMB = 9, LKG_LAST = LKG_BOMB,
+                         LKG_CHESS = 10 };   // colour console only: LKG_LAST stays the OLED console's last game
 #define LK_CAPS 126           // beacon flags: 2 = Pong and Snake, 4 = Pac-Man, 8 = Battleship,
                               // 16 = Checkers, 32 = Mau-Mau, 64 = Bomberman
+#define LK_CAP_CHESS 128      // beacon flag of a console that plays Chess (the colour console)
 
 struct __attribute__((packed)) LkPacket {
   char     m0, m1;                    // 'M' 'A'
@@ -43,7 +45,7 @@ struct __attribute__((packed)) LkPacket {
   uint16_t sid;                       // session id, chosen by the challenger
   uint8_t  seq;                       // move number
   uint8_t  arg;                       // move, game or answer
-  uint8_t  flags;                     // beacon: 1 = in a game, 2 / 4 = knows more games (LK_CAPS)
+  uint8_t  flags;                     // beacon: 1 = in a game, 2 / 4 = knows more games (LK_CAPS, LK_CAP_CHESS)
                                       // invite: 1 = challenger starts
   char     name[LK_NAME];
 };
@@ -68,7 +70,7 @@ struct LkPeer {
   char     name[LK_NAME + 1];
   char     code[5];                   // short id derived from the chip, e.g. "K7F2"
   bool     busy;
-  uint8_t  caps;                      // games its firmware knows beyond the first two (LK_CAPS bits)
+  uint8_t  caps;                      // games its firmware knows beyond the first two (LK_CAPS / LK_CAP_CHESS bits)
   uint16_t sid;                       // session the peer is in (from its beacon)
   int8_t   rssi;
   uint32_t seen;                      // ms of the last packet
@@ -86,6 +88,7 @@ public:
   bool     iStart = false;           // who makes the first move
   LkPeer   opp;                      // the other player of the current session
   uint32_t deadline = 0;             // end of the 30 s for a challenge
+  uint8_t  caps = LK_CAPS;           // games we offer in the beacon (the colour console adds LK_CAP_CHESS)
 
   /* short id from the chip's MAC: 4 characters, no 0/O or 1/I mix-ups */
   static void codeOf(const uint8_t *mac, char *out) {
@@ -180,6 +183,7 @@ public:
     case LKG_DAME: return 16;
     case LKG_MAU:  return 32;
     case LKG_BOMB: return 64;
+    case LKG_CHESS: return LK_CAP_CHESS;
     default:       return 0;
     }
   }
@@ -276,7 +280,7 @@ public:
       nextBeacon = now + LK_BEACON_MS;
       LkPacket p = pkt(LK_BEACON);
       bool inGame = state == LK_PLAYING || (state == LK_OVER && !delivered());
-      p.flags = ((inGame || state == LK_INVITING || state == LK_INVITED) ? 1 : 0) | LK_CAPS;
+      p.flags = ((inGame || state == LK_INVITING || state == LK_INVITED) ? 1 : 0) | (caps & 0xFE);
       p.sid = inGame ? sid : 0;
       tx(txCtx, NULL, (const uint8_t *)&p, sizeof(p));
     }
@@ -399,7 +403,7 @@ private:
     pe->name[LK_NAME] = 0;
     for (uint8_t i = 0; i < LK_NAME; i++)            // only plain characters on screen
       if (pe->name[i] && (pe->name[i] < ' ' || pe->name[i] > '~')) pe->name[i] = '?';
-    if (p.type == LK_BEACON) { pe->busy = p.flags & 1; pe->caps = p.flags & LK_CAPS; pe->sid = p.sid; }
+    if (p.type == LK_BEACON) { pe->busy = p.flags & 1; pe->caps = p.flags & 0xFE; pe->sid = p.sid; }
     pe->rssi = rssi;
     pe->seen = now;
     return pe;

@@ -71,8 +71,10 @@ int simAdcRaw(int ch) {
   if (down) return 5;
   return 300 + (int)(clockUs / 1000 % 400);                    // floating pin: drifts
 }
+static std::map<std::string, uint32_t> textAt;   // when a text was drawn last (ms)
 void arcadeTraceStr(const char *s) {
   seenTexts.insert(s);
+  textAt[s] = (uint32_t)(clockUs / 1000);
   const char *mark = getenv("GRAB");
   static bool grabbed = false;                                   // only the first time
   if (mark && !grabbed && strstr(s, mark)) { grabNext = 1; grabbed = true; }
@@ -449,6 +451,267 @@ static void chessLogic() {
   check("king and bishop against king is a draw", chTooLittle(p));
 }
 
+// ---------------- online (multiplayer.h) against ANNA, the bot console of link.h ----------------
+static bool recent(const char *s) {                             // on the screen right now
+  auto it = textAt.find(s);
+  return it != textAt.end() && it->second + 60 >= clockUs / 1000;
+}
+static bool mpInList() { return recent("OK = your name   hold OK = back") || recent("OK = challenge   RIGHT = friend   hold OK = back"); }
+
+// ANNA's side of Chess: random legal moves, the same two byte moves as ours
+static ChPos    cpPos;
+static ChMove   cpMoves[220];
+static int      cpN = 0, cpPlies = 0, cpBad = 0;
+static int16_t  cpFirst = -1;
+static uint16_t cpSid = 0;
+static uint8_t  cpQ[2], cpQn = 0;
+static bool     cpDone = false;
+static uint32_t cpNext = 0;
+static void chessPeer(uint32_t now) {
+  LinkCore &B = simPeer;
+  if (B.game != LKG_CHESS) return;
+  if (B.session() != cpSid) {                                   // a new game
+    cpSid = B.session(); chStart(cpPos); cpN = chMoves(cpPos, cpMoves);
+    cpFirst = -1; cpQn = 0; cpPlies = 0; cpDone = false; cpNext = now + 600;
+  }
+  uint8_t m;
+  if (B.moveIn(&m)) {
+    if (cpFirst < 0) cpFirst = m;
+    else {
+      ChMove mv;
+      if (!mpChessDec(cpMoves, cpN, (uint8_t)cpFirst, m, &mv)) { printf("      bot: chess move %d %u not legal\n", cpFirst, m); cpBad++; }
+      else { chPlay(cpPos, mv); cpN = chMoves(cpPos, cpMoves); cpPlies++; }
+      cpFirst = -1; cpNext = now + 400;
+    }
+  }
+  bool mine = (bool)cpPos.white == B.iStart;
+  if (!cpDone && cpN && mine && !cpQn && now >= cpNext) {
+    ChMove mv = cpMoves[rand() % cpN];
+    mpChessEnc(mv, cpQ); cpQn = 2;
+    chPlay(cpPos, mv); cpN = chMoves(cpPos, cpMoves); cpPlies++;
+  }
+  if (cpQn && B.sendMove(cpQ[0], now)) { cpQ[0] = cpQ[1]; cpQn--; }
+  if (!cpDone && !cpQn && (!cpN || cpPos.half >= 100 || chTooLittle(cpPos))) { cpDone = true; simBotGames++; B.finish(); }
+}
+
+// our side of each game, through the keys
+static void bshipBot(uint32_t t);                               // the local games' bots, below
+static void maumauBot(uint32_t t);
+static int  mpChSame = -1;                                     // chess: both boards the same when we left
+static void mpPlayRandom(uint32_t t, bool ok) {                 // arrows (and OK) at random
+  static const uint8_t K[5] = { UP, DN, LT, RT, OK };
+  botPress(t, K[rand() % (ok ? 5 : 4)], 60);
+}
+static void mpPlayCheckers(uint32_t t) {
+  uint8_t me = ckV.flip ? 1 : 0;
+  if (ck.winner || ck.turn != me || ckV.fp) return;
+  uint32_t r = 12345 + ck.quiet * 7 + ck.count(0) * 131;
+  CkStep st = ck.best(1, r);
+  int8_t want = (ckSel == st.from) ? Checkers::next(st.from, st.dir, st.jump ? 2 : 1) : (int8_t)st.from;
+  int8_t c, rr = Checkers::rc((uint8_t)want, &c);
+  if (ckV.flip) { rr = 7 - rr; c = 7 - c; }
+  int cr = ckCur / 8, cc = ckCur % 8;
+  if (rr != cr) botPress(t, rr > cr ? DN : UP, 60);
+  else if (c != cc) botPress(t, c > cc ? RT : LT, 60);
+  else botPress(t, OK, 120);
+}
+static void mpPlayChess(uint32_t t) {
+  if (!mpCh) return;
+  if (recent("PROMOTE")) { botPress(t, OK, 80); return; }
+  MpChess &g = *mpCh;
+  if ((bool)g.pos.white == g.black || !g.n) return;             // not our go
+  if (cpPlies >= 40 && mpChSame < 0) {                          // enough: both boards the same? then leave
+    mpChSame = !memcmp(g.pos.b, cpPos.b, 64) && g.pos.white == cpPos.white && g.pos.castle == cpPos.castle && g.pos.ep == cpPos.ep;
+    botPress(t, OK, 1000);
+    return;
+  }
+  static ChMove pick;
+  static int pickAt = -1;
+  if (pickAt != cpPlies) { pick = g.moves[rand() % g.n]; pickAt = cpPlies; }
+  int sq = g.sel == pick.from ? pick.to : pick.from, r = sq / 8, c = sq % 8;
+  if (g.black) { r = 7 - r; c = 7 - c; }
+  if (r != g.cr) botPress(t, r > g.cr ? DN : UP, 60);
+  else if (c != g.cc) botPress(t, c > g.cc ? RT : LT, 60);
+  else botPress(t, OK, 100);
+}
+static void mpPlay(uint32_t t) {
+  switch (linkCore().game) {
+  case LKG_C4: case LKG_TTT: mpPlayRandom(t, true); break;
+  case LKG_SHIP: if (recent("UP = mix")) botPress(t, OK, 80); else bshipBot(t); break;
+  case LKG_DAME: mpPlayCheckers(t); break;
+  case LKG_MAU:  maumauBot(t); break;
+  case LKG_CHESS: mpPlayChess(t); break;
+  case LKG_BOMB: mpPlayRandom(t, rand() % 6 == 0); break;
+  default: mpPlayRandom(t, false); break;                       // Pong, Snake, Pac-Man: arrows
+  }
+}
+
+/* The driver: does what a player in the lobby does, one step after the
+   other, each when the screen for it is up. mpSteps is the plan:
+   'n' rename, 'f' ANNA as a friend, 'c' + game: challenge ANNA (and play),
+   'i' + game: ANNA challenges us, 'a' accept it (and play), 'd' decline,
+   'x' / 'y' ANNA will say no / yes, 'q' leave the lobby. A game is
+   '0' + its number (Chess ':').                                        */
+static std::string mpSteps;
+static size_t   mpStep = 0;
+static uint32_t mpWait = 0;
+static int      mpInvited = 0;                                  // ANNA's challenges we saw
+static void onlineDriver(uint32_t t) {
+  if (mpStep && mpStep >= mpSteps.size() && !simOpen) {         // all done and left: the end
+    if (!simEnd || simEnd > t + 800) simEnd = t + 800;
+    return;
+  }
+  if (botBusy(t) || t < mpWait || !simOpen) return;
+  LinkCore &L = linkCore();
+  if (L.state == LK_PLAYING) { mpPlay(t); return; }
+  if (mpStep >= mpSteps.size()) return;
+  char s = mpSteps[mpStep];
+  uint8_t game = mpStep + 1 < mpSteps.size() ? (uint8_t)(mpSteps[mpStep + 1] - '0') : 0;
+  if (s == 'a' || s == 'd') {                                   // ANNA's challenge
+    if (L.state != LK_INVITED || !recent("wants to play")) return;
+    mpInvited++;
+    botPress(t, s == 'a' ? OK : LT, 80);
+    mpStep++; mpWait = t + 1500;
+    return;
+  }
+  if (!mpInList() || L.state != LK_LOBBY || !L.peerCount()) return;
+  if (s == 'x' || s == 'y') { simBotAnswer = s == 'y'; mpStep++; return; }
+  if (s == 'i') { simBotGame = game; simBotInviteAt = linkNow() + 300; mpStep += 2; return; }
+  bool own = recent("OK = your name   hold OK = back");
+  if (s == 'n') {                                               // own row: OK, one letter up, OK
+    if (!own) { botPress(t, UP, 60); return; }
+    press(t + 1, OK, 80); press(t + 600, UP); press(t + 1000, OK, 80);
+    mpStep++; mpWait = t + 2000;
+  } else if (s == 'f' || s == 'c') {
+    if (own) { botPress(t, DN, 60); return; }
+    if (s == 'f') { botPress(t, RT, 60); mpStep++; mpWait = t + 400; return; }
+    press(t + 1, OK, 80);                                       // the game list, then the game
+    uint32_t k = t + 700;
+    for (uint8_t i = 1; i < game; i++, k += 250) press(k, DN);
+    press(k, OK, 80);
+    mpStep += 2; mpWait = k + 1200;
+  } else if (s == 'q') {
+    botPress(t, OK, 1100);                                      // hold OK: back to the games
+    mpStep++;
+  }
+}
+
+// one game online from the lobby to its end
+static void onlineGame(uint8_t game, uint32_t t) {
+  mpSteps = std::string("c") + (char)('0' + game) + "q";
+  simBot = onlineDriver; botFrom = t;
+  simBotOther = chessPeer;
+  simPeer.caps = LK_CAPS | LK_CAP_CHESS;                        // ANNA is a colour console here
+}
+
+/* The chess moves on the protocol: two consoles (LinkCore) on a radio that
+   loses a third of the packets; a random game, each move as its two
+   bytes. Every move must arrive whole and in order: the boards stay equal. */
+struct LkNode { LinkCore c; uint8_t mac[6]; std::vector<std::vector<uint8_t>> in; };
+static LkNode   lkA, lkB;
+static uint32_t lkNow = 0;
+static void lkSend(void *ctx, const uint8_t *, const uint8_t *d, uint8_t n) {
+  LkNode *to = (LkNode *)ctx == &lkA ? &lkB : &lkA;
+  if (rand() % 100 < 33) return;                                // lost on the way
+  to->in.push_back(std::vector<uint8_t>(d, d + n));
+}
+static void lkRun(uint32_t ms) {
+  for (uint32_t k = 0; k < ms; k += 10) {
+    lkNow += 10;
+    LkNode *n[2] = { &lkA, &lkB }, *o[2] = { &lkB, &lkA };
+    for (int i = 0; i < 2; i++) {
+      std::vector<std::vector<uint8_t>> in;
+      in.swap(n[i]->in);
+      for (auto &p : in) n[i]->c.onPacket(o[i]->mac, p.data(), (int)p.size(), -50, lkNow);
+    }
+    lkA.c.tick(lkNow); lkB.c.tick(lkNow);
+  }
+}
+static void chessProtocol() {
+  // every legal move of some positions (castling, en passant, promotions) there and back
+  const char *FEN[] = { "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -",
+                        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -",
+                        "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq -",
+                        "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 b kq -",
+                        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - -" };
+  int moves = 0, promos = 0, bad = 0;
+  for (const char *f : FEN) {
+    ChPos p;
+    ChMove m[220], got;
+    if (!chFromFen(p, f)) { bad++; continue; }
+    int n = chMoves(p, m);
+    for (int i = 0; i < n; i++) {
+      uint8_t b[2];
+      mpChessEnc(m[i], b);
+      bool ok = b[0] < 64 && (m[i].promo || b[1] < 64) && mpChessDec(m, n, b[0], b[1], &got) &&
+                got.from == m[i].from && got.to == m[i].to && got.promo == m[i].promo;
+      if (!ok) bad++;
+      moves++;
+      if (m[i].promo) promos++;
+    }
+    if (n) {                                                    // what is no move is refused
+      uint8_t b[2];
+      mpChessEnc(m[0], b);
+      if (mpChessDec(m, n, 64 + b[0], b[1], &got)) bad++;       // from off the board
+      if (!m[0].promo && mpChessDec(m, n, b[0], b[1] | 0x40, &got)) bad++;   // a promotion that is none
+      if (mpChessDec(m, n, b[0], b[0], &got)) bad++;                     // to the square it stands on
+    }
+  }
+  printf("      %d moves (%d promotions) coded and back, %d wrong\n", moves, promos, bad);
+  check("every chess move survives the two bytes", moves > 100 && promos >= 8 && !bad);
+
+  // two consoles: the chess flag in the beacon, the challenge, a game on a lossy radio
+  static const uint8_t MA[6] = { 0x24, 0x6F, 0x28, 0x10, 0x20, 1 }, MB[6] = { 0x24, 0x6F, 0x28, 0x10, 0x20, 2 };
+  memcpy(lkA.mac, MA, 6); memcpy(lkB.mac, MB, 6);
+  lkA.c.begin(MA, "AAA", lkSend, &lkA, 0, 11);
+  lkB.c.begin(MB, "BBB", lkSend, &lkB, 0, 22);
+  lkRun(3000);
+  check("a console without Chess does not offer it", lkA.c.peerCount() == 1 && !(lkA.c.peer(0).caps & LK_CAP_CHESS) &&
+                                                      (lkA.c.peer(0).caps & LK_CAPS) == LK_CAPS);
+  lkB.c.caps = LK_CAPS | LK_CAP_CHESS;
+  lkA.c.caps = LK_CAPS | LK_CAP_CHESS;
+  lkRun(3000);
+  check("the colour console's beacon says Chess", lkA.c.peer(0).caps & LK_CAP_CHESS);
+  lkA.c.invite(0, LKG_CHESS, lkNow);
+  for (int k = 0; k < 100 && lkB.c.state != LK_INVITED; k++) lkRun(50);
+  bool asked = lkB.c.state == LK_INVITED && lkB.c.game == LKG_CHESS;
+  lkB.c.answer(true, lkNow);
+  for (int k = 0; k < 100 && lkA.c.state != LK_PLAYING; k++) lkRun(50);
+  check("challenged for Chess, accepted", asked && lkA.c.state == LK_PLAYING && lkB.c.state == LK_PLAYING &&
+                                          lkA.c.iStart != lkB.c.iStart);
+  ChPos pa, pb;
+  chStart(pa); chStart(pb);
+  ChMove *ma = (ChMove *)malloc(sizeof(ChMove) * 220), *mb = (ChMove *)malloc(sizeof(ChMove) * 220);
+  int plies = 0, wrong = 0;
+  for (; plies < 80; plies++) {
+    int na = chMoves(pa, ma), nb = chMoves(pb, mb);
+    if (!na || pa.half >= 100) break;
+    bool aMoves = (bool)pa.white == lkA.c.iStart;               // whoever begins plays white
+    LkNode &from = aMoves ? lkA : lkB, &to = aMoves ? lkB : lkA;
+    ChPos &pf = aMoves ? pa : pb, &pt = aMoves ? pb : pa;
+    ChMove *lt = aMoves ? mb : ma;
+    int nt = aMoves ? nb : na;
+    ChMove mv = (aMoves ? ma : mb)[rand() % (aMoves ? na : nb)];
+    uint8_t b[2], got[2];
+    mpChessEnc(mv, b);
+    chPlay(pf, mv);
+    int sent = 0, in = 0;
+    for (int k = 0; k < 400 && in < 2; k++) {                   // the two bytes, one after the other
+      if (sent < 2 && from.c.sendMove(b[sent], lkNow)) sent++;
+      uint8_t m;
+      if (to.c.moveIn(&m)) got[in++] = m;
+      lkRun(20);
+    }
+    ChMove back;
+    if (in < 2 || !mpChessDec(lt, nt, got[0], got[1], &back) || back.from != mv.from || back.to != mv.to || back.promo != mv.promo) { wrong++; break; }
+    chPlay(pt, back);
+    if (memcmp(pa.b, pb.b, 64) || pa.white != pb.white) { wrong++; break; }
+  }
+  free(ma); free(mb);
+  printf("      %d plies over the lossy radio, %d wrong\n", plies, wrong);
+  check("a chess game over a lossy radio: both boards stay the same", plies >= 20 && !wrong);
+}
+
 static uint8_t colsInFrame() {                                  // how many colours one frame shows
   std::set<uint8_t> c(lastFrame, lastFrame + sizeof(lastFrame));
   return (uint8_t)c.size();
@@ -634,11 +897,11 @@ static void maumauBot(uint32_t t) {
   if (botBusy(t)) return;
   if (mmWishing) { botPress(t, mmWishSel == mmBotWish ? OK : RT, 60); return; }
   if (mm.winner) { if (t > mmBotAgain) { botPress(t, OK, 100); mmBotAgain = t + 1500; } return; }
-  if (mm.turn != 0 || mmFly.on) return;
+  if (mm.turn != mmMe || mmFly.on) return;                       // mmMe: the seat online
   MauMau c = mm;
   uint8_t m = c.cpuMove(), slot = 0;
   if (m != MM_DRAW && m != MM_PASS) {
-    uint8_t cards[MM_CARDS], n = mmHand(mm, 0, cards);
+    uint8_t cards[MM_CARDS], n = mmHand(mm, mmMe, cards);
     for (uint8_t i = 0; i < n; i++) if (cards[i] == (m & 31)) slot = i + 1;
     mmBotWish = (m >> 5) & 3;
   }
@@ -1151,6 +1414,26 @@ int main(int argc, char **argv) {
     printf("== %s\n", scenario.c_str());
     chessLogic();
     return failures ? 1 : 0;
+  } else if (scenario == "mpchess") {                           // chess moves on the protocol, no screen
+    printf("== %s\n", scenario.c_str());
+    chessProtocol();
+    return failures ? 1 : 0;
+  } else if (scenario == "online") {
+    // the lobby: rename, a friend, Chess with a console that has none, a "no",
+    // 4 wins, ANNA's challenge to Tic Tac Toe accepted, another one declined, back
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 600000;
+    mpSteps = "nfc:xc1yc1i2ai1dq";
+    simBot = onlineDriver; botFrom = t;
+    captureMs = { t + 1500, t + 2600 };
+    setenv("GRAB", "wants to play", 1);
+  } else if (scenario.compare(0, 2, "mp") == 0 && scenario.size() > 2) {   // one game online, to its end
+    static const char *const G[] = { "c4", "ttt", "pong", "snake", "pac", "ship", "dame", "mau", "bomb", "chessgame" };
+    uint8_t g = 0;
+    for (uint8_t i = 0; i < 10; i++) if (scenario == std::string("mp") + G[i]) g = i + 1;
+    if (!g) { printf("unknown scenario %s\n", scenario.c_str()); return 2; }
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 600000;
+    onlineGame(g, t);
+    captureMs = { t + 9000, t + 16000 };
   } else { printf("unknown scenario %s\n", scenario.c_str()); return 2; }
   printf("== %s\n", scenario.c_str());
   try {
@@ -1265,6 +1548,35 @@ int main(int argc, char **argv) {
   if (scenario == "chess") {
     check("chess drawn for two players", seen("CHESS") && seen("2 players") && seen("WHITE") && seen("BLACK"));
     check("fool's mate: black wins", chBotStep == 8 && seen("WINS") && seen("BLACK"));
+  }
+  bool mpOver = seen("YOU WIN") || seen("YOU LOST") || seen("DRAW");
+  if (scenario == "online") {
+    printf("      name %s, games ANNA saw %d, challenges from ANNA %d\n", simName, simBotGames, mpInvited);
+    check("lobby shown, ANNA found", seen("ONLINE") && seen("ANNA") && seen("free"));
+    check("renamed to QLAYER", !strcmp(simName, "QLAYER") && seen("YOUR NAME"));
+    check("ANNA is a friend now", linkIsFriend(simPeer.code()));
+    check("no Chess with a console that has none", seen("ANNA has no Chess"));
+    check("ANNA said no", seen("ANNA said no"));
+    check("4 wins played to its end", seen("4 WINS") && seen("vs ANNA") && mpOver);
+    check("ANNA's challenge accepted: Tic Tac Toe", seen("CHALLENGE!") && seen("TIC TAC TOE") && simBotGames == 2);
+    check("the next one declined", mpInvited == 2 && mpStep == mpSteps.size());
+    check("back in the menu, radio off", !simOpen && pollHook == NULL && barRight == NULL);
+    check("no connection error", !seen("connection error"));
+  }
+  if (scenario.compare(0, 2, "mp") == 0 && scenario != "mpchess") {
+    printf("      games ANNA saw %d (last: %s), steps %zu/%zu\n", simBotGames, simBotResult == 1 ? "ANNA won" :
+           simBotResult == 2 ? "ANNA lost" : simBotResult == 3 ? "draw" : "-", mpStep, mpSteps.size());
+    if (scenario == "mpchessgame") {
+      printf("      chess: %d plies, boards the same %d, wrong moves %d\n", cpPlies, mpChSame, cpBad);
+      check("chess online: 40 plies, both boards the same", seen("CHESS") && cpPlies >= 40 && mpChSame == 1 && !cpBad);
+      check("left the game, ANNA was told", seen("you left the game") && simPeer.state == LK_LOBBY);
+    } else {
+      check("the game was played to its end", mpOver && simBotGames == 1);
+      check("both saw the same result", (seen("YOU WIN") && simBotResult == 2) || (seen("YOU LOST") && simBotResult == 1) ||
+                                        (seen("DRAW") && simBotResult == 3));
+    }
+    check("no connection error", !seen("connection error"));
+    check("back in the menu, radio off", !simOpen && pollHook == NULL && mpStep == mpSteps.size());
   }
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {

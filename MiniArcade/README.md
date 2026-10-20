@@ -298,6 +298,11 @@ Every move is repeated until the other console confirms it, so lost radio
 packets do not matter; `test/linktest.cpp` plays whole games with 50 %
 packet loss.
 
+The colour console (`../MiniArcadeColor`, page "Online") speaks the same
+protocol and plays all of these games with an OLED console. It also has
+Chess, which it only offers to other colour consoles (game 10, beacon flag
+`LK_CAP_CHESS`); an OLED console never sees a chess challenge.
+
 **Pong and Snake** run in real time. Both consoles compute the same game
 (`main/rtgames.h`); only the keys go over the radio, 50 times a second, and
 every packet repeats the last inputs. A step is only taken when the keys

@@ -477,11 +477,18 @@ bool poll(bool clear = true) {          // clear = false keeps the picture (dial
 
 // ---------------- shared drawing ----------------
 #define TOP_H 26                       // status bar on top of the games
+static const char *barRight = NULL;    // online games: this instead of score and best (multiplayer.h)
 
 void statusBar(const char *title, uint16_t score, uint16_t best, col accent = C::BLUE) {
   gfx.gradient(0, 0, SCR_W, TOP_H, colLight(accent), colDark(accent, 2));
   gfx.hline(0, TOP_H - 1, SCR_W, colLight(accent, 2));
   gfx.textShadow(6, 5, title, C::WHITE, C::BLACK, F_TEXT);
+  if (barRight) {
+    Font f = Gfx::width(barRight) <= SCR_W - 56 - Gfx::width(title) ? F_TEXT : F_SMALL;
+    gfx.textShadow(SCR_W - 34 - Gfx::width(barRight, f), f == F_TEXT ? 5 : 9, barRight, C::WHITE, C::BLACK, f);
+    batIcon(SCR_W - 28, 7);
+    return;
+  }
   char b[24];
   snprintf(b, sizeof(b), "%u", score);
   int16_t x = gfx.text(150, 5, b, C::YELLOW, F_TEXT);

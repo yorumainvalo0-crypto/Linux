@@ -270,6 +270,9 @@ static void simBotBoard(uint32_t now) {
   }
 }
 
+// games this bot does not know (the colour console's Chess): the colour harness plays them
+static void (*simBotOther)(uint32_t now) = NULL;
+
 static void simBotBrain(uint32_t now) {
   LinkCore &B = simBot;
   if (B.state == LK_INVITED && now >= botNext) {
@@ -283,7 +286,8 @@ static void simBotBrain(uint32_t now) {
   if (B.state == LK_PLAYING && LinkCore::realtime(B.game)) { simBotRealtime(now); return; }
   if (B.state == LK_PLAYING && B.game == LKG_SHIP) { simBotShip(now); return; }
   if (B.state == LK_PLAYING && (B.game == LKG_DAME || B.game == LKG_MAU)) { simBotBoard(now); return; }
-  if (B.state != LK_PLAYING) { botRt = false; botShipOn = false; botBgOn = false; }
+  if (B.state == LK_PLAYING && B.game > LKG_LAST) { if (simBotOther) simBotOther(now); return; }
+  if (B.state != LK_PLAYING) { botRt = false; botShipOn = false; botBgOn = false; botInGame = false; }
   if (B.state != LK_PLAYING) { if (B.state != LK_INVITED) botNext = now + 1500; return; }
   if (!botInGame) {                                    // a new game begins
     botInGame = true; botMoves = 0;
