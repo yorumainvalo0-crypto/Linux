@@ -164,7 +164,7 @@ static bool chTooLittle(const ChPos &p) {
 }
 
 // for the tests: a position from FEN (board, side, castling, en passant)
-static bool chFromFen(ChPos &p, const char *f) {
+[[maybe_unused]] static bool chFromFen(ChPos &p, const char *f) {
   static const char PC[] = "pnbrqk";
   memset(&p, 0, sizeof(p));
   p.ep = -1;
