@@ -86,6 +86,15 @@ static void applyMask(uint8_t m) {
 }
 void simDelayUs(uint32_t us) { clockUs += us; }
 
+// a player that looks at the game's state (board games): called every ms
+static void (*simBot)(uint32_t t) = NULL;
+static uint32_t botFrom = 0, botFree = 0, botUp = 0;
+static bool botBusy(uint32_t t) {
+  if (botUp && t >= botUp) { applyMask(0); botUp = 0; }
+  return t < botFree;
+}
+static void botPress(uint32_t t, uint8_t mask, uint32_t len) { applyMask(mask); botUp = t + len; botFree = t + len + 90; }
+
 void simDelayMs(uint32_t ms) {
   for (uint32_t i = 0; i < ms; i++) {
     clockUs += 1000;
@@ -97,6 +106,7 @@ void simDelayMs(uint32_t ms) {
       applyMask(o[rand() % 8]);
     }
     if (pzBot) pzBot(t);
+    if (simBot && t >= botFrom) simBot(t);
     if (simEnd && t >= simEnd) throw SimEnd{};
   }
 }
@@ -547,6 +557,278 @@ static int logicTest() {
   return -1;
 }
 
+// ---------------- players for the board games (they read the game's state) ----------------
+// Battleship: aims where the CPU's own logic would
+static void bshipBot(uint32_t t) {
+  if (botBusy(t) || !bsV.myGo || bsV.aimCell >= 0) return;
+  static uint8_t target = 0, forShots = 255;
+  if (forShots != bsV.shots || bsShot[target] != BS_UNKNOWN) { target = bsAiPick(bsShot); forShots = bsV.shots; }
+  int tr = target / 8, tc = target % 8, cr = bsV.cur / 8, cc = bsV.cur % 8;
+  if (tr != cr) botPress(t, tr > cr ? DN : UP, 60);
+  else if (tc != cc) botPress(t, tc > cc ? RT : LT, 60);
+  else botPress(t, OK, 100);
+}
+
+// Checkers: the rules' own search, 3 deep, walks the cursor there
+static void checkersBot(uint32_t t) {
+  if (botBusy(t) || ck.winner || ck.turn != 0 || ckV.fp) return;
+  uint32_t r = 12345 + ck.quiet * 7 + ck.count(0) * 131;          // a fixed choice for a given board
+  CkStep st = ck.best(3, r);
+  int8_t want = (ckSel == st.from) ? Checkers::next(st.from, st.dir, st.jump ? 2 : 1) : (int8_t)st.from;
+  int8_t c, rr = Checkers::rc((uint8_t)want, &c);
+  int cr = ckCur / 8, cc = ckCur % 8;
+  if (rr != cr) botPress(t, rr > cr ? DN : UP, 60);
+  else if (c != cc) botPress(t, c > cc ? RT : LT, 60);
+  else botPress(t, OK, 120);
+}
+
+// Mau-Mau: plays as the CPUs do; after a game OK through "again" and the mode
+static uint8_t mmBotWish = 0;
+static uint32_t mmBotAgain = 0;
+static void maumauBot(uint32_t t) {
+  if (botBusy(t)) return;
+  if (mmWishing) { botPress(t, mmWishSel == mmBotWish ? OK : RT, 60); return; }
+  if (mm.winner) { if (t > mmBotAgain) { botPress(t, OK, 100); mmBotAgain = t + 1500; } return; }
+  if (mm.turn != 0 || mmFly.on) return;
+  MauMau c = mm;
+  uint8_t m = c.cpuMove(), slot = 0;
+  if (m != MM_DRAW && m != MM_PASS) {
+    uint8_t cards[MM_CARDS], n = mmHand(mm, 0, cards);
+    for (uint8_t i = 0; i < n; i++) if (cards[i] == (m & 31)) slot = i + 1;
+    mmBotWish = (m >> 5) & 3;
+  }
+  if (mmCur != slot) botPress(t, slot > mmCur ? RT : LT, 60);
+  else botPress(t, OK, 100);
+}
+
+// Minigolf: breadth first over resting places for the fewest strokes
+struct GolfShot { uint8_t ang, pow; };
+static uint8_t golfShoot(int32_t *x, int32_t *y, uint8_t ang, uint8_t pow) {   // 1 hole, 2 water, 0 rest
+  int32_t vx = mgCos(ang) * (130 * pow) / 256, vy = mgSin(ang) * (130 * pow) / 256;
+  for (int s = 0; s < 3000 && (vx || vy); s++) {
+    uint8_t r = mgStep(x, y, &vx, &vy, mgHx, mgHy);
+    if (r) return r;
+  }
+  return 0;
+}
+static int golfPlan(int32_t x, int32_t y, GolfShot *first) {
+  struct Node { int32_t x, y; int depth; GolfShot first; };
+  std::vector<Node> q;
+  std::set<std::pair<int, int>> seenAt;
+  q.push_back({ x, y, 0, { 0, 0 } });
+  seenAt.insert({ (int)(x >> 8), (int)(y >> 8) });
+  for (size_t h = 0; h < q.size(); h++) {
+    Node n = q[h];
+    if (n.depth >= 5) break;
+    for (uint8_t a = 0; a < 32; a++)
+      for (uint8_t p = 1; p <= 10; p++) {
+        int32_t ex = n.x, ey = n.y;
+        uint8_t r = golfShoot(&ex, &ey, a, p);
+        GolfShot f = n.depth ? n.first : GolfShot{ a, p };
+        if (r == 1) { *first = f; return n.depth + 1; }
+        if (r == 2) continue;
+        if (seenAt.insert({ (int)(ex >> 8), (int)(ey >> 8) }).second) q.push_back({ ex, ey, n.depth + 1, f });
+      }
+  }
+  return -1;
+}
+static GolfShot golfNext = { 255, 0 };
+static uint8_t  golfFor = 255;
+static int32_t  golfAtX = -1, golfAtY = -1;
+static void golfBot(uint32_t t) {
+  if (botBusy(t) || mgVx || mgVy) return;
+  if (golfFor != mgHole || golfAtX != mgBx || golfAtY != mgBy) {   // a new resting place: plan
+    golfFor = mgHole; golfAtX = mgBx; golfAtY = mgBy;
+    if (golfPlan(mgBx, mgBy, &golfNext) < 0) golfNext = { (uint8_t)(rand() % 32), 5 };
+  }
+  if (mgAng != golfNext.ang) botPress(t, ((golfNext.ang - mgAng) & 31) < 16 ? RT : LT, 60);
+  else if (mgPow != golfNext.pow) botPress(t, golfNext.pow > mgPow ? UP : DN, 60);
+  else { botPress(t, OK, 120); golfFor = 255; botFree = t + 600; }
+}
+
+// ---------------- the rules of the board games, without the screen ----------------
+static void boardLogic() {
+  randomSeed(7);
+  // Connect Four: tactics, and depth beats the lower levels
+  memset(c4, 0, sizeof(c4)); c4[5][1] = 2; c4[5][2] = 2; c4[5][3] = 2;
+  uint8_t m = c4Think(2);
+  check("4 wins: the CPU takes a win in one", m == 0 || m == 4);
+  memset(c4, 0, sizeof(c4)); c4[5][0] = 1; c4[5][1] = 1; c4[5][2] = 1;
+  check("4 wins: the CPU blocks a row", c4Think(2) == 3);
+  memset(c4, 0, sizeof(c4)); c4[5][3] = 1; c4[4][3] = 1; c4[3][3] = 1;
+  check("4 wins: the CPU blocks a column", c4Think(2) == 3);
+  for (int opp = 0; opp < 2; opp++) {
+    int hardWins = 0, oppWins = 0;
+    for (int g = 0; g < 12; g++) {
+      memset(c4, 0, sizeof(c4));
+      uint8_t turn = (g & 1) ? 1 : 2;
+      for (int ply = 0; ply < 42; ply++) {
+        uint8_t col;
+        if (turn == 2) col = c4Think(2);
+        else {                                                      // the other level plays as 1
+          for (int r = 0; r < C4_H; r++) for (int c = 0; c < C4_W; c++) if (c4[r][c]) c4[r][c] = 3 - c4[r][c];
+          col = c4Think((uint8_t)opp);
+          for (int r = 0; r < C4_H; r++) for (int c = 0; c < C4_W; c++) if (c4[r][c]) c4[r][c] = 3 - c4[r][c];
+        }
+        if (c4Drop(col, turn) < 0) break;
+        if (c4Wins(turn)) { (turn == 2 ? hardWins : oppWins)++; break; }
+        if (c4Full()) break;
+        turn = 3 - turn;
+      }
+    }
+    printf("      4 wins: hard vs %s: %d wins, %d losses of 12\n", opp ? "normal" : "easy", hardWins, oppWins);
+    check(opp ? "4 wins: hard beats normal" : "4 wins: hard beats easy", opp ? (hardWins >= 5 && oppWins <= 2) : hardWins >= 10);
+  }
+  // Tic Tac Toe: every way to play against "hard", it never loses; easy can be beaten
+  {
+    long games = 0; int lost = 0, easyLost = 0;
+    struct F { uint8_t b[9]; };
+    for (int seed = 0; seed < 4; seed++) {
+      randomSeed(100 + seed);
+      for (uint8_t starter = 1; starter <= 2; starter++) {
+        std::vector<F> todo; F f0; memset(f0.b, 0, 9);
+        if (starter == 2) { memcpy(xo, f0.b, 9); xo[xoThink(2, 2)] = 2; memcpy(f0.b, xo, 9); }
+        todo.push_back(f0);
+        while (!todo.empty()) {
+          F f = todo.back(); todo.pop_back();
+          for (uint8_t i = 0; i < 9; i++) {
+            if (f.b[i]) continue;
+            memcpy(xo, f.b, 9); xo[i] = 1;
+            if (xoLine(1) >= 0) { lost++; games++; continue; }
+            if (xoFull()) { games++; continue; }
+            xo[xoThink(2, 2)] = 2;
+            if (xoLine(2) >= 0 || xoFull()) { games++; continue; }
+            F g; memcpy(g.b, xo, 9); todo.push_back(g);
+          }
+        }
+      }
+    }
+    for (int g = 0; g < 500; g++) {
+      randomSeed(9000 + g); memset(xo, 0, 9); uint8_t turn = 1 + (g & 1);
+      while (xoLine(1) < 0 && xoLine(2) < 0 && !xoFull()) {
+        if (turn == 2) xo[xoThink(0, 2)] = 2;
+        else { uint8_t fr[9], n = 0; for (uint8_t i = 0; i < 9; i++) if (!xo[i]) fr[n++] = i; xo[fr[random(n)]] = 1; }
+        turn = 3 - turn;
+      }
+      if (xoLine(1) >= 0) easyLost++;
+    }
+    printf("      tic tac toe: %ld games against hard, %d lost; easy lost %d of 500 to a random player\n", games, lost, easyLost);
+    check("tic tac toe: hard never loses", lost == 0 && games > 1000);
+    check("tic tac toe: easy can be beaten", easyLost > 20);
+  }
+  // Battleship: legal fleets, the CPU always finishes and plays well
+  {
+    int bad = 0, most = 0; long shots = 0;
+    for (int g = 0; g < 500; g++) {
+      randomSeed(700 + g);
+      bsPlace(bsTheirs);
+      int cells = 0, len[6] = { 0 };
+      for (int i = 0; i < 64; i++) {
+        uint8_t sh = bsTheirs[i]; if (!sh) continue; cells++; len[sh]++;
+        int x = i % 8, y = i / 8;
+        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+          int X = x + dx, Y = y + dy;
+          if (X >= 0 && Y >= 0 && X < 8 && Y < 8 && bsTheirs[Y * 8 + X] && bsTheirs[Y * 8 + X] != sh) bad++;
+        }
+      }
+      if (cells != 14) bad++;
+      for (int k = 0; k < 5; k++) if (len[k + 1] != BS_LEN[k]) bad++;
+      memset(bsAiShot, 0, 64);
+      int n = 0;
+      while (!bsAllSunk(bsTheirs) && n < 64) { uint8_t c = bsAiPick(bsAiShot); uint8_t r = bsFire(bsTheirs, c); if (!r) bad++; bsMark(bsAiShot, c, r); n++; }
+      if (!bsAllSunk(bsTheirs)) bad++;
+      shots += n; if (n > most) most = n;
+    }
+    printf("      battleship: the CPU needs %.1f shots on average, at most %d\n", shots / 500.0, most);
+    check("battleship: fleets legal (sizes, never touching), the CPU always finishes", bad == 0);
+    check("battleship: the CPU plays well", shots / 500.0 < 48);
+  }
+  // Checkers: forced take, going on with a second jump, crowning, the CPU
+  {
+    Checkers c; c.begin();
+    memset(c.sq, 0, sizeof(c.sq));
+    c.sq[Checkers::at(5, 2)] = CK_MAN0; c.sq[Checkers::at(4, 3)] = CK_MAN1; c.sq[Checkers::at(2, 5)] = CK_MAN1;
+    c.sq[Checkers::at(6, 7)] = CK_MAN0; c.sq[Checkers::at(0, 1)] = CK_MAN1;
+    CkStep st[48]; uint8_t n = c.gen(st);
+    check("checkers: taking is a must", n == 1 && st[0].jump && st[0].from == Checkers::at(5, 2));
+    bool more = c.apply(st[0].from, st[0].dir);
+    check("checkers: a piece that took goes on taking", more && c.chain == Checkers::at(3, 4) && c.turn == 0);
+    more = c.apply((uint8_t)c.chain, 1);
+    check("checkers: both taken, the turn passes", !more && c.count(1) == 1 && c.turn == 1);
+    Checkers k; k.begin(); memset(k.sq, 0, sizeof(k.sq));
+    k.sq[Checkers::at(1, 2)] = CK_MAN0; k.sq[Checkers::at(7, 0)] = CK_MAN1;
+    k.apply(Checkers::at(1, 2), 1);
+    check("checkers: the far row crowns", k.sq[Checkers::at(0, 3)] == CK_KING0);
+    int deep = 0;
+    for (int g = 0; g < 10; g++) {
+      Checkers x; x.begin(); uint32_t r = 99 + g;
+      while (!x.winner) {
+        CkStep s2[48]; uint8_t n2 = x.gen(s2);
+        CkStep s = x.turn == 0 ? x.best(3, r) : s2[bgRand(r) % n2];
+        x.apply(s.from, s.dir);
+      }
+      if (x.winner == 1) deep++;
+    }
+    printf("      checkers: depth 3 won %d of 10 against a random player\n", deep);
+    check("checkers: the CPU plays well", deep >= 9);
+    // the game's own search (buffers on the heap) picks exactly what the rules' one picks
+    int same = 0, tried = 0;
+    for (int g = 0; g < 6; g++) {
+      Checkers x; x.begin(); uint32_t r = 5 + g * 13;
+      while (!x.winner && tried < 400) {
+        uint32_t r1 = r, r2 = r;
+        uint8_t d = (uint8_t)(1 + tried % 5);
+        CkStep a = x.best(d, r1), b = ckBest(x, d, r2);
+        tried++;
+        if (a.from == b.from && a.dir == b.dir && r1 == r2) same++;
+        CkStep s2[48]; uint8_t n2 = x.gen(s2);
+        CkStep s = bgRand(r) % 3 ? a : s2[bgRand(r) % n2];
+        x.apply(s.from, s.dir);
+      }
+    }
+    printf("      checkers: heap search agrees in %d of %d positions\n", same, tried);
+    check("checkers: the game's search plays as the rules' search", same == tried && tried > 100 && ckPly == NULL);
+  }
+  // Mau-Mau: no card gets lost, games end, same seed = same game, the 7
+  {
+    bool keep = true; int ended = 0;
+    for (int g = 0; g < 200; g++) {
+      MauMau x; x.begin(4242 + g * 31, 2 + g % 3);
+      for (int k = 0; k < 2000 && !x.winner; k++) {
+        x.move(x.cpuMove());
+        int cnt = 0;
+        for (int p = 0; p < x.players; p++) cnt += MauMau::count(x.hand[p]);
+        if (cnt + x.nDeck + x.nPile != MM_CARDS) keep = false;
+      }
+      if (x.winner) ended++;
+    }
+    check("mau-mau: 32 cards all the time", keep);
+    check("mau-mau: 200 CPU games all end", ended == 200);
+    MauMau a, b; a.begin(99, 2); b.begin(99, 2);
+    check("mau-mau: the same seed deals the same", !memcmp(a.hand, b.hand, sizeof(a.hand)) && a.top() == b.top());
+    MauMau s; s.begin(1, 2);
+    s.pile[s.nPile - 1] = 0;                                        // top: 7 of clubs
+    s.hand[0] = (1UL << 8) | (1UL << 3);                            // 7 of spades, 10 of clubs
+    s.move(8);
+    check("mau-mau: a 7 makes the next one draw 2", s.penalty == 2 && s.turn == 1);
+    uint8_t before = MauMau::count(s.hand[1]);
+    s.move(MM_DRAW);
+    check("mau-mau: ... and ends that turn", MauMau::count(s.hand[1]) == before + 2 && s.turn == 0 && !s.penalty);
+  }
+  // Minigolf: every hole can be played in par
+  {
+    bool ok = true;
+    for (mgHole = 0; mgHole < 9; mgHole++) {
+      int32_t x, y; GolfShot f;
+      mgFind('S', &x, &y); mgFind('O', &mgHx, &mgHy);
+      int n = golfPlan(x, y, &f);
+      printf("      minigolf hole %d: par %d, best %d\n", mgHole + 1, MG_PAR[mgHole], n);
+      if (n < 0 || n > MG_PAR[mgHole]) ok = false;
+    }
+    check("minigolf: every hole can be played in par", ok);
+  }
+}
+
 int main(int argc, char **argv) {
   scenario = argc > 1 ? argv[1] : "menu";
   srand(1);
@@ -564,25 +846,25 @@ int main(int argc, char **argv) {
     simEnd = 6000; captureAt = { 60 };
     for (int i = 0; i < 6; i++) press(M + 300 * i, DN);
   } else if (scenario == "snake") {
-    uint32_t t = openGame(0, M); simEnd = t + 30000;
+    uint32_t t = openGameNamed("Snake", M); simEnd = t + 30000;
     press(t + 200, UP); press(t + 900, RT); press(t + 1500, DN); press(t + 2400, LT);
     autoplay = true; autoplayFrom = t + 3000; captureAt = { 160, 400 };
   } else if (scenario == "snakeover") {
-    uint32_t t = openGame(0, M); simEnd = t + 9000;
+    uint32_t t = openGameNamed("Snake", M); simEnd = t + 9000;
     press(t + 200, RT);                                          // straight into the wall
     setenv("GRAB", "GAME OVER", 1);
   } else if (scenario == "tetris") {
-    uint32_t t = openGame(1, M); simEnd = t + 60000;
+    uint32_t t = openGameNamed("Tetris", M); simEnd = t + 60000;
     autoplay = true; autoplayFrom = t + 300; captureAt = { 400, 1400 };
   } else if (scenario == "pong") {
-    uint32_t t = openGame(2, M); simEnd = t + 40000;
+    uint32_t t = openGameNamed("Pong", M); simEnd = t + 40000;
     autoplay = true; autoplayFrom = t + 300; captureAt = { 300 };
   } else if (scenario == "flappy") {
-    uint32_t t = openGame(3, M); simEnd = t + 20000;
+    uint32_t t = openGameNamed("Flappy", M); simEnd = t + 20000;
     for (uint32_t k = t + 300; k < t + 20000; k += 330) press(k, UP, 40);
     captureAt = { 150 };
   } else if (scenario == "breakout") {
-    uint32_t t = openGame(4, M); simEnd = t + 40000;
+    uint32_t t = openGameNamed("Breakout", M); simEnd = t + 40000;
     press(t + 300, UP);
     autoplay = true; autoplayFrom = t + 600; captureAt = { 400 };
   } else if (scenario == "invaders") {
@@ -669,7 +951,7 @@ int main(int argc, char **argv) {
     simEnd = M + 3000; press(M, UP); press(M + 400, OK, 80); captureAt = { 200 };
     setenv("GRAB", "SETTINGS", 1);
   } else if (scenario == "pause") {
-    uint32_t t = openGame(0, M); simEnd = t + 4000;
+    uint32_t t = openGameNamed("Snake", M); simEnd = t + 4000;
     press(t + 1000, OK, 900);                                    // hold OK: pause menu
     setenv("GRAB", "PAUSE", 1);
   } else if (scenario == "wizard") {
@@ -753,6 +1035,68 @@ int main(int argc, char **argv) {
     printf("== %s\n", scenario.c_str());
     printf("%s\n", failures ? "### FAILURES ###" : "   all checks passed");
     return failures ? 1 : 0;
+  } else if (scenario == "boardlogic") {                        // the rules alone, no screen
+    printf("== %s\n", scenario.c_str());
+    boardLogic();
+    return failures ? 1 : 0;
+  } else if (scenario == "c4") {
+    uint32_t t = openGameNamed("4 wins", M); simEnd = t + 90000;
+    press(t + 400, DN); press(t + 800, OK, 80);                  // "1P normal"
+    for (uint32_t k = t + 1500, i = 0; k < t + 88000; k += 1500, i++) {   // wander over the columns, drop
+      uint8_t dir = i % 3 == 0 ? LT : RT;
+      press(k, dir);
+      if (i % 2) press(k + 200, dir);
+      press(k + 500, OK, 80);
+    }
+    captureMs = { t + 6700 };
+    setenv("GRAB", "CPU WINS", 1);
+  } else if (scenario == "ttt") {
+    uint32_t t = openGameNamed("Tic Tac Toe", M); simEnd = t + 60000;
+    press(t + 400, OK, 80);                                      // "1P easy"
+    for (uint32_t k = t + 1000; k < t + 58000; k += 400) {       // wander and place
+      static const uint8_t keys[4] = { UP, DN, LT, RT };
+      press(k, keys[rand() % 4]);
+      press(k + 180, OK, 80);
+    }
+    captureMs = { t + 3000 };
+    setenv("GRAB", "WIN", 1);
+  } else if (scenario == "bship") {
+    uint32_t t = openGameNamed("Battleship", M); simEnd = t + 200000;
+    press(t + 500, UP);                                          // mix a new fleet
+    press(t + 1000, OK, 80);                                     // and go
+    simBot = bshipBot; botFrom = t + 1600;
+    captureMs = { t + 400, t + 40000 };
+  } else if (scenario == "bshipown") {
+    // ships by hand: 4, 3, 3, 2 down the left side, the last one turned (double OK) on the right
+    uint32_t t = openGameNamed("Battleship", M); simEnd = t + 12000;
+    press(t + 500, DN);
+    uint32_t k = t + 1000;
+    for (int s = 0; s < 4; s++) {
+      if (s) { press(k, DN); press(k + 200, DN); k += 400; }
+      press(k, OK, 60); k += 700;
+    }
+    for (int i = 0; i < 5; i++, k += 200) press(k, RT);
+    press(k, OK, 50); press(k + 150, OK, 50);                     // double OK: turn it
+    press(k + 800, OK, 60);                                      // set it down
+    captureMs = { k + 500 };
+    press(k + 2000, OK, 80);                                     // start the battle
+  } else if (scenario == "checkers") {
+    uint32_t t = openGameNamed("Checkers", M); simEnd = t + 240000;
+    press(t + 400, OK, 80);                                      // "1P easy"
+    simBot = checkersBot; botFrom = t + 1000;
+    captureMs = { t + 30000 };
+    setenv("GRAB", "thinking...", 1);
+  } else if (scenario == "maumau") {
+    uint32_t t = openGameNamed("Mau-Mau", M); simEnd = t + 120000;
+    press(t + 400, DN); press(t + 700, DN); press(t + 1000, OK, 80);   // "vs 3 CPUs"
+    simBot = maumauBot; botFrom = t + 1600;
+    captureMs = { t + 9000 };
+    setenv("GRAB", "WISH A SUIT", 1);
+  } else if (scenario == "minigolf") {
+    uint32_t t = openGameNamed("Minigolf", M); simEnd = t + 300000;
+    simBot = golfBot; botFrom = t + 800;
+    captureMs = { t + 2500, t + 60000 };
+    setenv("GRAB", "HOLE 6/9", 1);
   } else { printf("unknown scenario %s\n", scenario.c_str()); return 2; }
   printf("== %s\n", scenario.c_str());
   try {
@@ -762,7 +1106,7 @@ int main(int argc, char **argv) {
 
   check("frames were drawn", frames > 20);
   check("the picture uses many colours", colsInFrame() >= 6);
-  if (scenario == "menu")      check("menu lists the games", seen("Snake") && seen("Tetris") && seen("Breakout"));
+  if (scenario == "menu")      check("menu lists the games", seen("Snake") && seen("Tetris") && seen("Doom"));
   if (scenario == "snake")     check("snake ran", seen("SNAKE"));
   if (scenario == "snakeover") check("game over shown", seen("GAME OVER") || seen("NEW RECORD!"));
   if (scenario == "tetris")    check("tetris ran", seen("TETRIS") && seen("NEXT"));
@@ -822,6 +1166,48 @@ int main(int argc, char **argv) {
   if (scenario == "frogger")   check("frogger: level chosen, ran and ended", seen("easy") && seen("FROGGER") && seen("LEVEL 1") && overShown);
   if (scenario == "jump")      check("jump & run ran and ended", seen("JUMP") && overShown);
   if (scenario == "stack")     check("stack ran and ended", seen("STACK") && overShown);
+  if (scenario == "c4") {
+    check("4 wins ran, levels offered", seen("4 WINS") && seen("1P normal") && seen("2 players") && seen("OK=drop"));
+    check("the CPU takes its turn", seen("thinking..."));
+    check("a game ended with game overShown", (seen("CPU WINS") || seen("YOU WIN!")) && overShown);
+  }
+  if (scenario == "ttt") {
+    check("tic tac toe ran, levels offered", seen("TIC TAC TOE") && seen("1P hard") && seen("2 players"));
+    check("rounds ended", seen("YOU WIN") || seen("CPU WINS") || seen("DRAW"));
+    check("the CPU lost at least once to key mashing", seen("YOU WIN") || seen("DRAW"));
+    check("game overShown after a loss", seen("CPU WINS") && overShown);
+  }
+  if (scenario == "bship") {
+    printf("      shots %u, own fleet sunk %d\n", bsV.shots, bsAllSunk(bsMine));
+    check("battleship ran", seen("BATTLESHIP") && seen("UP = mix") && seen("your fleet"));
+    check("shots hit and missed", seen("hit!") && seen("miss") && seen("sunk!"));
+    check("a battle ended with game overShown", (seen("YOU WIN!") || seen("CPU WINS")) && overShown);
+  }
+  if (scenario == "bshipown") {
+    int cells = 0;
+    for (int i = 0; i < 64; i++) if (bsMine[i]) cells++;
+    check("five ships placed by hand", cells == 14 && seen("ship 2") && seen("2x OK = turn"));
+    check("the first ones as set", bsMine[0] == 1 && bsMine[3] == 1 && bsMine[16] == 2 && bsMine[32] == 3 && bsMine[48] == 4);
+    check("the last one turned upright", bsMine[6 * 8 + 5] == 5 && bsMine[7 * 8 + 5] == 5);
+    check("the battle started", seen("your go"));
+  }
+  if (scenario == "checkers") {
+    printf("      pieces %u : %u, winner %u, score %u\n", ck.count(0), ck.count(1), ck.winner, ckV.score);
+    check("checkers ran, levels offered", seen("CHECKERS") && seen("1P hard") && seen("your go"));
+    check("the bot (depth 3) beat easy", seen("YOU WIN") && overShown);
+  }
+  if (scenario == "maumau") {
+    check("mau-mau ran with three CPUs", seen("MAU-MAU") && seen("CPU3 5") && seen("DRAW"));
+    check("cards were played and drawn", seen("YOU: draw") && seen("CPU1: draw"));
+    check("a game ended with game overShown", (seen("MAU-MAU!") || seen("YOU LOST")) && overShown);
+  }
+  if (scenario == "minigolf") {
+    printf("      score %u, card %u %u %u %u %u %u %u %u %u\n", mgScore, mgCard[0], mgCard[1], mgCard[2], mgCard[3],
+           mgCard[4], mgCard[5], mgCard[6], mgCard[7], mgCard[8]);
+    check("minigolf ran", seen("MINIGOLF") && seen("HOLE 1/9") && seen("POWER"));
+    check("all nine holes played", seen("HOLE 9/9") && overShown);
+    check("the bot played well", mgScore >= 9 * 40);
+  }
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);

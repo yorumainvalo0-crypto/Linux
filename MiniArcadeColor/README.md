@@ -5,7 +5,12 @@ ST7789 optional), four keys, a buzzer and a battery. Its own firmware, apart
 from the OLED MiniArcade: it never installs as an update on the OLED console
 and the OLED firmware never on this one.
 
-Games so far: Snake, Tetris, Pong, Flappy, Breakout. The other 27 follow.
+All 32 games of the OLED console, redrawn for 320 x 240 in colour: Snake,
+Tetris, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders, Dino, Breakout,
+Rocks, Racer, Frogger, 4 wins, Tic Tac Toe, 2048, Minesweeper, Pac-Man,
+Shooter, Jump & Run, Sokoban, Battleship, Sudoku, Lights Out, Match 3,
+Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
+the CPU or two players on one console (no online multiplayer yet).
 
 ## Boards
 
@@ -30,8 +35,10 @@ Touch and SD card stay unconnected for now.
 MPU6050 gyroscope (GY-521): SDA and SCL on any two free pins (S3: GPIO8 /
 GPIO18 are kept for it), VCC 3V3, GND. Settings -> "tilt control" switches it
 on: the console finds the sensor, then asks to tilt it once to the right and
-once away from you. In a game, tilting works like the arrow keys; the way the
-console is held when the game starts counts as level.
+once away from you. In a game, tilting works like the arrow keys. "tilt level"
+chooses what counts as level: the way the console is held when a game starts,
+or a position saved once (OK, hold it, 3 s); "tilt" sets how far to tilt
+(weak / normal / strong). The pause menu can set the level anew.
 
 Keys, buzzer and battery go on any free pin: the console asks for them at the
 first start. Several keys (up to all five) may share one ADC pin, each to
