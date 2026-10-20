@@ -52,7 +52,10 @@ menu "MiniArcade Color"
             default -1
         config ARCADE_TFT_MHZ
             int "SPI clock in MHz"
-            default 40
+            default 20
+            help
+                40 works with short wires; on a breadboard with long
+                jumper wires the panel often stays white above 20.
         config ARCADE_TFT_ST7789
             bool "ST7789 controller instead of ILI9341"
             default n
