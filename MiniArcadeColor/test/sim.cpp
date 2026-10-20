@@ -202,6 +202,31 @@ int main(int argc, char **argv) {
     uint32_t t = openGame(4, M); simEnd = t + 40000;
     press(t + 300, UP);
     autoplay = true; autoplayFrom = t + 600; captureAt = { 400 };
+  } else if (scenario == "invaders") {
+    uint32_t t = openGameNamed("Invaders", M); simEnd = t + 90000;
+    autoplay = true; autoplayFrom = t + 300; captureAt = { 400 };
+    setenv("GRAB", "OK again - hold OK menu", 1);                // and the game over screen
+  } else if (scenario == "rocks") {
+    uint32_t t = openGameNamed("Rocks", M); simEnd = t + 90000;
+    press(t + 300, UP, 300);
+    autoplay = true; autoplayFrom = t + 700; captureAt = { 420 };
+    setenv("GRAB", "OK again - hold OK menu", 1);
+  } else if (scenario == "shooter") {
+    uint32_t t = openGameNamed("Shooter", M); simEnd = t + 90000;
+    press(t + 4000, OK, 80);                                     // a bomb
+    autoplay = true; autoplayFrom = t + 300; captureAt = { 900 };
+    setenv("GRAB", "OK again - hold OK menu", 1);
+  } else if (scenario == "lander") {
+    uint32_t t = openGameNamed("Lander", M); simEnd = t + 30000;
+    for (uint32_t k = t + 600; k < t + 2400; k += 300) press(k, UP, 150);   // brake a little, then fall
+    captureAt = { 285 };
+    setenv("GRAB", "OK again - hold OK menu", 1);
+  } else if (scenario == "cave") {
+    uint32_t t = openGameNamed("Cave", M); simEnd = t + 30000;
+    captureAt = { 290 };                                         // in flight
+    for (uint32_t k = t + 1200; k < t + 4000; k += 200) press(k, UP, 100);
+    autoplay = true; autoplayFrom = t + 4000;
+    setenv("GRAB", "OK again - hold OK menu", 1);
   } else if (scenario == "settings") {
     simEnd = M + 3000; press(M, UP); press(M + 400, OK, 80); captureAt = { 200 };
     setenv("GRAB", "SETTINGS", 1);
@@ -271,6 +296,12 @@ int main(int argc, char **argv) {
   if (scenario == "flappy")    check("flappy ran", seen("FLAPPY"));
   if (scenario == "breakout")  check("breakout ran", seen("BREAKOUT"));
   if (scenario == "pause")     check("pause menu shown", seen("PAUSE"));
+  bool overShown = seen("GAME OVER") || seen("NEW RECORD!");
+  if (scenario == "invaders")  { check("invaders ran", seen("INVADERS") && seen("WAVE 1")); check("invaders: game over reached", overShown); }
+  if (scenario == "rocks")     { check("rocks ran", seen("ROCKS")); check("rocks: game over reached", overShown); }
+  if (scenario == "shooter")   { check("shooter ran", seen("SHOOTER") && seen("BOMBS")); check("shooter: game over reached", overShown); }
+  if (scenario == "lander")    { check("lander ran", seen("LANDER") && seen("FUEL")); check("lander: crash and game over", seen("CRASH") && overShown); }
+  if (scenario == "cave")      { check("cave ran", seen("CAVE") && seen("hold UP to fly")); check("cave: game over reached", overShown); }
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);

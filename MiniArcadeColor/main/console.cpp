@@ -31,6 +31,11 @@
 #include "game_pong.h"
 #include "game_flappy.h"
 #include "game_breakout.h"
+#include "game_invaders.h"
+#include "game_rocks.h"
+#include "game_shooter.h"
+#include "game_cave.h"
+#include "game_lander.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -76,6 +81,11 @@ static const Game GAMES[] = {
   { "Pong",     "PNG", pongRun,     IC_PONG,     C::BLUE,   NULL },
   { "Flappy",   "FLP", flappyRun,   IC_FLAPPY,   C::ORANGE, NULL },
   { "Breakout", "BRK", breakoutRun, IC_BREAKOUT, C::RED,    NULL },
+  { "Invaders", "INV", invadersRun,  IC_INVADERS, C::GREEN,  NULL },
+  { "Rocks",    "RCK", asteroidsRun, IC_ROCKS,    C::BROWN,  NULL },
+  { "Shooter",  "SHT", shooterRun,   IC_SHOOTER,  C::CYAN,   NULL },
+  { "Cave",     "CAV", caveRun,      IC_CAVE,     C::BROWN,  NULL },
+  { "Lander",   "LND", landerRun,    IC_LANDER,   C::GREY,   NULL },
   // more games come here (before the entries with a tag)
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };
