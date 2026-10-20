@@ -153,9 +153,16 @@ static void press(uint32_t t, uint8_t mask, uint32_t len = 60) { script.push_bac
 static const uint8_t UP = 1, DN = 2, LT = 4, RT = 8, OK = UP | DN;
 // from the menu (Snake selected) to game n, started at about t
 static uint32_t openGame(uint8_t n, uint32_t t) {
-  for (uint8_t i = 0; i < n; i++, t += 250) press(t, DN);
+  if (n <= GAME_COUNT / 2) for (uint8_t i = 0; i < n; i++, t += 250) press(t, DN);
+  else for (uint8_t i = n; i < GAME_COUNT; i++, t += 250) press(t, UP);   // shorter the other way round
   press(t, OK, 80);
   return t + 400;
+}
+// the same by the game's name in the library, e.g. openGameNamed("Doom", M)
+static uint32_t openGameNamed(const char *name, uint32_t t) {
+  for (uint8_t i = 0; i < GAME_COUNT; i++) if (!strcmp(GAMES[i].name, name)) return openGame(i, t);
+  printf("no game %s\n", name);
+  exit(2);
 }
 static uint8_t colsInFrame() {                                  // how many colours one frame shows
   std::set<uint8_t> c(lastFrame, lastFrame + sizeof(lastFrame));
