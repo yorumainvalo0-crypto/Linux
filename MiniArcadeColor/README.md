@@ -10,9 +10,9 @@ Tetris, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders, Dino, Breakout,
 Rocks, Racer, Frogger, 4 wins, Tic Tac Toe, 2048, Minesweeper, Pac-Man,
 Shooter, Jump & Run, Sokoban, Battleship, Sudoku, Lights Out, Match 3,
 Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
-the CPU or two players on one console (no online multiplayer yet). Plus
+the CPU or two players on one console (and online, see below). Plus
 Chess with all rules (castling, en passant, promotion, check, mate,
-stalemate, 50 moves), against the CPU or for two players on one console
+stalemate, 50 moves), against the CPU, for two players on one console or online
 (the board can turn round for black):
 
 - **vs CPU easy / normal / hard**: you pick white or black, the board faces
@@ -90,6 +90,25 @@ on a 7 x 9 cm perfboard.
                          (or a 5th key, the key wizard offers it)
     hold OK in a game    pause: continue / restart / quit to menu
     key held at start    learn the keys again
+
+## Online
+
+"Online" in the game list plays with a console nearby over ESP-NOW (no WLAN
+needed), on the same protocol as the OLED console's "Multiplayer" page - a
+colour and an OLED console play together. Everybody who has the page open
+shows up in the list of the others with a name and a 4 letter code from the
+chip; the radio is only on while the page is open.
+
+    own row, OK          change the name (UP/DOWN letter, LEFT/RIGHT place)
+    a console, RIGHT     friend (*) or not - friends come first in the list
+    a console, OK        challenge it: choose a game, it has 30 s to answer
+    challenged           OK = play, LEFT = no
+    hold OK              in a game: give up; in the list: back to the games
+
+The games: 4 wins, Tic Tac Toe, Pong, Snake, Pac-Man, Battleship, Checkers,
+Mau-Mau and Bomberman with either console, Chess only between two colour
+consoles (an OLED console is marked "OLED" in the list). Real-time games run
+in lockstep on both consoles; only the keys go over the radio.
 
 ## Updates
 

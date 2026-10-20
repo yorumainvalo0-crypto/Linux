@@ -75,7 +75,8 @@ static uint8_t xoThink(uint8_t level, uint8_t me) {
 
 // ---------------- screen ----------------
 static const col XO_COL[3] = { C::BLACK, rgb(255, 85, 85), rgb(51, 204, 255) };
-static struct { uint8_t mode, tally[3], last; uint16_t score; uint32_t lastAt; bool two; } xoV;
+// who[]: the names in an online game (multiplayer.h), NULL = YOU / CPU, X / O
+static struct { uint8_t mode, tally[3], last; uint16_t score; uint32_t lastAt; bool two; const char *who[3]; } xoV;
 
 // a thick line: a round brush along it
 static void xoThick(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t r, col c) {
@@ -150,8 +151,9 @@ static void xoDraw(uint8_t cur, int8_t line, uint8_t turn, const char *note, con
     gfx.rbox(XO_PX, y, 98, 62, 8, act ? colDark(XO_COL[p], 2) : rgb(30, 10, 40));
     if (act) gfx.rframe(XO_PX, y, 98, 62, 8, XO_COL[p]);
     xoMark(XO_PX + 22, y + 31, p, 12, act ? colDark(XO_COL[p], 2) : rgb(30, 10, 40));
-    const char *name = xoV.two ? (p == 1 ? "X" : "O") : (p == 1 ? "YOU" : "CPU");
-    gfx.text(XO_PX + 46, y + 8, name, C::WHITE, F_TEXT);
+    const char *name = xoV.who[p] ? xoV.who[p] : xoV.two ? (p == 1 ? "X" : "O") : (p == 1 ? "YOU" : "CPU");
+    gfx.text(XO_PX + 46, y + 8, name, C::WHITE, Gfx::width(name) > 50 ? F_SMALL : F_TEXT);
+    if (xoV.who[p]) continue;                                   // online: one game, no tally
     char b[8];
     snprintf(b, sizeof(b), "%u", xoV.tally[p]);
     gfx.text(XO_PX + 46, y + 32, b, C::YELLOW, F_TEXT);
@@ -159,7 +161,7 @@ static void xoDraw(uint8_t cur, int8_t line, uint8_t turn, const char *note, con
   }
   char b[16];
   snprintf(b, sizeof(b), "draws %u", xoV.tally[0]);
-  gfx.text(XO_PX + 8, 180, b, C::LTGREY, F_SMALL);
+  if (!xoV.who[1]) gfx.text(XO_PX + 8, 180, b, C::LTGREY, F_SMALL);
   if (!xoV.two) {
     static const char *const LV[3] = { "level easy", "level normal", "level hard" };
     gfx.text(XO_PX + 8, 192, LV[xoV.mode], C::LTGREY, F_SMALL);

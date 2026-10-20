@@ -98,6 +98,8 @@ static const char *const IC_SETTINGS[12] = {
   ".....ss.....", "..s.ssss.s..", ".ssssssssss.", "..sss..sss..", ".sss....sss.", "ssss....ssss",
   "ssss....ssss", ".sss....sss.", "..sss..sss..", ".ssssssssss.", "..s.ssss.s..", ".....ss....." };
 
+#include "multiplayer.h"           // online play: uses the games above and the icons
+
 static const Game GAMES[] = {
   { "Snake",       "SNK", snakeRun,       IC_SNAKE,       C::GREEN,         NULL },
   { "Tetris",      "TET", tetrisRun,      IC_TETRIS,      C::PURPLE,        NULL },
@@ -133,6 +135,7 @@ static const Game GAMES[] = {
   { "Lander",      "LND", landerRun,      IC_LANDER,      C::GREY,          NULL },
   // more games come here (before the entries with a tag)
   { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
+  { "Online",      "ONL", onlineRun,      IC_ONLINE,      MP_ACCENT,        "nearby" },
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };
 static const uint8_t GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
