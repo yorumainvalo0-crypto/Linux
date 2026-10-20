@@ -35,7 +35,10 @@ static int grabNext = 0;
 static bool simSlept = false;
 static int8_t  LADDER = -1;                      // pin with three keys through resistors
 static uint8_t ladder = 0;                       // which of them is pressed (0 = none)
-static const int LADDER_MV[4] = { 3100, 0, 300, 550 };   // 10k pull-up, keys via 0 / 1k / 2k
+static const int LADDER_EXT[8] = { 3100, 0, 300, 550 };  // 10k pull-up, keys via 0 / 1k / 2k
+// no pull-up resistor, the pin's own ~45k: keys via 10k / 11k / 12k / 13.3k to GND, 5 = UP+DOWN
+static const int LADDER_INT[8] = { 3100, 600, 649, 696, 750, 345 };
+static const int *LADDER_MV = LADDER_EXT;
 static int16_t simAcc[3] = { 0, 0, 16384 };      // the gyroscope's accelerometer, lying flat
 struct AccEv { uint32_t t; int16_t x, y; };
 static std::vector<AccEv> accScript;
@@ -55,7 +58,8 @@ void simFrameSent(const uint8_t *, size_t) {}                   // the OLED's I2
 int simAdcRaw(int ch) {
   bool down = pinMode_[ch] == 3;
   if (ch == BAT) return 3900 / 2 * (down ? 62 : 100) / 100 * 4095 / 2500;
-  if (ch == LADDER) { int mv = LADDER_MV[ladder]; return mv * 4095 / 2500 > 4095 ? 4095 : mv * 4095 / 2500; }
+  if (ch == LADDER) { int mv = LADDER_MV[ladder] + rand() % 17 - 8;   // the ADC is a little noisy
+    if (mv < 0) mv = 0; return mv * 4095 / 2500 > 4095 ? 4095 : mv * 4095 / 2500; }
   if (pinPress[ch] || pinMode_[ch] == 2) return 4095;
   if (down) return 5;
   return 300 + (int)(clockUs / 1000 % 400);                    // floating pin: drifts
@@ -71,7 +75,7 @@ void simDeepSleep() { simSlept = true; printf("      board went to deep sleep\n"
 // bits 0..3: the keys on their own pins, bits 4..5: the ladder key
 static void applyMask(uint8_t m) {
   for (int i = 0; i < 4; i++) if (KEYS[i] != LADDER) pinPress[KEYS[i]] = m >> i & 1;
-  ladder = m >> 4 & 3;
+  ladder = m >> 4 & 7;
 }
 void simDelayUs(uint32_t us) { clockUs += us; }
 
@@ -202,8 +206,16 @@ int main(int argc, char **argv) {
     // UP, DOWN, LEFT on one pin through resistors, RIGHT on its own pin
     simNvsU16.erase("pset"); LADDER = 2;
     press(2500, 1 << 4, 400); press(3300, 2 << 4, 400); press(4100, 3 << 4, 400); press(4900, RT, 400);
-    press(15000, (3 << 4) | RT, 200);                            // OK = LEFT + RIGHT
-    simEnd = 17000; captureAt = { 330 };
+    press(17500, (3 << 4) | RT, 200);                            // OK = LEFT + RIGHT
+    simEnd = 19500; captureAt = { 330 };
+  } else if (scenario == "ladder4") {
+    // all four arrows on one pin, only the pin's own pull-up; OK = UP+DOWN together
+    simNvsU16.erase("pset"); LADDER = 2; LADDER_MV = LADDER_INT;
+    press(2500, 1 << 4, 400); press(3300, 2 << 4, 400); press(4100, 3 << 4, 400); press(4900, 4 << 4, 400);
+    script.push_back({ 5700, 1 << 4 }); script.push_back({ 5720, 5 << 4 }); script.push_back({ 6100, 0 });   // OK: UP, then both
+    press(10500, 2 << 4, 120);                                   // DOWN: Snake -> Tetris
+    script.push_back({ 11500, 1 << 4 }); script.push_back({ 11520, 5 << 4 }); script.push_back({ 11700, 0 });
+    simEnd = 13500;
   } else if (scenario == "tilt") {
     // settings -> tilt control on: sensor found, axes learned; then Snake steered by tilting
     simGyro = true; simNvsU16["snd"] = 255;                      // GPIO7 is the gyroscope's here
@@ -240,6 +252,14 @@ int main(int argc, char **argv) {
     check("right = x, away = -y", tiltAx[0] == 0x00 && tiltAx[1] == 0x81);
     check("tilt control switched on", cfgTilt);
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
+  }
+  if (scenario == "ladder4") {
+    printf("   keys: %u/%u %u/%u %u/%u %u/%u OK %u/%u\n", BTN_PIN[0], BTN_MV[0], BTN_PIN[1], BTN_MV[1],
+           BTN_PIN[2], BTN_MV[2], BTN_PIN[3], BTN_MV[3], BTN_PIN[4], BTN_MV[4]);
+    bool all = true;
+    for (int i = 0; i < 5; i++) all = all && BTN_PIN[i] == 2 && BTN_MV[i];
+    check("four arrows and OK learned on one pin", all);
+    check("OK (two keys together) opened Tetris", seen("TETRIS") && !seen("SNAKE"));
   }
   if (scenario == "ladder") {
     printf("   keys: UP %u/%u DOWN %u/%u LEFT %u/%u RIGHT %u/%u\n", BTN_PIN[0], BTN_MV[0], BTN_PIN[1], BTN_MV[1],

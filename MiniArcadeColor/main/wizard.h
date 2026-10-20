@@ -26,7 +26,7 @@ static void readAll(uint8_t mode, uint8_t *out) {
   for (uint8_t i = 0; i < CAND_N; i++) out[i] = digitalRead(CAND[i]);
 }
 static void readMv(int16_t *out) {            // right after readAll(INPUT_PULLUP)
-  for (uint8_t i = 0; i < CAND_N; i++) out[i] = candAdc(i) ? (int16_t)analogReadMilliVolts(CAND[i]) : -1;
+  for (uint8_t i = 0; i < CAND_N; i++) out[i] = candAdc(i) ? pinMv(CAND[i]) : -1;
 }
 
 static void calibrate() {
@@ -49,7 +49,7 @@ static void calibrate() {
 // a learned ladder key sits at this voltage on this pin already
 static bool levelTaken(uint8_t pin, int16_t mv) {
   for (uint8_t b = 0; b < B_COUNT; b++)
-    if (BTN_PIN[b] == pin && BTN_MV[b] && abs((int)BTN_MV[b] - 1 - mv) < 120) return true;
+    if (BTN_PIN[b] == pin && BTN_MV[b] && abs((int)BTN_MV[b] - 1 - mv) < 25) return true;
   return false;
 }
 
@@ -129,14 +129,18 @@ void learnKeys() {
   }
   for (uint8_t b = 0; b < B_COUNT; b++) {
     char msg[32];
-    snprintf(msg, sizeof(msg), b < 4 ? "press  %s" : "press an own OK key", BTN_NAME[b]);
+    snprintf(msg, sizeof(msg), b < 4 ? "press  %s" : "OK key - or two keys together", BTN_NAME[b]);
     int8_t hit;
     uint32_t start = millis();
     bool skipped = false;
     while (true) {
       int8_t secs = -1;
-      if (b == 4) {                                          // the OK key is optional
-        int32_t left = 6000 - (int32_t)(millis() - start);
+      // OK is optional when two opposite keys sit on different pins (then
+      // pressing both is OK); with all keys on one ladder it is needed
+      bool pairUD = BTN_PIN[B_UP] != BTN_PIN[B_DOWN] || !BTN_MV[B_UP];
+      bool pairLR = BTN_PIN[B_LEFT] != BTN_PIN[B_RIGHT] || !BTN_MV[B_LEFT];
+      if (b == 4 && (pairUD || pairLR)) {
+        int32_t left = 8000 - (int32_t)(millis() - start);
         if (left <= 0) { skipped = true; break; }
         secs = (int8_t)(left / 1000 + 1);
       }
@@ -144,8 +148,11 @@ void learnKeys() {
       wizScreen(msg, b, hit, act, secs);
       if (hit < 0) continue;
       uint8_t act2;
+      int16_t mv1 = seenMv;
       delay(50);
       if (scanKey(used, &act2) != hit) continue;
+      if (mv1 >= 0 && abs(seenMv - mv1) > 20) continue;      // still settling
+      if (mv1 >= 0) seenMv = (int16_t)((seenMv + mv1) / 2);
       break;
     }
     if (skipped) { BTN_PIN[b] = 255; break; }

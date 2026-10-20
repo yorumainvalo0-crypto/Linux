@@ -52,18 +52,53 @@ static uint32_t okTime = 0;
    key for a moment and the phone repeats it while the finger stays on.  */
 static volatile uint32_t vKeyUntil[B_COUNT];
 
-// half the distance to the next key on the same ladder, at most 250 mV
+// half the distance to the next key on the same ladder (the levels may be
+// only some 40 mV apart when the keys use the pin's own pull-up)
 static void keyTolerances() {
   for (uint8_t i = 0; i < B_COUNT; i++) {
     if (!BTN_MV[i]) continue;
     int16_t tol = 250;
     for (uint8_t j = 0; j < B_COUNT; j++)
       if (j != i && BTN_MV[j] && BTN_PIN[j] == BTN_PIN[i]) {
-        int16_t half = (int16_t)(abs((int)BTN_MV[i] - (int)BTN_MV[j]) / 2 - 10);
+        int16_t half = (int16_t)(abs((int)BTN_MV[i] - (int)BTN_MV[j]) / 2);
         if (half < tol) tol = half;
       }
-    BTN_TOL[i] = (uint16_t)(tol < 40 ? 40 : tol);
+    BTN_TOL[i] = (uint16_t)(tol < 8 ? 8 : tol);
   }
+}
+
+// a pin in millivolts, the mean of eight readings
+static int16_t pinMv(uint8_t pin) {
+  uint32_t sum = 0;
+  for (uint8_t k = 0; k < 8; k++) sum += analogReadMilliVolts(pin);
+  return (int16_t)(sum / 8);
+}
+
+/* Which ladder key is down on a pin (-1 = none): the nearest learned
+   voltage. Read at most once per millisecond, and a new key counts only
+   when two readings in a row agree - a finger sliding from one key to
+   the next must not flash a third.                                     */
+struct LadderPin { uint8_t pin; int8_t key, prev; uint32_t at; };
+static LadderPin ladders[3] = { { 255, -1, -1, 0 }, { 255, -1, -1, 0 }, { 255, -1, -1, 0 } };
+static int8_t ladderKey(uint8_t pin) {
+  LadderPin *l = NULL;
+  for (uint8_t i = 0; i < 3 && !l; i++) if (ladders[i].pin == pin) l = &ladders[i];
+  for (uint8_t i = 0; i < 3 && !l; i++) if (ladders[i].pin == 255) { l = &ladders[i]; l->pin = pin; }
+  if (!l) return -1;
+  uint32_t now = millis();
+  if (l->at == now) return l->key;
+  int16_t mv = pinMv(pin);
+  int8_t best = -1;
+  int16_t bestD = 32767;
+  for (uint8_t b = 0; b < B_COUNT; b++) {
+    if (BTN_PIN[b] != pin || !BTN_MV[b]) continue;
+    int16_t dv = (int16_t)abs(mv - ((int)BTN_MV[b] - 1));
+    if (dv <= (int16_t)BTN_TOL[b] && dv < bestD) { bestD = dv; best = (int8_t)b; }
+  }
+  if (best == l->prev) l->key = best;
+  l->prev = best;
+  l->at = now;
+  return l->key;
 }
 
 void applyPinModes() {
@@ -84,12 +119,7 @@ bool rawPressed(uint8_t i) {
   if (u && (int32_t)(u - millis()) > 0) return true;
   if (i < 4 && tiltKey[i]) return true;
   if (BTN_PIN[i] == 255) return false;
-  if (BTN_MV[i]) {                       // ladder: twice, so a key passing by does not count
-    int32_t want = BTN_MV[i] - 1;
-    if (abs((int32_t)analogReadMilliVolts(BTN_PIN[i]) - want) > BTN_TOL[i]) return false;
-    delayMicroseconds(1500);
-    return abs((int32_t)analogReadMilliVolts(BTN_PIN[i]) - want) <= BTN_TOL[i];
-  }
+  if (BTN_MV[i]) return ladderKey(BTN_PIN[i]) == (int8_t)i;
   return digitalRead(BTN_PIN[i]) == (BTN_ACT[i] ? HIGH : LOW);
 }
 
@@ -109,6 +139,9 @@ void btnUpdate() {
     if (d && !kDown[i]) { kDown[i] = true; kTime[i] = now; kSent[i] = kChord[i] = false; }
     else if (!d && kDown[i]) {
       kDown[i] = false;
+      // a ladder key that turns straight into another on its pin (two keys
+      // pressed together for OK) was no tap of its own
+      if (BTN_MV[i] && ladderKey(BTN_PIN[i]) >= 0) kChord[i] = true;
       if (!kSent[i] && !kChord[i]) dirEmit(i, now);          // a quick tap
       kChord[i] = false;
     }
