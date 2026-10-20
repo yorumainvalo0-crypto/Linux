@@ -1,1 +1,3 @@
 CONFIG_ARCADE_UPDATE_BIN="miniarcade-color-c3.bin"
+# the SuperMini talks over its own USB: UART0 (GPIO20/21) stays free for the display
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

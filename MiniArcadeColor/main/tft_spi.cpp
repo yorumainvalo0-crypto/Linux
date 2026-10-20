@@ -151,14 +151,25 @@ static int8_t findReset(const Quad &q, int8_t miso) {
     int8_t p = (int8_t)PINS_ALL[i];
     if (inQuad(q, p) || p == miso || isBl(p)) continue;
     quadOn(q); bbWrite(q, 0x36, 0xA8); quadOff(q);
+    // long pulse and long wait: some boards have a capacitor on RESET
     lv(p, 0); gpio_set_direction((gpio_num_t)p, GPIO_MODE_INPUT_OUTPUT);
-    esp_rom_delay_us(20);
+    vTaskDelay(pdMS_TO_TICKS(3));
     gpio_set_direction((gpio_num_t)p, GPIO_MODE_INPUT);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(60));
     quadOn(q); bbRead(q, 0x0B, s); quadOff(q);
     if (findByte(s, miso, 0x00) >= 0 && findByte(s, miso, 0xA8) < 0) return p;
   }
   return -1;
+}
+
+/* RESET not found (wired to 3V3, or the panel did not show it): the pin
+   from the settings stays the display's anyway, so no key, buzzer or
+   battery search ever pulls it low - that would blank the panel.      */
+static void keepReset(TftPins &p) {
+  int8_t r = CONFIG_ARCADE_TFT_RST;
+  if (p.rst >= 0 || r < 0) return;
+  if (r == p.sck || r == p.mosi || r == p.cs || r == p.dc || r == p.miso) return;
+  p.rst = r;
 }
 
 static void allPullUp() {
@@ -194,6 +205,7 @@ static bool search(TftPins &out, bool full) {
     }
   if (miso < 0) return false;
   out = { hit.sck, hit.mosi, hit.cs, hit.dc, miso, findReset(hit, miso) };
+  keepReset(out);
   return true;
 }
 
@@ -203,20 +215,20 @@ static bool findPins(TftPins &p) {
   pr.begin("arcade", true);
   TftPins saved;
   bool have = pr.getBytes("tftp", &saved, sizeof(saved)) == sizeof(saved);
-  bool tried = pr.getUShort("tftn", 0) != 0;             // full search failed before (no SDO?)
+  bool tried = pr.getUShort("tftn4", 0) != 0;             // full search failed before (no SDO?)
   pr.end();
   allPullUp();
   if (have && saved.rst >= 0) { lv(saved.rst, 1); gpio_set_direction((gpio_num_t)saved.rst, GPIO_MODE_INPUT_OUTPUT); }
   vTaskDelay(pdMS_TO_TICKS(120));                        // the panel's own power-on reset
-  if (have && probe({ saved.sck, saved.mosi, saved.cs, saved.dc }, saved.miso) == saved.miso) { p = saved; return true; }
+  if (have && probe({ saved.sck, saved.mosi, saved.cs, saved.dc }, saved.miso) == saved.miso) { p = saved; keepReset(p); return true; }
   if (!search(p, !tried)) {
-    if (!tried) { pr.begin("arcade", false); pr.putUShort("tftn", 1); pr.end(); }
+    if (!tried) { pr.begin("arcade", false); pr.putUShort("tftn4", 1); pr.end(); }
     if (have) p = saved;                                 // last known, cannot be checked
     return false;
   }
   pr.begin("arcade", false);
   pr.putBytes("tftp", &p, sizeof(p));
-  pr.putUShort("tftn", 0);
+  pr.putUShort("tftn4", 0);
   pr.end();
   return true;
 }
@@ -259,12 +271,31 @@ void Gfx::begin() {
   { uint8_t v = 0x55; cmd(0x3A, &v, 1); }                // 16 bit colour
   cmd(0x21);                                             // the ST7789 panels are inverted
 #else
-  static const uint8_t pwr1[] = { 0x23 }, pwr2[] = { 0x10 }, vcm1[] = { 0x3E, 0x28 }, vcm2[] = { 0x86 };
-  static const uint8_t frm[] = { 0x00, 0x18 }, dfc[] = { 0x08, 0x82, 0x27 }, gam[] = { 0x01 };
-  cmd(0xC0, pwr1, 1); cmd(0xC1, pwr2, 1); cmd(0xC5, vcm1, 2); cmd(0xC7, vcm2, 1);
-  { uint8_t v = 0x55; cmd(0x3A, &v, 1); }                // 16 bit colour
-  cmd(0xB1, frm, 2); cmd(0xB6, dfc, 3); cmd(0x26, gam, 1);
-  cmd(0x11); vTaskDelay(pdMS_TO_TICKS(120));             // sleep out
+  // the full sequence the common libraries send; some panels stay white
+  // with less (count, then the parameters)
+  static const uint8_t INIT[] = {
+    0xEF, 3, 0x03, 0x80, 0x02,
+    0xCF, 3, 0x00, 0xC1, 0x30,                           // power control B
+    0xED, 4, 0x64, 0x03, 0x12, 0x81,                     // power on sequence
+    0xE8, 3, 0x85, 0x00, 0x78,                           // driver timing A
+    0xCB, 5, 0x39, 0x2C, 0x00, 0x34, 0x02,               // power control A
+    0xF7, 1, 0x20,                                       // pump ratio
+    0xEA, 2, 0x00, 0x00,                                 // driver timing B
+    0xC0, 1, 0x23,                                       // power control 1
+    0xC1, 1, 0x10,                                       // power control 2
+    0xC5, 2, 0x3E, 0x28,                                 // VCOM 1
+    0xC7, 1, 0x86,                                       // VCOM 2
+    0x37, 1, 0x00,                                       // no vertical scroll
+    0x3A, 1, 0x55,                                       // 16 bit colour
+    0xB1, 2, 0x00, 0x18,                                 // frame rate
+    0xB6, 3, 0x08, 0x82, 0x27,                           // display function
+    0xF2, 1, 0x00,                                       // 3-gamma off
+    0x26, 1, 0x01,                                       // gamma curve
+    0xE0, 15, 0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0xF1, 0x37, 0x07, 0x10, 0x03, 0x0E, 0x09, 0x00,
+    0xE1, 15, 0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F,
+    0 };
+  for (const uint8_t *p = INIT; *p; p += 2 + p[1]) cmd(p[0], p + 2, p[1]);
+  cmd(0x11); vTaskDelay(pdMS_TO_TICKS(150));             // sleep out
 #endif
   cmd(0x36, &madctl, 1);
   cmd(0x29);                                             // display on
