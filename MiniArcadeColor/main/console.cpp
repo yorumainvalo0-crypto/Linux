@@ -36,6 +36,11 @@
 #include "game_shooter.h"
 #include "game_cave.h"
 #include "game_lander.h"
+#include "game_doom.h"
+#include "game_mine.h"
+#include "game_tunnel.h"
+#include "game_pacman.h"
+#include "game_bomber.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -86,6 +91,11 @@ static const Game GAMES[] = {
   { "Shooter",  "SHT", shooterRun,   IC_SHOOTER,  C::CYAN,   NULL },
   { "Cave",     "CAV", caveRun,      IC_CAVE,     C::BROWN,  NULL },
   { "Lander",   "LND", landerRun,    IC_LANDER,   C::GREY,   NULL },
+  { "Doom",      "DOM", doomRun,     IC_DOOM,     C::RED,    NULL },
+  { "Mine",      "MIN", mineRun,     IC_MINE,     C::GREEN,  NULL },
+  { "Tunnel 3D", "TUN", tunnelRun,   IC_TUNNEL,   C::CYAN,   NULL },
+  { "Pac-Man",   "PAC", pacmanRun,   IC_PACMAN,   C::YELLOW, NULL },
+  { "Bomberman", "BMB", bomberRun,   IC_BOMBER,   C::ORANGE, NULL },
   // more games come here (before the entries with a tag)
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };

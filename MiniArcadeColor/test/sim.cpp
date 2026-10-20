@@ -227,6 +227,32 @@ int main(int argc, char **argv) {
     for (uint32_t k = t + 1200; k < t + 4000; k += 200) press(k, UP, 100);
     autoplay = true; autoplayFrom = t + 4000;
     setenv("GRAB", "OK again - hold OK menu", 1);
+  } else if (scenario == "doom") {
+    uint32_t t = openGameNamed("Doom", M); simEnd = t + 150000;
+    press(t + 300, RT, 700); press(t + 1100, UP, 1000);
+    for (uint32_t k = t + 2200; k < simEnd; k += 1700) press(k, OK, 80);   // fire now and then
+    autoplay = true; autoplayFrom = t + 2300; captureAt = { 245, 1100 };
+    setenv("GRAB", "best ", 1);                                  // the game over box
+  } else if (scenario == "mine") {
+    uint32_t t = openGameNamed("Mine", M); simEnd = t + 20000;
+    press(t + 300, RT, 900); press(t + 1400, OK, 80); press(t + 1900, DN); press(t + 2400, UP);
+    for (uint32_t k = t + 3000; k < simEnd; k += 1100) press(k, OK, 80);
+    autoplay = true; autoplayFrom = t + 3000; captureAt = { 300, 900 };
+  } else if (scenario == "tunnel") {
+    uint32_t t = openGameNamed("Tunnel 3D", M); simEnd = t + 90000;
+    autoplay = true; autoplayFrom = t + 300; captureAt = { 280 };
+    setenv("GRAB", "best ", 1);
+  } else if (scenario == "pacman") {
+    uint32_t t = openGameNamed("Pac-Man", M); simEnd = t + 150000;
+    press(t + 1500, LT);
+    autoplay = true; autoplayFrom = t + 2000; captureAt = { 300, 800 };
+    setenv("GRAB", "best ", 1);
+  } else if (scenario == "bomber") {
+    uint32_t t = openGameNamed("Bomberman", M); simEnd = t + 120000;
+    press(t + 300, DN); press(t + 600, DN); press(t + 1000, OK, 80);   // vs 3 CPUs
+    for (uint32_t k = t + 2000; k < simEnd; k += 2300) press(k, OK, 80);   // a bomb now and then
+    autoplay = true; autoplayFrom = t + 1500; captureAt = { 330, 450 };
+    setenv("GRAB", "best ", 1);
   } else if (scenario == "settings") {
     simEnd = M + 3000; press(M, UP); press(M + 400, OK, 80); captureAt = { 200 };
     setenv("GRAB", "SETTINGS", 1);
@@ -302,6 +328,12 @@ int main(int argc, char **argv) {
   if (scenario == "shooter")   { check("shooter ran", seen("SHOOTER") && seen("BOMBS")); check("shooter: game over reached", overShown); }
   if (scenario == "lander")    { check("lander ran", seen("LANDER") && seen("FUEL")); check("lander: crash and game over", seen("CRASH") && overShown); }
   if (scenario == "cave")      { check("cave ran", seen("CAVE") && seen("hold UP to fly")); check("cave: game over reached", overShown); }
+  if (scenario == "doom")      check("doom ran to game over", seen("DOOM") && seen("HEALTH") && overShown);
+  if (scenario == "mine")      check("mine ran, blocks dug", seen("MINE") && seen("BAG 1"));
+  if (scenario == "tunnel")    check("tunnel ran to game over", seen("TUNNEL") && seen("SPEED") && overShown);
+  if (scenario == "pacman")    check("pac-man ran to game over", seen("PAC-MAN") && seen("READY!") && overShown);
+  if (scenario == "bomber")    check("bomberman ran to its end", seen("BOMBERMAN") && seen("BOMBER") && overShown &&
+                                     (seen("CAUGHT") || seen("YOU WIN") || seen("TIME UP")));
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);
