@@ -13,7 +13,8 @@ Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
 the CPU or two players on one console (no online multiplayer yet). Plus
 Chess for two players on one console, with all rules (castling, en passant,
 promotion, check, mate, stalemate, 50 moves); the board can turn round for
-black.
+black. And Skat against two CPU players (German Skat Order), with a list of
+12, 24 or 36 games.
 
 ## Boards
 
@@ -70,6 +71,32 @@ on a 7 x 9 cm perfboard.
                          (or a 5th key, the key wizard offers it)
     hold OK in a game    pause: continue / restart / quit to menu
     key held at start    learn the keys again
+
+### Skat
+
+You (bottom) against ANNA (left) and BEN (right); the dealer goes round.
+32 French cards (Kreuz, Pik, Herz, Karo; B D K A), 10 each, 2 in the Skat.
+
+    Reizen               the panel asks: you say a value (UP/DOWN 18, 20, 22,
+                         23 ...) or answer "ja"; LEFT/RIGHT bid / passe, OK
+    you won the bidding  LEFT/RIGHT Skat or Hand, OK
+    druecken             LEFT/RIGHT, OK marks 2 cards, OK on "push"
+    announce             UP/DOWN Kreuz, Pik, Herz, Karo, Grand, Null, Null
+                         Ouvert; in a Hand game LEFT/RIGHT adds Schneider,
+                         Schwarz or Ouvert. The panel shows mit/ohne and the
+                         value; a Null worth less than the bid cannot be chosen
+    trick play           LEFT/RIGHT choose, OK play; cards you may not play
+                         are dimmed
+
+Full rules: Buben and the trump suit are trumps (Grand: only the Buben),
+Null without trumps and with the 10 below the Bube. Game value = base value
+(Karo 9, Herz 10, Pik 11, Kreuz 12, Grand 24) x (Spitzen mit/ohne + 1, + Hand,
+Schneider, angesagt, Schwarz, angesagt, Ouvert); Null 23 / Hand 35 / Ouvert
+46 / Ouvert Hand 59. The declarer needs 61 Augen (Schneider 90, Schwarz all
+tricks); a game worth less than the bid is lost "ueberreizt" with the next
+multiple of its base value. Everyone passes: a new deal. Scoring as in the
+Seeger list: won +value, lost -2 x value; best = your total at the end of
+the list (0 when it is negative).
 
 ## Updates
 
