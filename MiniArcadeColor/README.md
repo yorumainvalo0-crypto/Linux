@@ -57,15 +57,43 @@ dirt). Every pixel is a ray through the block grid, all in integers, drawn at
 
 ![Palace](docs/palace.png)
 
-A nameless runner escapes from a palace dungeon: four levels (the cellars,
-the old wells, the guard halls, the sky tower), ten minutes for all of them.
-A level is a grid of rooms of 10 x 3 tiles; the screen flips at a room's
-edge. Loose tiles crumble, spikes spring out, plates open gates (others shut
-them again), one plate opens the exit door. One floor down is safe, two cost
-a flask of health, three kill - climbing down first saves a floor. Potions
-heal or add a flask. The sword lies in the first level; guards get better
-level by level, the last one is their captain. Dying starts the level again,
-the clock runs on. Score: 100 per level, plus the seconds left at the end.
+A nameless runner escapes from a palace dungeon: eight levels, twenty
+minutes for all of them. A level is a grid of rooms of 10 x 3 tiles; the
+screen flips at a room's edge. Loose tiles crumble (whole rows of them, run
+over them), spikes spring out, plates open gates (others shut them again),
+one plate opens the exit door. One floor down is safe, two cost a flask of
+health, three kill - climbing down first saves a floor. Potions heal or add
+a flask. The sword lies in the first level; guards get better level by
+level, the captain waits in the sky tower, the forges and below the throne,
+the Warden on his throne at the very end (nine flasks, he rages when half
+are gone). Dying starts the level again, the clock runs on. Score: 100 per
+level, plus the seconds left at the end.
+
+| Level | Rooms | What waits there |
+|-------|-------|------------------|
+| 1 The Cellars | 3 x 1 | the sword, the first guard, a loose tile |
+| 2 The Old Wells | 4 x 2 | a deep drop to climb down, loose rows, spikes |
+| 3 The Guard Halls | 5 x 2 | four guards, gates and the plates that shut them |
+| 4 The Sky Tower | 4 x 3 | a climb up the tower, the captain |
+| 5 The Sunken Baths | 5 x 1 | water in the pits (the room mirrored in it), a timed gate behind a running jump over a pool |
+| 6 The Great Library | 4 x 3 | bookshelves, a loose row to cross, hang drops, a gate shut by a plate on the way, a climb of six ledges |
+| 7 The Forges | 5 x 2 | furnaces, scythes, two timed gates, molten iron below, the captain again |
+| 8 The Dawn Throne | 4 x 3 | windows at dawn, all of it together, the Warden |
+
+New in the later levels:
+
+- **Scythes** sweep out of a slot in the floor in a steady beat (their tip
+  shows just before). Wait on the tile before one until it has gone in,
+  then run past - or step past carefully right after it.
+- **Timed gates** (their plates are blue) fall shut again a few seconds
+  after you leave the plate; a bar on the gate shows the time left, and it
+  ticks. A loose tile falling onto the plate keeps such a gate open.
+- **Pools**: the deepest pits of the baths hold water, those of the forges
+  molten iron - a fall in is the end.
+
+The level reached is kept: the next start offers "continue: level N" (with
+the flasks of the big potions before it and 2:30 for each level left), a
+new game, or any level before it. The score counts the levels played.
 
     LEFT/RIGHT           run
     DOWN + LEFT/RIGHT    careful step (safe on spikes, stops at an edge)
