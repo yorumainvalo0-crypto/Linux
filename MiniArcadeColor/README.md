@@ -11,9 +11,29 @@ Rocks, Racer, Frogger, 4 wins, Tic Tac Toe, 2048, Minesweeper, Pac-Man,
 Shooter, Jump & Run, Sokoban, Battleship, Sudoku, Lights Out, Match 3,
 Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
 the CPU or two players on one console (no online multiplayer yet). Plus
-Chess for two players on one console, with all rules (castling, en passant,
-promotion, check, mate, stalemate, 50 moves); the board can turn round for
-black.
+Mine 3D, a block world in first person (below), and Chess for two players
+on one console, with all rules (castling, en passant, promotion, check,
+mate, stalemate, 50 moves); the board can turn round for black.
+
+## Mine 3D
+
+![Mine 3D](docs/mine3d.png)
+
+A block world in first person, new every round: 32 x 32 x 16 blocks of grass
+hills, beaches, lakes, trees, caves and stone with ore. It wraps round at the
+edges. Three minutes to dig ore: coal 1, gold 5, crystal 20 points.
+
+    LEFT/RIGHT           turn
+    UP/DOWN held         walk forward / back (a step of one block is jumped)
+    UP/DOWN tapped       look up / down (four steps, marked on the left)
+    OK                   pick: dig the block in the middle of the view
+                         block: put it on the face you look at - under your
+                         own feet it lifts you up a block
+    OK twice             the bag: LEFT/RIGHT choose the pick or a block, OK
+
+Ore glints in the dark; whatever else you dig goes into the bag (grass gives
+dirt). Every pixel is a ray through the block grid, all in integers, drawn at
+160 x 92 and doubled.
 
 ## Boards
 

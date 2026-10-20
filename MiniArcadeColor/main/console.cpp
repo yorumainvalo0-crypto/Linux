@@ -38,6 +38,7 @@
 #include "game_lander.h"
 #include "game_doom.h"
 #include "game_mine.h"
+#include "game_mine3d.h"
 #include "game_tunnel.h"
 #include "game_pacman.h"
 #include "game_bomber.h"
@@ -104,6 +105,7 @@ static const Game GAMES[] = {
   { "Pong",        "PNG", pongRun,        IC_PONG,        C::BLUE,          NULL },
   { "Doom",        "DOM", doomRun,        IC_DOOM,        C::RED,           NULL },
   { "Mine",        "MIN", mineRun,        IC_MINE,        C::GREEN,         NULL },
+  { "Mine 3D",     "MN3", mine3dRun,      IC_MINE3D,      rgb(40,170,110),  NULL },
   { "Tunnel 3D",   "TUN", tunnelRun,      IC_TUNNEL,      C::CYAN,          NULL },
   { "Flappy",      "FLP", flappyRun,      IC_FLAPPY,      C::ORANGE,        NULL },
   { "Invaders",    "INV", invadersRun,    IC_INVADERS,    C::GREEN,         NULL },
