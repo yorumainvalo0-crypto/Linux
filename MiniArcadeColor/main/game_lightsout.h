@@ -49,29 +49,78 @@ static void loGlide(int16_t &v, int16_t target, uint32_t dt) {
   v += s;
 }
 
+/* A lamp, s x s at (x, y). glow 0 = dark glass, 255 = fully lit; in
+   between while it switches (it warms up / fades out). press = pushed in. */
+static void loLamp(int16_t x, int16_t y, int16_t s, uint8_t glow, bool press) {
+  if (press) { x += 2; y += 2; s -= 4; }
+  if (glow > 128) {                                     // the halo spills into the gaps
+    fxDitherDisc(x + s / 2, y + s / 2, s / 2 + 5, rgb(153, 85, 0));
+    gfx.rbox(x - 2, y - 2, s + 4, s + 4, 9, rgb(204, 127, 0));
+  }
+  if (glow == 0) {                                      // dark glass: a cool gradient, a glint, the cold filament
+    gfx.rbox(x, y, s, s, 7, rgb(51, 42, 102));
+    gfx.rbox(x + 2, y + 2, s - 4, s - 4, 6, rgb(0, 0, 102));
+    gfx.rbox(x + 3, y + s / 2, s - 6, s / 2 - 3, 5, rgb(0, 0, 51));
+    gfx.circle(x + s / 2, y + s / 2, s / 5, rgb(51, 42, 153));
+    gfx.line(x + 6, y + 9, x + 9, y + 6, rgb(102, 127, 204));
+    gfx.line(x + 6, y + 10, x + 10, y + 6, rgb(51, 85, 153));
+    return;
+  }
+  col rim  = colLerp(rgb(51, 42, 102), rgb(255, 127, 0), glow);
+  col face = colLerp(rgb(0, 0, 102), rgb(255, 212, 0), glow);
+  col core = colLerp(rgb(0, 0, 102), rgb(255, 255, 153), glow);
+  gfx.rbox(x, y, s, s, 7, rim);
+  gfx.rbox(x + 3, y + 3, s - 6, s - 6, 6, face);
+  gfx.disc(x + s / 2, y + s / 2, s / 4 + 1, core);
+  if (glow > 200) {
+    gfx.disc(x + s / 2, y + s / 2, s / 8, C::WHITE);
+    gfx.fill(x + 7, y + 6, 5, 3, C::WHITE);             // the glint
+    gfx.fill(x + 6, y + 9, 2, 3, C::WHITE);
+  }
+}
+
 static void loDraw(bool cursor, uint8_t level, uint8_t moves, uint8_t limit, uint16_t score, const char *msg, uint32_t dt) {
   statusBar("LIGHTS OUT", score, curHigh, C::YELLOW);
-  gfx.fill(0, TOP_H, SCR_W, SCR_H - TOP_H, C::NAVY);
-  gfx.rbox(LO_X - 4, LO_Y - 4, LO_N * LO_C + 8, LO_N * LO_C + 8, 8, rgb(30, 20, 50));
+  gfx.gradient(0, TOP_H, SCR_W, SCR_H - TOP_H, rgb(0, 0, 102), rgb(0, 0, 51));   // a still backdrop with a dotted grid
+  for (int16_t y = TOP_H + 6; y < SCR_H; y += 8)
+    for (int16_t x = 4 + (y / 8 % 2) * 4; x < SCR_W; x += 8) gfx.pixel(x, y, rgb(51, 42, 153));
+  // the board: a bevelled metal case with four screws
+  const int16_t BX = LO_X - 6, BY = LO_Y - 6, BW = LO_N * LO_C + 8;
+  gfx.rbox(BX + 3, BY + 3, BW, BW, 9, C::BLACK);
+  gfx.rbox(BX, BY, BW, BW, 9, rgb(51, 42, 102));
+  gfx.rframe(BX, BY, BW, BW, 9, rgb(102, 85, 153));
+  gfx.rbox(BX + 3, BY + 3, BW - 6, BW - 6, 7, rgb(25, 15, 45));
+  for (uint8_t k = 0; k < 4; k++) {
+    int16_t sx = k & 1 ? BX + BW - 4 : BX + 3, sy = k & 2 ? BY + BW - 4 : BY + 3;
+    gfx.disc(sx, sy, 2, rgb(153, 153, 170));
+    gfx.pixel(sx - 1, sy, rgb(51, 42, 102)); gfx.pixel(sx + 1, sy, rgb(51, 42, 102));
+  }
   uint32_t now = gameMillis(), ft = now - loFlashAt;
   for (uint8_t r = 0; r < LO_N; r++)
     for (uint8_t c = 0; c < LO_N; c++) {
       int16_t x = LO_X + c * LO_C, y = LO_Y + r * LO_C, s = LO_C - 4;
       uint32_t bit = 1UL << (r * LO_N + c);
-      bool on = loBoard & bit;
-      if (on) {
-        gfx.rbox(x, y, s, s, 7, rgb(255, 170, 0));
-        gfx.rbox(x + 4, y + 4, s - 8, s - 8, 5, C::YELLOW);
-        gfx.rbox(x + 9, y + 9, s - 18, s - 18, 4, rgb(255, 255, 153));
-        gfx.fill(x + 7, y + 6, 4, 3, C::WHITE);
-      } else {
-        gfx.rbox(x, y, s, s, 7, rgb(42, 42, 85));
-        gfx.rframe(x, y, s, s, 7, rgb(70, 70, 120));
-        gfx.disc(x + s / 2, y + s / 2, 3, rgb(60, 60, 110));
+      bool on = loBoard & bit, changing = (loFlash & bit) && ft < LO_FX;
+      uint8_t glow = on ? 255 : 0;
+      if (changing) {                                   // warming up or fading out
+        uint8_t t = (uint8_t)(ft * 255 / LO_FX);
+        glow = on ? t : (uint8_t)(255 - t);
+        if (glow > 230) glow = 255;
       }
-      if ((loFlash & bit) && ft < LO_FX) {                  // a ring that grows out of a switched lamp
-        int16_t g = (int16_t)(ft * 6 / LO_FX);
-        gfx.rframe(x - g, y - g, s + 2 * g, s + 2 * g, 7 + g, on ? C::WHITE : rgb(102, 102, 204));
+      bool press = cursor && changing && ft < 110 && r == loR && c == loC;
+      if (!on || changing) loLamp(x, y, s, glow, press);
+    }
+  for (uint8_t r = 0; r < LO_N; r++)                    // lit ones last: their halos lie over the gaps
+    for (uint8_t c = 0; c < LO_N; c++) {
+      uint32_t bit = 1UL << (r * LO_N + c);
+      if ((loBoard & bit) && !((loFlash & bit) && ft < LO_FX)) loLamp(LO_X + c * LO_C, LO_Y + r * LO_C, LO_C - 4, 255, false);
+    }
+  for (uint8_t r = 0; r < LO_N; r++)
+    for (uint8_t c = 0; c < LO_N; c++) {
+      uint32_t bit = 1UL << (r * LO_N + c);
+      if ((loFlash & bit) && ft < LO_FX) {             // a ring that grows out of a switched lamp
+        int16_t x = LO_X + c * LO_C, y = LO_Y + r * LO_C, s = LO_C - 4, g = (int16_t)(ft * 6 / LO_FX);
+        gfx.rframe(x - g, y - g, s + 2 * g, s + 2 * g, 7 + g, (loBoard & bit) ? C::WHITE : rgb(102, 102, 204));
       }
     }
   if (cursor) {
@@ -80,30 +129,39 @@ static void loDraw(bool cursor, uint8_t level, uint8_t moves, uint8_t limit, uin
     col cc = (now / 300) % 2 ? C::CYAN : C::WHITE;
     gfx.rframe(loCurX - 3, loCurY - 3, LO_C + 2, LO_C + 2, 9, cc);
     gfx.rframe(loCurX - 2, loCurY - 2, LO_C, LO_C, 8, cc);
+    gfx.rframe(loCurX - 4, loCurY - 4, LO_C + 4, LO_C + 4, 10, C::BLACK);
   }
-  // the panel
-  const int16_t PX = LO_X + LO_N * LO_C + 10;
+  // the panel: cards for level, moves and lamps still lit
+  const int16_t PX = LO_X + LO_N * LO_C + 10, PW = SCR_W - PX - 6;
   char b[20];
+  gfx.rbox(PX - 4, 30, PW + 4, 50, 6, rgb(0, 0, 153));
+  gfx.rframe(PX - 4, 30, PW + 4, 50, 6, rgb(51, 85, 204));
   gfx.text(PX, 34, "LEVEL", C::LTGREY, F_SMALL);
   snprintf(b, sizeof(b), "%u", level);
-  gfx.text(PX, 46, b, C::YELLOW, F_BIG);
+  gfx.textShadow(PX, 46, b, C::YELLOW, rgb(153, 85, 0), F_BIG);
+  gfx.rbox(PX - 4, 84, PW + 4, 52, 6, rgb(0, 0, 153));
+  gfx.rframe(PX - 4, 84, PW + 4, 52, 6, rgb(51, 85, 204));
   gfx.text(PX, 88, "MOVES", C::LTGREY, F_SMALL);
   snprintf(b, sizeof(b), "%u / %u", moves, limit);
   gfx.text(PX, 100, b, C::WHITE, F_TEXT);
-  int16_t bw = SCR_W - PX - 8;
-  gfx.rbox(PX, 124, bw, 10, 4, rgb(42, 42, 85));
+  int16_t bw = PW - 6;
+  gfx.rbox(PX, 122, bw, 9, 4, rgb(0, 0, 51));
   if (limit) {
     int16_t fw = (int16_t)(bw * moves / limit);
     col fc = moves * 4 >= limit * 3 ? C::RED : (moves * 2 >= limit ? C::ORANGE : C::GREEN);
-    if (fw > 0) gfx.rbox(PX, 124, fw, 10, 4, fc);
+    if (fw > 0) { gfx.rbox(PX, 122, fw, 9, 4, fc); gfx.hline(PX + 3, 124, fw > 6 ? fw - 6 : 0, colLight(fc, 2)); }
   }
   uint8_t lit = 0;
   for (uint8_t i = 0; i < 25; i++) if (loBoard & (1UL << i)) lit++;
+  gfx.disc(PX + 6, 152, 6, lit ? rgb(255, 127, 0) : rgb(51, 42, 102));   // a little lamp
+  gfx.disc(PX + 6, 152, 3, lit ? C::YELLOW : rgb(0, 0, 102));
   snprintf(b, sizeof(b), "%u lit", lit);
-  gfx.text(PX, 144, b, C::ORANGE, F_TEXT);
+  gfx.text(PX + 16, 144, b, lit ? C::ORANGE : C::GREEN, F_TEXT);
   snprintf(b, sizeof(b), "%s", okKeys());
   gfx.text(PX, 196, b, C::GREY, F_SMALL);
   gfx.text(PX, 208, "= switch", C::GREY, F_SMALL);
+  fxUpdate();
+  fxDraw();
   if (msg) {
     int16_t w = Gfx::width(msg, F_BOLD) + 28;
     int16_t x = LO_X + (LO_N * LO_C - w) / 2, y = LO_Y + LO_N * LO_C / 2 - 21;
@@ -112,6 +170,18 @@ static void loDraw(bool cursor, uint8_t level, uint8_t moves, uint8_t limit, uin
     gfx.rframe(x, y, w, 42, 8, C::WHITE);
     gfx.text(x + 14, y + 9, msg, C::WHITE, F_BOLD);
   }
+}
+
+// confetti over the board for a solved level
+static void loCelebrate(uint16_t gain) {
+  static const col CC[6] = { C::YELLOW, C::CYAN, C::PINK, C::LIME, C::ORANGE, C::WHITE };
+  for (uint8_t k = 0; k < 6; k++) {
+    int16_t x = (int16_t)(LO_X + 30 + fxRand(LO_N * LO_C - 60)), y = (int16_t)(LO_Y + 30 + fxRand(LO_N * LO_C - 80));
+    fxBurst(x, y, 7, CC[k], colDark(CC[k], 2), 150, 900, 25, 3);
+  }
+  char b[8];
+  snprintf(b, sizeof(b), "+%u", gain);
+  fxText(LO_X + LO_N * LO_C / 2, LO_Y + 40, b, C::YELLOW, F_BOLD);
 }
 
 // shows the board with a message for a moment; false = the player left
@@ -134,6 +204,7 @@ void lightsOutRun() {
     loR = loC = 2;
     loCurX = LO_X + loC * LO_C; loCurY = LO_Y + loR * LO_C;
     loFlash = 0;
+    fxReset();
     bool over = false;
     while (!over) {
       uint8_t par = (uint8_t)(2 + level);         // 3, 4, 5, ... up to 15
@@ -156,11 +227,16 @@ void lightsOutRun() {
           loFlashAt = now;
           loBoard = nb;
           moves++;
+          for (uint8_t i = 0; i < LO_N * LO_N; i++)          // sparks from the lamps that came on
+            if (loFlash & loBoard & (1UL << i))
+              fxBurst((int16_t)(LO_X + (i % LO_N) * LO_C + LO_C / 2 - 2), (int16_t)(LO_Y + (i / LO_N) * LO_C + LO_C / 2 - 2),
+                      3, C::WHITE, C::ORANGE, 90, 280, 0, 2);
           sfx(loBoard & (1UL << (loR * LO_N + loC)) ? 1100 : 800, 30);
         }
         if (!loBoard) {                            // all dark: next level
           score += 10 + (limit - moves);
           sfx(1500, 150);
+          loCelebrate((uint16_t)(10 + limit - moves));
           if (!loPause("DONE!", level, moves, limit, score)) return;
           level++;
           break;

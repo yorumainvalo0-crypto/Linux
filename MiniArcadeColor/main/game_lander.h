@@ -64,72 +64,139 @@ static uint8_t ldPadAt(int16_t x) {
   return 0;
 }
 
-static void ldScene(uint32_t now) {
-  gfx.fill(0, TOP_H, SCR_W, SCR_H - TOP_H, C::BLACK);
-  for (uint8_t i = 0; i < 50; i++) {
-    uint32_t h = (uint32_t)(i + 11) * 2654435761u;
-    gfx.pixel((int16_t)((h >> 8) % SCR_W), (int16_t)(LD_TOP + (h >> 18) % 110), i % 5 ? C::GREY : C::WHITE);
-  }
-  gfx.disc(272, 74, 16, C::BLUE);                       // the earth
-  gfx.disc(268, 70, 6, C::GREEN);
-  gfx.disc(278, 80, 4, C::GREEN);
-  gfx.disc(266, 82, 3, C::WHITE);
-  for (int16_t x = 0; x < SCR_W; x++) {                 // the moon's ground, lit on top
-    int16_t h = ldHeight(x);
-    gfx.vline(x, h, 2, C::LTGREY);
-    gfx.vline(x, h + 2, 6, C::GREY);
-    gfx.vline(x, h + 8, 14, rgb(90, 90, 105));
-    gfx.vline(x, h + 22, SCR_H - h - 22, rgb(55, 55, 70));
-  }
-  for (uint8_t i = 0; i + 1 < LD_PTS; i++) {            // the pads
-    if (!ldPad[i]) continue;
-    int16_t x = i * LD_SEG, y = ldGround[i], len = ldPadLen(ldPad[i]);
-    gfx.fill(x, y, len, 4, C::YELLOW);
-    gfx.hline(x, y + 4, len, C::ORANGE);
-    bool on = (now / 400) % 2;
-    gfx.disc(x + 1, y - 2, 2, on ? C::RED : C::DKRED);
-    gfx.disc(x + len - 2, y - 2, 2, on ? C::GREEN : C::DKGRN);
-    char b[6];
-    snprintf(b, sizeof(b), "x%u", ldPad[i]);
-    int16_t ty = y + 8 + 9 < SCR_H ? y + 8 : y - 14;
-    gfx.text(x + len / 2 - 5, ty, b, ldPad[i] == 5 ? C::PINK : C::CYAN, F_SMALL);
+static uint8_t ldHash(uint32_t a) { a *= 2654435761u; a ^= a >> 15; a *= 0x2c1b3c6du; a ^= a >> 12; return (uint8_t)a; }
+
+// a filled ellipse (craters)
+static void ldEllipse(int16_t cx, int16_t cy, int16_t rx, int16_t ry, col c) {
+  for (int16_t dy = -ry; dy <= ry; dy++) {
+    int16_t dx = 0;
+    while ((int32_t)(dx + 1) * (dx + 1) * ry * ry + (int32_t)dy * dy * rx * rx <= (int32_t)rx * rx * ry * ry) dx++;
+    gfx.hline(cx - dx, cy + dy, 2 * dx + 1, c);
   }
 }
+
+// the sky (stars, a faint milky way, the earth) and the moon's ground with its pads; all still
+static void ldScene(uint32_t now) {
+  gfx.fill(0, TOP_H, SCR_W, SCR_H - TOP_H, C::BLACK);
+  for (uint16_t i = 0; i < 260; i++) {                  // the milky way: a faint diagonal band
+    uint8_t a = ldHash(i * 3 + 1), b = ldHash(i * 3 + 2);
+    int16_t x = (int16_t)(i * 320 / 260), y = (int16_t)(LD_TOP + 100 - x / 4 + (int16_t)(a % 40) - 20 + (int16_t)(b % 16) - 8);
+    gfx.pixel(x + (b & 7), y, a & 1 ? GREY1 : rgb(51, 42, 102));
+  }
+  for (uint8_t i = 0; i < 60; i++) {
+    uint32_t h = (uint32_t)(i + 11) * 2654435761u;
+    int16_t x = (int16_t)((h >> 8) % SCR_W), y = (int16_t)(LD_TOP + (h >> 18) % 120);
+    uint8_t k = i % 6;
+    col c = k == 0 ? C::WHITE : (k == 1 ? rgb(204, 212, 255) : (k == 2 ? rgb(255, 212, 153) : (k < 5 ? GREY3 : GREY2)));
+    if (k == 0 && (now / 250 + i) % 9 == 0) fxStar(x, y, 2, GREY3);   // a few twinkle
+    else gfx.pixel(x, y, c);
+  }
+  const int16_t EX = 272, EY = 74;                      // the earth: oceans, land, clouds, night side
+  gfx.circle(EX, EY, 17, rgb(51, 85, 153));
+  gfx.disc(EX, EY, 16, rgb(51, 102, 255));
+  gfx.disc(EX - 4, EY - 4, 6, rgb(51, 170, 51));
+  gfx.disc(EX - 1, EY - 7, 4, rgb(51, 170, 51));
+  gfx.disc(EX + 6, EY + 6, 4, rgb(102, 153, 51));
+  gfx.disc(EX - 6, EY + 8, 3, C::WHITE);
+  gfx.hline(EX - 9, EY + 1, 7, C::WHITE); gfx.hline(EX + 2, EY - 10, 6, C::WHITE);
+  for (int16_t dy = -16; dy <= 16; dy++)                // night: a shadow disc moved down right, a soft edge
+    for (int16_t dx = -16; dx <= 16; dx++) {
+      if (dx * dx + dy * dy > 16 * 16 + 16) continue;
+      int16_t d2 = (dx - 9) * (dx - 9) + (dy - 9) * (dy - 9);
+      if (d2 < 19 * 19) gfx.pixel(EX + dx, EY + dy, rgb(0, 0, 51));
+      else if (d2 < 22 * 22 && ((dx + dy) & 1)) gfx.pixel(EX + dx, EY + dy, rgb(0, 42, 102));
+    }
+  gfx.pixel(EX - 9, EY - 9, C::WHITE);
+  for (int16_t x = 0; x < SCR_W; x++) {                 // the ground: lit where it faces the sun (up left)
+    int16_t h = ldHeight(x), d = ldHeight(x + 1) - h;
+    col rim = d < 0 ? GREY4 : (d == 0 ? C::LTGREY : GREY3);
+    gfx.pixel(x, h, d < 0 ? C::WHITE : rim);
+    gfx.vline(x, h + 1, 2, rim);
+    gfx.vline(x, h + 3, 5, d > 1 ? GREY2 : GREY3);
+    for (int16_t y = h + 8; y < h + 11; y++) gfx.pixel(x, y, (x + y) & 1 ? GREY3 : GREY2);
+    gfx.vline(x, h + 11, 9, GREY2);
+    for (int16_t y = h + 20; y < h + 24; y++) gfx.pixel(x, y, (x + y) & 1 ? GREY2 : GREY1);
+    gfx.vline(x, h + 24, SCR_H - h - 24, GREY1);
+  }
+  for (uint8_t k = 0; k < 7; k++) {                     // craters in the ground, from the ground's own numbers
+    uint8_t a = ldHash((uint32_t)(ldGround[k * 4] * 7 + k)), b = ldHash((uint32_t)(ldGround[k * 4 + 2] + k * 31));
+    int16_t x = (int16_t)(10 + k * 45 + a % 30), rx = (int16_t)(5 + b % 8), ry = (int16_t)(2 + b % 2);
+    int16_t y = (int16_t)(ldHeight(x) + 12 + a % 14);
+    if (ldPadAt(x) || y + ry >= SCR_H) continue;
+    ldEllipse(x, y + 1, rx, ry, GREY3);                  // the lit far rim, then the hollow
+    ldEllipse(x, y, rx, ry, GREY1);
+    gfx.hline(x - rx / 2, y - ry, rx, GREY1);
+  }
+  for (uint8_t i = 0; i + 1 < LD_PTS; i++) {            // the pads: plates with hazard stripes on struts
+    if (!ldPad[i]) continue;
+    int16_t x = i * LD_SEG, y = ldGround[i], len = ldPadLen(ldPad[i]);
+    gfx.fill(x + 3, y + 4, 2, 5, GREY3); gfx.fill(x + len - 5, y + 4, 2, 5, GREY3);
+    gfx.fill(x, y, len, 4, GREY4);
+    for (int16_t k = 0; k < len; k += 6) {
+      gfx.fill(x + k, y + 1, 3, 2, C::YELLOW);
+      gfx.fill(x + k + 3, y + 1, 3 > len - k - 3 ? len - k - 3 : 3, 2, rgb(51, 42, 0));
+    }
+    gfx.hline(x, y, len, C::WHITE);
+    gfx.hline(x, y + 3, len, GREY3);
+    bool on = (now / 400) % 2;
+    gfx.fill(x, y - 4, 2, 4, GREY3); gfx.fill(x + len - 2, y - 4, 2, 4, GREY3);
+    gfx.disc(x + 1, y - 5, 2, on ? C::RED : C::DKRED);
+    gfx.disc(x + len - 2, y - 5, 2, on ? C::GREEN : C::DKGRN);
+    if (on) { gfx.pixel(x + 1, y - 6, C::WHITE); gfx.pixel(x + len - 2, y - 6, C::WHITE); }
+    char b[6];
+    snprintf(b, sizeof(b), "x%u", ldPad[i]);
+    int16_t ty = y + 10 + 9 < SCR_H ? y + 10 : y - 16;
+    gfx.textShadow(x + len / 2 - 5, ty, b, ldPad[i] == 5 ? C::PINK : C::CYAN, C::BLACK, F_SMALL);
+  }
+}
+
+/* The lander, 25 x 22 in full resolution, turned to its direction: k
+   outline, l / d light and dark hull, w glints, c / C window, g / G / o
+   the gold foil of the descent stage, s struts and antennas.        */
+static const char *const LD_SHIP[22] = {
+  "............w............",
+  "............s.....sss....",
+  "........kkkkkkkkk..s.....",
+  ".......kkwllllldkk.s.....",
+  ".......kwlwwcclddks......",
+  ".......kwlCccclddk.......",
+  ".......kllccCClddk.......",
+  ".......klllllllddk.......",
+  ".......kdddddddddk.......",
+  "....kkkkkkkkkkkkkkkkk....",
+  "....kGGGggGggGggGggGk....",
+  "....kGGggggggggggggok....",
+  "....kGGggGggGggGggGok....",
+  "....kGGoooooooooooook....",
+  "....kkkkkkkkkkkkkkkkk....",
+  ".....sd.dkssssskd.ds.....",
+  "....sd.d..sdddd..d.ds....",
+  "....sdd..sdddddd..dds....",
+  "...sd...kkkkkkkkk...ds...",
+  "...dd...............dd...",
+  ".ssss...............ssss.",
+  "kkkkk...............kkkkk" };
+static const char LD_KEYS[] = "kwldcCgGos";
+static const col  LD_PAL[10] = { GREY1, C::WHITE, GREY4, GREY3, C::CYAN, rgb(0, 102, 153),
+                                 rgb(220, 170, 40), rgb(255, 230, 120), rgb(190, 110, 20), GREY4 };
 
 // the lander at its centre, turned by ang; flame = the engine burns
 static void ldLander(int16_t cx, int16_t cy, uint8_t ang, bool flame) {
   int16_t s = ldSin(ang), c = ldCos(ang);
-  int16_t qx[16], qy[16];
-  static const int8_t PX[16] = { -5, 5, 8, -8, -7, 7, 7, -7, -6, -10, 6, 10, -2, 2, 4, -4 };
-  static const int8_t PY[16] = { -9, -9, -3, -3, -3, -3, 3, 3, 3, 9, 3, 9, 3, 3, 7, 7 };
-  for (uint8_t k = 0; k < 16; k++) {                    // turn the outline around the middle
-    qx[k] = (int16_t)(cx + (PX[k] * c - PY[k] * s) / 64);
-    qy[k] = (int16_t)(cy + (PX[k] * s + PY[k] * c) / 64);
-  }
   auto R = [&](int8_t dx, int8_t dy, int16_t &ox, int16_t &oy) {
     ox = (int16_t)(cx + (dx * c - dy * s) / 64); oy = (int16_t)(cy + (dx * s + dy * c) / 64);
   };
-  if (flame) {
+  if (flame) {                                          // the flame's core; the particles do the rest
     int16_t ax, ay, bx, by, fx, fy, gx, gy;
     R(-3, 7, ax, ay); R(3, 7, bx, by);
-    R(0, (int8_t)(16 + random(7)), fx, fy);
-    R(0, (int8_t)(11 + random(3)), gx, gy);
+    R(0, (int8_t)(14 + fxRand(6)), fx, fy);
+    R(0, (int8_t)(10 + fxRand(3)), gx, gy);
     gfx.triangle(ax, ay, bx, by, fx, fy, C::ORANGE);
     gfx.triangle(ax, ay, bx, by, gx, gy, C::YELLOW);
+    R(0, 8, gx, gy);
+    gfx.pixel(gx, gy, C::WHITE);
   }
-  gfx.line(qx[8], qy[8], qx[9], qy[9], C::LTGREY);       // legs and feet
-  gfx.line(qx[10], qy[10], qx[11], qy[11], C::LTGREY);
-  int16_t fx, fy, gx, gy;
-  R(-12, 9, fx, fy); R(-8, 9, gx, gy); gfx.line(fx, fy, gx, gy, C::WHITE);
-  R(8, 9, fx, fy);   R(12, 9, gx, gy); gfx.line(fx, fy, gx, gy, C::WHITE);
-  gfx.triangle(qx[12], qy[12], qx[13], qy[13], qx[14], qy[14], C::GREY);        // nozzle
-  gfx.triangle(qx[12], qy[12], qx[14], qy[14], qx[15], qy[15], C::GREY);
-  gfx.triangle(qx[4], qy[4], qx[5], qy[5], qx[6], qy[6], rgb(220, 170, 40));    // gold descent stage
-  gfx.triangle(qx[4], qy[4], qx[6], qy[6], qx[7], qy[7], rgb(190, 140, 30));
-  gfx.triangle(qx[0], qy[0], qx[1], qy[1], qx[2], qy[2], C::LTGREY);           // cabin
-  gfx.triangle(qx[0], qy[0], qx[2], qy[2], qx[3], qy[3], rgb(210, 210, 225));
-  R(0, -6, fx, fy);
-  gfx.disc(fx, fy, 2, C::CYAN);
+  fxSpriteTurn(cx, cy, LD_SHIP, 22, 12, 12, LD_KEYS, LD_PAL, s, c);
 }
 
 // fuel, speeds, attitude and level under the status bar
@@ -151,7 +218,6 @@ static void ldHud(uint16_t fuel, uint16_t fuel0, int32_t vx, int32_t vy, uint8_t
 }
 
 void landerRun() {
-  struct LdSpark { int16_t x, y, vx, vy; uint8_t life; };
   bool again = true;
   while (again) {
     again = false;
@@ -167,6 +233,7 @@ void landerRun() {
       uint32_t now = gameMillis(), tick = now;
       bool landed = false, flame = false;
       uint16_t gain = 0;
+      fxReset();
       btnClear();
       while (!landed && !crashed) {
         if (!poll()) return;
@@ -183,6 +250,19 @@ void landerRun() {
             vy -= ldCos(ang) * 20 / 64;
             fuel--;
             if ((tick / LD_TICK) % 4 == 0) sfx((uint16_t)(90 + random(40)), 30);
+            int16_t s = ldSin(ang), c = ldCos(ang), cx = (int16_t)(x / 256), cy = (int16_t)(y / 256);
+            int16_t lvx = (int16_t)(vx * 50 / 256), lvy = (int16_t)(vy * 50 / 256);   // px/s
+            for (uint8_t k = 0; k < 2; k++) {             // exhaust: out of the nozzle, away from the lander
+              int16_t sp = fxRange(70, 130), side = fxRange(-14, 14);
+              fxEmit((int16_t)(cx - 8 * s / 64), (int16_t)(cy + 8 * c / 64), (int16_t)(lvx + (-s * sp + c * side) / 64),
+                     (int16_t)(lvy + (c * sp + s * side) / 64), (uint16_t)fxRange(200, 340), k ? C::YELLOW : C::ORANGE, C::DKRED, (uint8_t)(2 + k), 0, FX_DRAG);
+            }
+            int16_t gx = (int16_t)(cx - 9 * s / 64), gh = ldHeight(gx), dd = (int16_t)(gh - cy - 9);
+            if (dd >= 0 && dd < 45) {                     // the blast kicks up dust below
+              int8_t side = fxRand(2) ? 1 : -1;
+              fxEmit((int16_t)(gx + fxRange(-4, 4)), (int16_t)(gh - 1), (int16_t)(side * fxRange(40, 110) * (50 - dd) / 50),
+                     (int16_t)-fxRange(10, 45), (uint16_t)fxRange(350, 600), GREY4, GREY2, 2, 12, FX_DRAG);
+            }
           }
           if (vx > 800) vx = 800;
           if (vx < -800) vx = -800;
@@ -203,44 +283,49 @@ void landerRun() {
               score += gain;
               level++;
               sfx(1200, 100);
-            } else crashed = true;
+              for (int8_t side = -1; side <= 1; side += 2)  // a soft touch: dust to both sides
+                for (uint8_t k = 0; k < 6; k++)
+                  fxEmit((int16_t)(px + side * fxRange(4, 12)), (int16_t)(feet - 1), (int16_t)(side * fxRange(30, 90)), (int16_t)-fxRange(5, 35),
+                         (uint16_t)fxRange(400, 700), GREY4, GREY2, 2, 10, FX_DRAG);
+            } else {                                      // a crash: fire, gold foil and metal flying, a shock
+              crashed = true;
+              int16_t cy = (int16_t)(y / 256);
+              fxExplode(px, cy, 3);
+              fxBurst(px, cy, 6, rgb(255, 230, 120), rgb(190, 110, 20), 150, 900, 40, 2);
+              fxBurst(px, cy, 5, GREY4, GREY1, 120, 900, 40, 3);
+              fxShake(7, 600); fxFlash(C::WHITE, 250, 140);
+            }
           }
         }
+        fxUpdate();
         statusBar("LANDER", score, curHigh, C::GREY);
         ldScene(now);
-        ldLander((int16_t)(x / 256), (int16_t)(y / 256), ang, flame);
+        fxDraw(0, 0, LD_TOP, SCR_H);
+        if (!crashed) ldLander((int16_t)(x / 256), (int16_t)(y / 256), ang, flame);
         ldHud(fuel, fuel0, vx, vy, ang, level);
         gfx.send();
       }
 
-      // a moment to look: the lander on its pad, or the crash
-      LdSpark sp[24];
-      for (uint8_t k = 0; k < 24; k++)
-        sp[k] = { (int16_t)(x / 16), (int16_t)(y / 16), (int16_t)random(-40, 41), (int16_t)random(-60, 10), (uint8_t)random(30, 70) };
+      // a moment to look: the lander on its pad, or the crash (the explosion first, then the word)
       if (crashed) sfx(120, 500);
-      uint32_t t0 = gameMillis(), last = t0;
+      uint32_t t0 = gameMillis(), smokeAt = 0;
       btnClear();
       while (gameMillis() - t0 < 1600) {
         if (!poll()) return;
         uint32_t t = gameMillis();
-        uint32_t dt = t - last;
-        if (dt > 40) dt = 40;
-        last = t;
+        fxUpdate();
         statusBar("LANDER", score, curHigh, C::GREY);
         ldScene(t);
-        if (crashed) {
-          for (uint8_t k = 0; k < 24; k++) {
-            LdSpark &p = sp[k];
-            if (!p.life) continue;
-            p.x += (int16_t)(p.vx * (int32_t)dt / 16); p.y += (int16_t)(p.vy * (int32_t)dt / 16);
-            p.vy += (int16_t)dt / 4;
-            p.life = p.life > dt / 16 ? (uint8_t)(p.life - dt / 16) : 0;
-            gfx.fill(p.x / 16, p.y / 16, 3, 3, p.life > 30 ? (k % 2 ? C::YELLOW : C::ORANGE) : C::GREY);
-          }
-          uint32_t age = t - t0;
-          if (age < 400) gfx.disc((int16_t)(x / 256), (int16_t)(y / 256), (int16_t)(6 + age / 20), age < 150 ? C::WHITE : C::ORANGE);
-        } else ldLander((int16_t)(x / 256), (int16_t)(y / 256), ang, false);
+        if (crashed && t - smokeAt > 70 && t - t0 > 200) {   // the wreck smokes
+          smokeAt = t;
+          fxEmit((int16_t)(x / 256 + fxRange(-6, 6)), (int16_t)(y / 256 + 4), (int16_t)fxRange(-8, 8), -25, 700, GREY3, GREY1, 3, -2, FX_GROW);
+        }
+        fxDraw(0, 0, LD_TOP, SCR_H);
+        if (!crashed) ldLander((int16_t)(x / 256), (int16_t)(y / 256), ang, false);
+        fxShakeApply(LD_TOP, SCR_H);
+        fxFlashApply(0, LD_TOP, SCR_W, SCR_H - LD_TOP);
         ldHud(fuel, fuel0, vx, vy, ang, (uint8_t)(landed ? level - 1 : level));
+        if (crashed && t - t0 < 350) { gfx.send(); continue; }
         const char *msg = landed ? "LANDED!" : "CRASH";
         int16_t w = (int16_t)(Gfx::width(msg, F_BOLD) + 24);
         panel((SCR_W - w) / 2, 84, w, landed ? 66 : 44, NULL, landed ? C::GREEN : C::RED);
