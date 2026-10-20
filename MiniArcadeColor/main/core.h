@@ -20,28 +20,17 @@ static const char *BTN_NAME[B_COUNT] = { "UP", "DOWN", "LEFT", "RIGHT", "OK" };
 #define REPEAT_DELAY 250   // first auto-repeat after ...
 #define REPEAT_RATE   80   // ... then every ...
 
-/* GPIOs the key wizard may use: all general pins of the chip but the
-   display, the I2C pins of the gyroscope, flash, PSRAM and USB.        */
-#if CONFIG_IDF_TARGET_ESP32S3
-static const uint8_t PINS_ALL[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
-                                    21, 38, 39, 40, 41, 42, 45, 46, 47, 48 };
-#define ADC_FIRST 1        // ADC1: GPIO1..10
-#define ADC_LAST  10
-#else
-static const uint8_t PINS_ALL[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21 };
-#define ADC_FIRST 0        // ADC1: GPIO0..4
-#define ADC_LAST  4
-#endif
+/* GPIOs the key wizard may use: all general pins of the chip (pins.h) but
+   the display (found at the start, tft_spi.cpp) and the gyroscope.     */
+#include "pins.h"
 static uint8_t CAND[sizeof(PINS_ALL)];
 static uint8_t CAND_N = 0;
 
 static bool pinIs(uint8_t p, int cfg) { return cfg >= 0 && p == cfg; }   // cfg -1 = not wired
 
 static bool pinReserved(uint8_t p) {
-  return p == CONFIG_ARCADE_TFT_SCK || p == CONFIG_ARCADE_TFT_MOSI || p == CONFIG_ARCADE_TFT_CS ||
-         pinIs(p, CONFIG_ARCADE_TFT_MISO) ||
-         p == CONFIG_ARCADE_TFT_DC || pinIs(p, CONFIG_ARCADE_TFT_RST) || pinIs(p, CONFIG_ARCADE_TFT_BL) ||
-         p == CONFIG_ARCADE_I2C_SDA || p == CONFIG_ARCADE_I2C_SCL;
+  return tftPinUsed(p) || pinIs(p, CONFIG_ARCADE_TFT_BL) ||
+         pinIs(p, CONFIG_ARCADE_I2C_SDA) || pinIs(p, CONFIG_ARCADE_I2C_SCL);
 }
 
 static void candInit() {

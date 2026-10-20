@@ -23,8 +23,8 @@ static long     frames = 0;
 static long     toneCount = 0;
 static std::set<std::string> seenTexts;
 static std::string scenario;
-static const uint8_t KEYS[4] = { 0, 1, 2, 3 };   // UP DOWN LEFT RIGHT, active high
-static const uint8_t SND = 21, BAT = 4;
+static const uint8_t KEYS[4] = { 1, 2, 3, 6 };   // UP DOWN LEFT RIGHT, active high
+static const uint8_t SND = 7, BAT = 0;
 struct KeyEv { uint32_t t; uint8_t mask; };
 static std::vector<KeyEv> script;
 static std::set<long> captureAt;
@@ -92,6 +92,14 @@ static void writeFrame(const uint8_t *fb) {
     fwrite(rgbv, 1, 3, f);
   }
   fclose(f);
+}
+
+// the school wiring, as if the panel had answered
+TftPins tftPins = { 8, 9, 21, 4, 20, 5 };
+bool tftFound = true;
+bool tftPinUsed(uint8_t p) {
+  const TftPins &t = tftPins;
+  return p == t.sck || p == t.mosi || p == t.cs || p == t.dc || p == t.miso || p == t.rst;
 }
 
 static uint8_t lastFrame[SCR_W * SCR_H];

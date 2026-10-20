@@ -2,23 +2,34 @@
 // landscape. The frame buffer holds colour indices (gfx.h); a row goes out
 // as RGB565 through two DMA buffers, and rows that did not change since
 // the last frame are skipped, so a mostly still picture is quick.
+// The pins are found at the start by reading the panel back (SDO wired),
+// see "finding the pins" below.
 #include "gfx.h"
+#include "pins.h"
+#include "Preferences.h"
 #include "sdkconfig.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_heap_caps.h"
+#include "esp_rom_sys.h"
+#include "hal/gpio_ll.h"
+#include "soc/gpio_reg.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
 
-#define PIN_SCK   CONFIG_ARCADE_TFT_SCK
-#define PIN_MOSI  CONFIG_ARCADE_TFT_MOSI
-#define PIN_MISO  CONFIG_ARCADE_TFT_MISO
-#define PIN_CS    CONFIG_ARCADE_TFT_CS
-#define PIN_DC    CONFIG_ARCADE_TFT_DC
-#define PIN_RST   CONFIG_ARCADE_TFT_RST
 #define PIN_BL    CONFIG_ARCADE_TFT_BL
+
+TftPins tftPins = { CONFIG_ARCADE_TFT_SCK, CONFIG_ARCADE_TFT_MOSI, CONFIG_ARCADE_TFT_CS,
+                    CONFIG_ARCADE_TFT_DC, CONFIG_ARCADE_TFT_MISO, CONFIG_ARCADE_TFT_RST };
+bool tftFound = false;
+static int8_t dcPin = CONFIG_ARCADE_TFT_DC;    // for the DMA callback
+
+bool tftPinUsed(uint8_t p) {
+  const TftPins &t = tftPins;
+  return p == t.sck || p == t.mosi || p == t.cs || p == t.dc || p == t.miso || p == t.rst;
+}
 
 #define CHUNK_ROWS 12                          // rows per DMA transfer
 static spi_device_handle_t dev;
@@ -29,7 +40,8 @@ static uint16_t *dma[2];
 static uint8_t  madctl = 0x28;                 // landscape (MV), BGR
 
 // ---------------- low level ----------------
-static void IRAM_ATTR preCb(spi_transaction_t *t) { gpio_set_level((gpio_num_t)PIN_DC, (int)(intptr_t)t->user); }
+// runs in the interrupt, so only inline register access (safe while flash is busy)
+static void IRAM_ATTR preCb(spi_transaction_t *t) { gpio_ll_set_level(&GPIO, dcPin, (uint32_t)(intptr_t)t->user); }
 
 static void cmd(uint8_t c, const uint8_t *data = NULL, uint8_t n = 0) {
   spi_transaction_t t = {};
@@ -63,18 +75,167 @@ static void makeLut() {
   }
 }
 
+
+// ---------------- finding the pins ----------------
+/* The panel answers on SDO: write its MADCTL register, read it back, and
+   the wiring is right when the value comes back. With the SDO line any
+   pin can be tried: SCK, SDI, CS and DC are driven by hand (bit-banged)
+   and every other pin is listened to at once, so the SDO pin falls out
+   of the same test. Known layouts go first; on the C3 (13 pins) all
+   combinations are tried if none fits. Every pin rests on its pull-up
+   meanwhile, which keeps CS and RESET high. The result is saved.       */
+struct Quad { int8_t sck, mosi, cs, dc; };
+
+static uint64_t inAll() {
+  uint64_t v = REG_READ(GPIO_IN_REG);
+#if CONFIG_IDF_TARGET_ESP32S3
+  v |= (uint64_t)REG_READ(GPIO_IN1_REG) << 32;
+#endif
+  return v;
+}
+static bool isBl(int p) { return p == PIN_BL; }     // int: PIN_BL is -1 without a backlight pin
+static inline void lv(int8_t p, int l) { gpio_ll_set_level(&GPIO, p, (uint32_t)l); }
+static inline void bbWait() { for (int i = 0; i < 24; i++) __asm__ __volatile__("nop"); }   // about 150 ns at 160 MHz: the panel reads at most 6 MHz
+
+static void bbByte(const Quad &q, uint8_t b) {
+  for (int i = 7; i >= 0; i--) { lv(q.mosi, b >> i & 1); bbWait(); lv(q.sck, 1); bbWait(); lv(q.sck, 0); }
+}
+static void bbWrite(const Quad &q, uint8_t c, uint8_t v) {
+  lv(q.cs, 0); lv(q.dc, 0); bbByte(q, c); lv(q.dc, 1); bbByte(q, v); lv(q.cs, 1);
+}
+static void bbRead(const Quad &q, uint8_t c, uint64_t s[16]) {
+  lv(q.cs, 0); lv(q.dc, 0); bbByte(q, c); lv(q.dc, 1); lv(q.mosi, 0);
+  for (int i = 0; i < 16; i++) { lv(q.sck, 1); bbWait(); s[i] = inAll(); lv(q.sck, 0); bbWait(); }
+  lv(q.cs, 1);
+}
+// the byte v on pin m, after 0..8 dummy bits; returns the shift or -1
+static int findByte(const uint64_t s[16], int8_t m, uint8_t v) {
+  for (int sh = 0; sh <= 8; sh++) {
+    uint8_t b = 0;
+    for (int i = 0; i < 8; i++) b = (uint8_t)(b << 1 | (s[sh + i] >> m & 1));
+    if (b == v) return sh;
+  }
+  return -1;
+}
+static void quadOn(const Quad &q) {
+  lv(q.cs, 1); lv(q.sck, 0); lv(q.dc, 1); lv(q.mosi, 0);
+  const int8_t p[4] = { q.sck, q.mosi, q.cs, q.dc };
+  for (int i = 0; i < 4; i++) gpio_set_direction((gpio_num_t)p[i], GPIO_MODE_INPUT_OUTPUT);
+}
+static void quadOff(const Quad &q) {
+  const int8_t p[4] = { q.sck, q.mosi, q.cs, q.dc };
+  for (int i = 0; i < 4; i++) gpio_set_direction((gpio_num_t)p[i], GPIO_MODE_INPUT);   // back to the pull-up
+}
+static bool inQuad(const Quad &q, int8_t p) { return p == q.sck || p == q.mosi || p == q.cs || p == q.dc; }
+
+// the SDO pin when the panel answers on this wiring, else -1
+static int8_t probe(const Quad &q, int8_t only = -1) {
+  uint64_t a[16], b[16];
+  quadOn(q);
+  bbWrite(q, 0x36, 0xA8); bbRead(q, 0x0B, a);
+  bbWrite(q, 0x36, 0x48); bbRead(q, 0x0B, b);
+  quadOff(q);
+  for (uint8_t i = 0; i < sizeof(PINS_ALL); i++) {
+    int8_t m = (int8_t)PINS_ALL[i];
+    if (inQuad(q, m) || (only >= 0 && m != only)) continue;
+    int sa = findByte(a, m, 0xA8);
+    if (sa >= 0 && sa == findByte(b, m, 0x48)) return m;
+  }
+  return -1;
+}
+
+// RESET: the pin whose low pulse brings MADCTL back to 0
+static int8_t findReset(const Quad &q, int8_t miso) {
+  uint64_t s[16];
+  for (uint8_t i = 0; i < sizeof(PINS_ALL); i++) {
+    int8_t p = (int8_t)PINS_ALL[i];
+    if (inQuad(q, p) || p == miso || isBl(p)) continue;
+    quadOn(q); bbWrite(q, 0x36, 0xA8); quadOff(q);
+    lv(p, 0); gpio_set_direction((gpio_num_t)p, GPIO_MODE_INPUT_OUTPUT);
+    esp_rom_delay_us(20);
+    gpio_set_direction((gpio_num_t)p, GPIO_MODE_INPUT);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    quadOn(q); bbRead(q, 0x0B, s); quadOff(q);
+    if (findByte(s, miso, 0x00) >= 0 && findByte(s, miso, 0xA8) < 0) return p;
+  }
+  return -1;
+}
+
+static void allPullUp() {
+  for (uint8_t i = 0; i < sizeof(PINS_ALL); i++)
+    if (!isBl(PINS_ALL[i])) gpio_reset_pin((gpio_num_t)PINS_ALL[i]);   // input with pull-up
+}
+
+static bool search(TftPins &out, bool full) {
+  static const Quad KNOWN[] = {
+    { CONFIG_ARCADE_TFT_SCK, CONFIG_ARCADE_TFT_MOSI, CONFIG_ARCADE_TFT_CS, CONFIG_ARCADE_TFT_DC },
+#if CONFIG_IDF_TARGET_ESP32S3
+    { 12, 11, 10, 9 },
+#else
+    { 8, 9, 21, 4 },                                     // the school plan
+    { 6, 7, 10, 5 },                                     // MiniArcade Color 0.1
+#endif
+  };
+  Quad hit = {};
+  int8_t miso = -1;
+  for (uint8_t k = 0; k < sizeof(KNOWN) / sizeof(KNOWN[0]) && miso < 0; k++) { miso = probe(KNOWN[k]); hit = KNOWN[k]; }
+  const uint8_t n = sizeof(PINS_ALL);
+  // all combinations, twice: forward and backward. A test can pulse the
+  // RESET pin just before the right one, which then finds the panel busy.
+  for (int pass = 0; full && n <= 14 && pass < 2 && miso < 0; pass++)
+    for (int k = 0; k < n * n * n * n && miso < 0; k++) {
+      int c = pass ? n * n * n * n - 1 - k : k;
+      if (k % 2000 == 0) vTaskDelay(1);                    // let the system breathe
+      Quad q = { (int8_t)PINS_ALL[c % n], (int8_t)PINS_ALL[c / n % n], (int8_t)PINS_ALL[c / n / n % n], (int8_t)PINS_ALL[c / n / n / n] };
+      if (q.sck == q.mosi || q.sck == q.cs || q.sck == q.dc || q.mosi == q.cs || q.mosi == q.dc || q.cs == q.dc) continue;
+      if (isBl(q.sck) || isBl(q.mosi) || isBl(q.cs) || isBl(q.dc)) continue;
+      miso = probe(q);
+      hit = q;
+    }
+  if (miso < 0) return false;
+  out = { hit.sck, hit.mosi, hit.cs, hit.dc, miso, findReset(hit, miso) };
+  return true;
+}
+
+// saved pins when they still answer, else a search; false = nothing found
+static bool findPins(TftPins &p) {
+  Preferences pr;
+  pr.begin("arcade", true);
+  TftPins saved;
+  bool have = pr.getBytes("tftp", &saved, sizeof(saved)) == sizeof(saved);
+  bool tried = pr.getUShort("tftn", 0) != 0;             // full search failed before (no SDO?)
+  pr.end();
+  allPullUp();
+  if (have && saved.rst >= 0) { lv(saved.rst, 1); gpio_set_direction((gpio_num_t)saved.rst, GPIO_MODE_INPUT_OUTPUT); }
+  vTaskDelay(pdMS_TO_TICKS(120));                        // the panel's own power-on reset
+  if (have && probe({ saved.sck, saved.mosi, saved.cs, saved.dc }, saved.miso) == saved.miso) { p = saved; return true; }
+  if (!search(p, !tried)) {
+    if (!tried) { pr.begin("arcade", false); pr.putUShort("tftn", 1); pr.end(); }
+    if (have) p = saved;                                 // last known, cannot be checked
+    return false;
+  }
+  pr.begin("arcade", false);
+  pr.putBytes("tftp", &p, sizeof(p));
+  pr.putUShort("tftn", 0);
+  pr.end();
+  return true;
+}
+
 // ---------------- panel ----------------
 void Gfx::begin() {
+  tftFound = findPins(tftPins);
+  const TftPins &P = tftPins;
+  dcPin = P.dc;
   gpio_config_t o = {};
-  o.pin_bit_mask = 1ULL << PIN_DC;
-  if (PIN_RST >= 0) o.pin_bit_mask |= 1ULL << (PIN_RST >= 0 ? PIN_RST : 0);
+  o.pin_bit_mask = 1ULL << P.dc;
+  if (P.rst >= 0) o.pin_bit_mask |= 1ULL << P.rst;
   o.mode = GPIO_MODE_OUTPUT;
   gpio_config(&o);
 
   spi_bus_config_t bus = {};
-  bus.mosi_io_num = PIN_MOSI;
-  bus.miso_io_num = PIN_MISO;                    // unused for now (SD card, touch)
-  bus.sclk_io_num = PIN_SCK;
+  bus.mosi_io_num = P.mosi;
+  bus.miso_io_num = P.miso;                      // unused for now (SD card, touch)
+  bus.sclk_io_num = P.sck;
   bus.quadwp_io_num = -1;
   bus.quadhd_io_num = -1;
   bus.max_transfer_sz = SCR_W * CHUNK_ROWS * 2;
@@ -82,15 +243,15 @@ void Gfx::begin() {
   spi_device_interface_config_t d = {};
   d.clock_speed_hz = CONFIG_ARCADE_TFT_MHZ * 1000 * 1000;
   d.mode = 0;
-  d.spics_io_num = PIN_CS;
+  d.spics_io_num = P.cs;
   d.queue_size = 3;
   d.pre_cb = preCb;
   spi_bus_add_device(SPI2_HOST, &d, &dev);
   for (int i = 0; i < 2; i++) dma[i] = (uint16_t *)heap_caps_malloc(SCR_W * CHUNK_ROWS * 2, MALLOC_CAP_DMA);
 
-  if (PIN_RST >= 0) {
-    gpio_set_level((gpio_num_t)PIN_RST, 0); vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level((gpio_num_t)PIN_RST, 1); vTaskDelay(pdMS_TO_TICKS(120));
+  if (P.rst >= 0) {
+    gpio_set_level((gpio_num_t)P.rst, 0); vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level((gpio_num_t)P.rst, 1); vTaskDelay(pdMS_TO_TICKS(120));
   }
   cmd(0x01); vTaskDelay(pdMS_TO_TICKS(150));             // software reset
 #if CONFIG_ARCADE_TFT_ST7789

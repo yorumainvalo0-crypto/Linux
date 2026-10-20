@@ -87,6 +87,12 @@ private:
 
 extern Gfx gfx;
 
+// the display's pins, found at the start (-1 = not wired / not found)
+struct TftPins { int8_t sck, mosi, cs, dc, miso, rst; };
+extern TftPins tftPins;
+extern bool    tftFound;                       // true: found by reading the panel back
+bool tftPinUsed(uint8_t p);
+
 // colour helpers on the cube
 col  colLerp(col a, col b, uint8_t t);         // t = 0..255
 col  colDark(col c, uint8_t steps = 1);
