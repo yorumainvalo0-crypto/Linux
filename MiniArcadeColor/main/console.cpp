@@ -238,7 +238,6 @@ void appKey(uint8_t key, bool down) {
 //  START
 // =========================================================
 void setup() {
-  candInit();
   bool havePins = loadPins();
   prefs.begin("arcade", true);
   batPin = (uint8_t)prefs.getUShort("bat", 254);
@@ -247,7 +246,14 @@ void setup() {
   runClock = cfgClock;
   setCpuFrequencyMhz(cfgClock);
   randomSeed(esp_random());
-  gfx.begin();
+  gfx.begin();                     // finds the display's pins first
+  candInit();
+  // keys, buzzer or battery saved on a pin the display has now: ask again
+  for (uint8_t i = 0; i < B_COUNT; i++)
+    if (BTN_PIN[i] != 255 && tftPinUsed(BTN_PIN[i])) havePins = false;
+  if (!havePins) for (uint8_t i = 0; i < B_COUNT; i++) BTN_PIN[i] = 255;
+  if (sndPin != 255 && tftPinUsed(sndPin)) { sndPin = 255; soundAsked = false; }
+  if (batPin < BAT_NONE_SET && tftPinUsed(batPin)) batPin = 254;
   applyDisplay();
   applyPinModes();
   lastInput = millis();
