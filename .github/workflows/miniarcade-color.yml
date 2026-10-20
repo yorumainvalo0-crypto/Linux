@@ -116,16 +116,25 @@ jobs:
           V: ${{ steps.ver.outputs.version }}
         run: |
           R="--repo $GITHUB_REPOSITORY"
+          # the GitHub API now and then answers 500: try each step a few times
+          retry() { for i in 1 2 3; do "$@" && return 0; echo "failed, try again in $((i * 20)) s"; sleep $((i * 20)); done; "$@"; }
           # the versioned release: a prerelease, never "latest"
-          gh release create "color-v$V" $R --target "$GITHUB_SHA" --title "MiniArcade Color $V" \
-            --prerelease --latest=false --generate-notes out/*
+          version_release() {
+            gh release view "color-v$V" $R >/dev/null 2>&1 ||
+              gh release create "color-v$V" $R --target "$GITHUB_SHA" --title "MiniArcade Color $V" \
+                --prerelease --latest=false --generate-notes
+          }
+          retry version_release
+          retry gh release upload "color-v$V" $R --clobber out/*
           # the channel the boards read: the firmware files first, version.txt
           # last, so no board sees a new number before its file is there
-          if ! gh release view color-latest $R >/dev/null 2>&1; then
-            gh release create color-latest $R --target "$GITHUB_SHA" --title "MiniArcade Color (update channel)" \
-              --notes "Always the newest MiniArcade Color files. The colour consoles update from here." \
-              --prerelease --latest=false
-          fi
-          gh release upload color-latest $R --clobber out/miniarcade-color-c3.bin out/miniarcade-color-s3.bin \
+          channel() {
+            gh release view color-latest $R >/dev/null 2>&1 ||
+              gh release create color-latest $R --target "$GITHUB_SHA" --title "MiniArcade Color (update channel)" \
+                --notes "Always the newest MiniArcade Color files. The colour consoles update from here." \
+                --prerelease --latest=false
+          }
+          retry channel
+          retry gh release upload color-latest $R --clobber out/miniarcade-color-c3.bin out/miniarcade-color-s3.bin \
             out/miniarcade-color-c3-full.bin out/miniarcade-color-s3-full.bin
-          gh release upload color-latest $R --clobber out/version.txt
+          retry gh release upload color-latest $R --clobber out/version.txt
