@@ -24,7 +24,7 @@ static long     toneCount = 0;
 static std::set<std::string> seenTexts;
 static std::string scenario;
 static const uint8_t KEYS[4] = { 0, 1, 2, 3 };   // UP DOWN LEFT RIGHT, active high
-static const uint8_t SND = 20, BAT = 4;
+static const uint8_t SND = 21, BAT = 4;
 struct KeyEv { uint32_t t; uint8_t mask; };
 static std::vector<KeyEv> script;
 static std::set<long> captureAt;

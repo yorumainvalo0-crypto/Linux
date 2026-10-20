@@ -39,6 +39,7 @@ static bool pinIs(uint8_t p, int cfg) { return cfg >= 0 && p == cfg; }   // cfg 
 
 static bool pinReserved(uint8_t p) {
   return p == CONFIG_ARCADE_TFT_SCK || p == CONFIG_ARCADE_TFT_MOSI || p == CONFIG_ARCADE_TFT_CS ||
+         pinIs(p, CONFIG_ARCADE_TFT_MISO) ||
          p == CONFIG_ARCADE_TFT_DC || pinIs(p, CONFIG_ARCADE_TFT_RST) || pinIs(p, CONFIG_ARCADE_TFT_BL) ||
          p == CONFIG_ARCADE_I2C_SDA || p == CONFIG_ARCADE_I2C_SCL;
 }

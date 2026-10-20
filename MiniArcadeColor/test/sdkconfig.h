@@ -5,6 +5,7 @@
 #define CONFIG_ARCADE_UPDATE_BIN    "miniarcade-color-c3.bin"
 #define CONFIG_ARCADE_TFT_SCK       6
 #define CONFIG_ARCADE_TFT_MOSI      7
+#define CONFIG_ARCADE_TFT_MISO      20
 #define CONFIG_ARCADE_TFT_CS        10
 #define CONFIG_ARCADE_TFT_DC        5
 #define CONFIG_ARCADE_TFT_RST       -1

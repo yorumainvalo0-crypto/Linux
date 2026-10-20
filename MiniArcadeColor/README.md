@@ -17,16 +17,18 @@ ESP32-C3 SuperMini or ESP32-S3 WROOM-1. The firmware is built for both.
 | GND      | GND      | GND      |
 | SCK      | GPIO6    | GPIO12   |
 | SDI/MOSI | GPIO7    | GPIO11   |
+| SDO/MISO | GPIO20   | GPIO13   |
 | CS       | GPIO10   | GPIO10   |
 | DC       | GPIO5    | GPIO9    |
 | RESET    | 3V3      | 3V3      |
 
-Touch and SD card on the display stay unconnected. GPIO8 (SDA) and GPIO9
+SDO is not needed for the picture; it is reserved for the SD card and touch
+(not used yet, their other pins stay unconnected). GPIO8 (SDA) and GPIO9
 (C3) / GPIO18 (S3) (SCL) are kept free for a MPU6050 gyroscope (not used yet).
 Everything can be changed in `idf.py menuconfig` -> MiniArcade Color.
 
 Keys, buzzer and battery go on any free pin: the console asks for them at the
-first start (C3 free: GPIO0..4, 20, 21).
+first start (C3 free: GPIO0..4 and 21).
 
 ## Playing
 

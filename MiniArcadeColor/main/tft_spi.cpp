@@ -14,6 +14,7 @@
 
 #define PIN_SCK   CONFIG_ARCADE_TFT_SCK
 #define PIN_MOSI  CONFIG_ARCADE_TFT_MOSI
+#define PIN_MISO  CONFIG_ARCADE_TFT_MISO
 #define PIN_CS    CONFIG_ARCADE_TFT_CS
 #define PIN_DC    CONFIG_ARCADE_TFT_DC
 #define PIN_RST   CONFIG_ARCADE_TFT_RST
@@ -72,7 +73,7 @@ void Gfx::begin() {
 
   spi_bus_config_t bus = {};
   bus.mosi_io_num = PIN_MOSI;
-  bus.miso_io_num = -1;
+  bus.miso_io_num = PIN_MISO;                    // unused for now (SD card, touch)
   bus.sclk_io_num = PIN_SCK;
   bus.quadwp_io_num = -1;
   bus.quadhd_io_num = -1;
