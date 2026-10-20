@@ -14,6 +14,7 @@
 
 uint32_t millis(void);
 void     delay(uint32_t ms);
+void     delayMicroseconds(uint32_t us);   // busy wait
 void     pinMode(uint8_t pin, uint8_t mode);
 int      digitalRead(uint8_t pin);
 void     tone(uint8_t pin, unsigned int freq);

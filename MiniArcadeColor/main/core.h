@@ -5,7 +5,9 @@
 // =========================================================
 //  KEYS
 // =========================================================
-/* Four keys: UP, DOWN, LEFT, RIGHT. OK is two opposite keys pressed
+/* Four keys: UP, DOWN, LEFT, RIGHT. A key has its own pin, or several
+   keys share an ADC pin through resistors (a ladder): each of them then
+   gives its own voltage, learned by the key wizard. OK is two opposite keys pressed
    together (UP+DOWN or LEFT+RIGHT); a fifth key wired as OK works too.
    So that the first of the two keys does not already move the cursor, a
    direction counts only after CHORD_MS - or at once when it is released
@@ -13,6 +15,8 @@
 enum { B_UP, B_DOWN, B_LEFT, B_RIGHT, B_OK, B_COUNT };
 static uint8_t BTN_PIN[B_COUNT] = { 255, 255, 255, 255, 255 };   // learned; 255 = none
 static uint8_t BTN_ACT[B_COUNT] = { 0, 0, 0, 0, 0 };             // 0 = to GND, 1 = to 3V3
+static uint16_t BTN_MV[B_COUNT];         // ladder key: its voltage + 1 (0 = plain key)
+static uint16_t BTN_TOL[B_COUNT];        // ladder key: how far the voltage may be off
 static const char *BTN_NAME[B_COUNT] = { "UP", "DOWN", "LEFT", "RIGHT", "OK" };
 
 #define CHORD_MS     70    // second key of an OK pair within this time
@@ -48,15 +52,44 @@ static uint32_t okTime = 0;
    key for a moment and the phone repeats it while the finger stays on.  */
 static volatile uint32_t vKeyUntil[B_COUNT];
 
-void applyPinModes() {
-  for (uint8_t i = 0; i < B_COUNT; i++)
-    if (BTN_PIN[i] != 255) pinMode(BTN_PIN[i], BTN_ACT[i] ? INPUT_PULLDOWN : INPUT_PULLUP);
+// half the distance to the next key on the same ladder, at most 250 mV
+static void keyTolerances() {
+  for (uint8_t i = 0; i < B_COUNT; i++) {
+    if (!BTN_MV[i]) continue;
+    int16_t tol = 250;
+    for (uint8_t j = 0; j < B_COUNT; j++)
+      if (j != i && BTN_MV[j] && BTN_PIN[j] == BTN_PIN[i]) {
+        int16_t half = (int16_t)(abs((int)BTN_MV[i] - (int)BTN_MV[j]) / 2 - 10);
+        if (half < tol) tol = half;
+      }
+    BTN_TOL[i] = (uint16_t)(tol < 40 ? 40 : tol);
+  }
 }
+
+void applyPinModes() {
+  for (uint8_t i = 0; i < B_COUNT; i++) {
+    if (BTN_PIN[i] == 255) continue;
+    if (BTN_MV[i]) analogReadMilliVolts(BTN_PIN[i]);   // set up the ADC first: that drops the pull
+    pinMode(BTN_PIN[i], BTN_ACT[i] ? INPUT_PULLDOWN : INPUT_PULLUP);
+  }
+  keyTolerances();
+}
+
+static bool tiltKey[4];                  // the gyroscope tilts like a key (tilt.h)
+static void (*tiltHook)() = NULL;        // reads the gyroscope, before the keys
+static int8_t gyroSda = -1, gyroScl = -1; // its pins, saved as "gsda" / "gscl" (+1, 0 = none)
 
 bool rawPressed(uint8_t i) {
   uint32_t u = vKeyUntil[i];
   if (u && (int32_t)(u - millis()) > 0) return true;
+  if (i < 4 && tiltKey[i]) return true;
   if (BTN_PIN[i] == 255) return false;
+  if (BTN_MV[i]) {                       // ladder: twice, so a key passing by does not count
+    int32_t want = BTN_MV[i] - 1;
+    if (abs((int32_t)analogReadMilliVolts(BTN_PIN[i]) - want) > BTN_TOL[i]) return false;
+    delayMicroseconds(1500);
+    return abs((int32_t)analogReadMilliVolts(BTN_PIN[i]) - want) <= BTN_TOL[i];
+  }
   return digitalRead(BTN_PIN[i]) == (BTN_ACT[i] ? HIGH : LOW);
 }
 
@@ -67,6 +100,7 @@ static void dirEmit(uint8_t i, uint32_t now) {
 }
 
 void btnUpdate() {
+  if (tiltHook) tiltHook();
   uint32_t now = millis();
   // directions
   for (uint8_t i = 0; i < 4; i++) {
@@ -200,6 +234,7 @@ bool loadPins() {
       char k[4];
       snprintf(k, sizeof(k), "p%u", i); BTN_PIN[i] = (uint8_t)prefs.getUShort(k, 255);
       snprintf(k, sizeof(k), "a%u", i); BTN_ACT[i] = (uint8_t)prefs.getUShort(k, 0);
+      snprintf(k, sizeof(k), "m%u", i); BTN_MV[i]  = prefs.getUShort(k, 0);
     }
   prefs.end();
   return ok;
@@ -210,6 +245,7 @@ void savePins() {
     char k[4];
     snprintf(k, sizeof(k), "p%u", i); prefs.putUShort(k, BTN_PIN[i]);
     snprintf(k, sizeof(k), "a%u", i); prefs.putUShort(k, BTN_ACT[i]);
+    snprintf(k, sizeof(k), "m%u", i); prefs.putUShort(k, BTN_MV[i]);
   }
   prefs.putUShort("pset", 3);
   prefs.end();

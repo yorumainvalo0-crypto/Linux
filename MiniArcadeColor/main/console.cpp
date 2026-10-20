@@ -16,12 +16,14 @@
 #include "Preferences.h"
 #include "sdkconfig.h"
 #include "gfx.h"
+#include "gyro.h"
 #include "net.h"
 #include "link.h"
 #include "esp_random.h"
 
 #include "core.h"
 #include "wizard.h"
+#include "tilt.h"
 #include "wlan.h"
 #include "settings.h"
 #include "game_snake.h"
@@ -120,8 +122,10 @@ void menu() {
         wantRestart = false;
         curHigh = real ? loadHigh(sel) : 0;
         pauseOk = real;
+        tiltGame = real;
+        tiltLevel();                             // as it is held now = level
         GAMES[sel].run();
-        pauseOk = false;
+        tiltGame = pauseOk = false;
       } while (wantRestart);
       btnClear();
       continue;
@@ -248,6 +252,7 @@ void setup() {
   randomSeed(esp_random());
   gfx.begin();                     // finds the display's pins first
   candInit();
+  tiltLoad();
   // keys, buzzer or battery saved on a pin the display has now: ask again
   for (uint8_t i = 0; i < B_COUNT; i++)
     if (BTN_PIN[i] != 255 && tftPinUsed(BTN_PIN[i])) havePins = false;
@@ -283,6 +288,7 @@ void setup() {
   }
   batDetect();
   applyPinModes();
+  tiltStart();
   fwUnconfirmed = fwPending();
   versionRun(true);
 }

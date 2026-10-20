@@ -7,42 +7,65 @@
 /* Works like on the OLED console: every candidate pin is read once with a
    pull-up and once with a pull-down while nothing is pressed; a key press
    is then a pin that differs from its own idle value, which also tells
-   whether the key goes to GND or to 3V3. Four keys are learned; a fifth
-   one for OK is optional (wait a few seconds to skip it - OK is then two
-   opposite keys at once).                                              */
-static uint8_t baseU[sizeof(PINS_ALL)], baseD[sizeof(PINS_ALL)];
-static uint8_t liveU[sizeof(PINS_ALL)], liveD[sizeof(PINS_ALL)];
-static bool    blocked[sizeof(PINS_ALL)];
+   whether the key goes to GND or to 3V3. ADC pins are measured in volts
+   instead (with the pull-up), so several keys on one pin through
+   resistors are told apart by their voltage. Four keys are learned; a
+   fifth one for OK is optional (wait a few seconds to skip it - OK is then
+   two opposite keys at once).                                          */
+static uint8_t  baseU[sizeof(PINS_ALL)], baseD[sizeof(PINS_ALL)];
+static uint8_t  liveU[sizeof(PINS_ALL)], liveD[sizeof(PINS_ALL)];
+static int16_t  baseMv[sizeof(PINS_ALL)], liveMv[sizeof(PINS_ALL)];
+static bool     blocked[sizeof(PINS_ALL)], mvNoisy[sizeof(PINS_ALL)];
+static int16_t  seenMv = -1;                 // voltage of the key just found (ladder)
+
+static bool candAdc(uint8_t i) { return adcPin(CAND[i]) && CAND[i] != batPin; }   // the battery is no key
 
 static void readAll(uint8_t mode, uint8_t *out) {
   for (uint8_t i = 0; i < CAND_N; i++) pinMode(CAND[i], mode);
   delay(3);
   for (uint8_t i = 0; i < CAND_N; i++) out[i] = digitalRead(CAND[i]);
 }
+static void readMv(int16_t *out) {            // right after readAll(INPUT_PULLUP)
+  for (uint8_t i = 0; i < CAND_N; i++) out[i] = candAdc(i) ? (int16_t)analogReadMilliVolts(CAND[i]) : -1;
+}
 
 static void calibrate() {
   uint8_t u1[sizeof(PINS_ALL)], u2[sizeof(PINS_ALL)], d1[sizeof(PINS_ALL)], d2[sizeof(PINS_ALL)];
-  readAll(INPUT_PULLUP, u1);
+  int16_t m1[sizeof(PINS_ALL)], m2[sizeof(PINS_ALL)];
+  readAll(INPUT_PULLUP, u1); readMv(m1);
   readAll(INPUT_PULLDOWN, d1);
   delay(120);
-  readAll(INPUT_PULLUP, u2);
+  readAll(INPUT_PULLUP, u2); readMv(m2);
   readAll(INPUT_PULLDOWN, d2);
   for (uint8_t i = 0; i < CAND_N; i++) {
     baseU[i] = u1[i];
     baseD[i] = d1[i];
+    baseMv[i] = m1[i];
     blocked[i] = (u1[i] != u2[i]) || (d1[i] != d2[i]);     // noisy pin
+    mvNoisy[i] = m1[i] < 0 || abs(m1[i] - m2[i]) > 150;
   }
 }
 
+// a learned ladder key sits at this voltage on this pin already
+static bool levelTaken(uint8_t pin, int16_t mv) {
+  for (uint8_t b = 0; b < B_COUNT; b++)
+    if (BTN_PIN[b] == pin && BTN_MV[b] && abs((int)BTN_MV[b] - 1 - mv) < 120) return true;
+  return false;
+}
+
 static int8_t scanKey(const bool *used, uint8_t *act) {
-  readAll(INPUT_PULLUP, liveU);
+  readAll(INPUT_PULLUP, liveU); readMv(liveMv);
   readAll(INPUT_PULLDOWN, liveD);
   int8_t hit = -1;
   uint8_t cnt = 0;
   for (uint8_t i = 0; i < CAND_N; i++) {
     if (used[i] || blocked[i]) continue;
-    if (liveU[i] == LOW && baseU[i] == HIGH)      { hit = i; *act = 0; cnt++; }
-    else if (liveD[i] == HIGH && baseD[i] == LOW) { hit = i; *act = 1; cnt++; }
+    bool volts = !mvNoisy[i];                                // ADC pin: measured, not just high/low
+    if (volts && abs(liveMv[i] - baseMv[i]) > 300) {
+      if (!levelTaken(CAND[i], liveMv[i])) { hit = i; *act = 0; seenMv = liveMv[i]; cnt++; }
+    }
+    else if (!volts && liveU[i] == LOW && baseU[i] == HIGH) { hit = i; *act = 0; seenMv = -1; cnt++; }
+    else if (liveD[i] == HIGH && baseD[i] == LOW)          { hit = i; *act = 1; seenMv = -1; cnt++; }
   }
   return cnt == 1 ? hit : -1;
 }
@@ -69,7 +92,8 @@ static void wizScreen(const char *msg, uint8_t step, int8_t seen, uint8_t act, i
     else gfx.rframe(x, 150, 20, 12, 3, i == 4 ? C::GREY : C::LTGREY);
   }
   char b[40];
-  if (seen >= 0) snprintf(b, sizeof(b), "GPIO%u -> %s", CAND[seen], act ? "3V3" : "GND");
+  if (seen >= 0 && seenMv >= 0) snprintf(b, sizeof(b), "GPIO%u -> %u.%02u V", CAND[seen], seenMv / 1000, seenMv % 1000 / 10);
+  else if (seen >= 0) snprintf(b, sizeof(b), "GPIO%u -> %s", CAND[seen], act ? "3V3" : "GND");
   else if (secs >= 0) snprintf(b, sizeof(b), "no OK key? skipped in %d s", secs);
   else snprintf(b, sizeof(b), "waiting...");
   gfx.center(176, b, C::LTGREY);
@@ -78,7 +102,8 @@ static void wizScreen(const char *msg, uint8_t step, int8_t seen, uint8_t act, i
     int16_t x = 6 + i * (308 / CAND_N);
     char n[4];
     snprintf(n, sizeof(n), "%u", CAND[i]);
-    col c = blocked[i] ? C::DKGREY : (liveU[i] == LOW && baseU[i] == HIGH) || (liveD[i] == HIGH && baseD[i] == LOW) ? C::LIME : C::GREY;
+    bool on = mvNoisy[i] ? liveU[i] == LOW && baseU[i] == HIGH : abs(liveMv[i] - baseMv[i]) > 300;
+    col c = blocked[i] ? C::DKGREY : on || (liveD[i] == HIGH && baseD[i] == LOW) ? C::LIME : C::GREY;
     gfx.text(x, 210, n, c, F_SMALL);
   }
   gfx.send();
@@ -89,6 +114,9 @@ void learnKeys() {
   uint8_t act = 0;
   memset(used, 0, sizeof(used));
   memset(blocked, 0, sizeof(blocked));
+  memset(mvNoisy, 1, sizeof(mvNoisy));
+  for (uint8_t b = 0; b < B_COUNT; b++) { BTN_PIN[b] = 255; BTN_MV[b] = 0; }
+  for (uint8_t i = 0; i < CAND_N; i++) if (candAdc(i)) analogReadMilliVolts(CAND[i]);   // ADC set up before the pulls
   for (uint8_t i = 0; i < 40; i++) { wizScreen("release all keys", 0, -1, 0, -1); delay(25); }
   calibrate();
   uint8_t quiet = 0;
@@ -123,7 +151,8 @@ void learnKeys() {
     if (skipped) { BTN_PIN[b] = 255; break; }
     BTN_PIN[b] = CAND[hit];
     BTN_ACT[b] = act;
-    used[hit] = true;
+    BTN_MV[b] = seenMv >= 0 ? (uint16_t)(seenMv + 1) : 0;
+    used[hit] = !BTN_MV[b];                                  // a ladder pin can take more keys
     applyPinModes();
     uint32_t rt = millis();
     while (rawPressed(b) && millis() - rt < 5000) delay(10);
@@ -137,6 +166,7 @@ void learnKeys() {
   for (uint8_t i = 0; i < B_COUNT; i++) {
     char l[40];
     if (BTN_PIN[i] == 255) snprintf(l, sizeof(l), "%-5s  = UP+DOWN or LEFT+RIGHT", BTN_NAME[i]);
+    else if (BTN_MV[i]) snprintf(l, sizeof(l), "%-5s  GPIO %-2u  %u.%02u V", BTN_NAME[i], BTN_PIN[i], (BTN_MV[i] - 1) / 1000, (BTN_MV[i] - 1) % 1000 / 10);
     else snprintf(l, sizeof(l), "%-5s  GPIO %-2u  %s", BTN_NAME[i], BTN_PIN[i], BTN_ACT[i] ? "3V3" : "GND");
     gfx.text(30, 60 + i * 26, l, C::LTGREY);
   }
@@ -193,7 +223,7 @@ void soundSetup() {
 // =========================================================
 enum BatProbe : uint8_t { BP_USED, BP_NONE, BP_BAT, BP_HIGH };
 
-static bool batPinUsed(uint8_t p) { return p == sndPin || pinTaken(p) || pinReserved(p); }
+static bool batPinUsed(uint8_t p) { return p == sndPin || pinTaken(p) || pinReserved(p) || p == gyroSda || p == gyroScl; }
 
 BatProbe batProbe(uint8_t p, uint16_t *pinMv) {
   if (pinMv) *pinMv = 0;
