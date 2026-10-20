@@ -1,0 +1,131 @@
+# Builds MiniArcade Color (the 320x240 colour console) for the ESP32-C3
+# SuperMini and the ESP32-S3. It has its own update channel, apart from the
+# OLED console:
+#   - every new MiniArcadeColor/version.txt on main becomes a release
+#     "color-v<version>", marked as prerelease so it never turns into the
+#     repository's "latest" release (that one belongs to the OLED console),
+#   - the release "color-latest" always carries the newest files; the colour
+#     boards look for updates there (releases/download/color-latest/).
+name: MiniArcade Color firmware
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "MiniArcadeColor/**"
+      - "MiniArcade/main/**"            # net, link, phone and fonts are shared
+      - ".github/workflows/miniarcade-color.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, e.g. 0.2 (empty = only build)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the colour scenarios on the PC
+        run: sh MiniArcadeColor/test/build.sh
+
+  firmware:
+    needs: host-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version and update source
+        id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=""
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            V="$(tr -d ' \r\n' < MiniArcadeColor/version.txt)"
+            if gh release view "color-v$V" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "release color-v$V exists already - raise MiniArcadeColor/version.txt for a new one"
+            else
+              VER="$V"
+            fi
+          fi
+          if [ -n "$INPUT_VERSION" ]; then
+            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::publish from main only (this run is on $GITHUB_REF_NAME)"; exit 1
+            fi
+            VER="${INPUT_VERSION#v}"
+          fi
+          if [ -n "$VER" ] && ! echo "$VER" | grep -Eq '^[0-9]+(\.[0-9]+)*$'; then
+            echo "::error::version must look like 0.2, got '$VER'"; exit 1
+          fi
+          if [ -n "$VER" ]; then
+            echo "$VER" > MiniArcadeColor/version.txt
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=$VER" >> "$GITHUB_OUTPUT"
+          fi
+          echo "CONFIG_ARCADE_GITHUB_REPO=\"$GITHUB_REPOSITORY\"" >> MiniArcadeColor/sdkconfig.defaults
+          echo "version: $(cat MiniArcadeColor/version.txt)"
+
+      - name: Build for the ESP32-C3
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32c3
+          path: MiniArcadeColor
+          command: >-
+            idf.py -B build-c3 -DSDKCONFIG=build-c3/sdkconfig build &&
+            idf.py -B build-c3 -DSDKCONFIG=build-c3/sdkconfig merge-bin -o full.bin
+
+      - name: Build for the ESP32-S3
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: MiniArcadeColor
+          command: >-
+            idf.py -B build-s3 -DSDKCONFIG=build-s3/sdkconfig build &&
+            idf.py -B build-s3 -DSDKCONFIG=build-s3/sdkconfig merge-bin -o full.bin
+
+      - name: Collect the files
+        run: |
+          mkdir out
+          B=MiniArcadeColor
+          cp $B/build-c3/miniarcade-color.bin out/miniarcade-color-c3.bin
+          cp $B/build-c3/full.bin             out/miniarcade-color-c3-full.bin
+          cp $B/build-s3/miniarcade-color.bin out/miniarcade-color-s3.bin
+          cp $B/build-s3/full.bin             out/miniarcade-color-s3-full.bin
+          cp $B/version.txt out/
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: miniarcade-color-firmware
+          path: out/
+
+      - name: Publish the release and the update channel
+        if: steps.ver.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          R="--repo $GITHUB_REPOSITORY"
+          # the versioned release: a prerelease, never "latest"
+          gh release create "color-v$V" $R --target "$GITHUB_SHA" --title "MiniArcade Color $V" \
+            --prerelease --latest=false --generate-notes out/*
+          # the channel the boards read: the firmware files first, version.txt
+          # last, so no board sees a new number before its file is there
+          if ! gh release view color-latest $R >/dev/null 2>&1; then
+            gh release create color-latest $R --target "$GITHUB_SHA" --title "MiniArcade Color (update channel)" \
+              --notes "Always the newest MiniArcade Color files. The colour consoles update from here." \
+              --prerelease --latest=false
+          fi
+          gh release upload color-latest $R --clobber out/miniarcade-color-c3.bin out/miniarcade-color-s3.bin \
+            out/miniarcade-color-c3-full.bin out/miniarcade-color-s3-full.bin
+          gh release upload color-latest $R --clobber out/version.txt
