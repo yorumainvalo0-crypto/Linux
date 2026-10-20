@@ -162,7 +162,9 @@ void menu() {
       gfx.text(204, 168, "BEST", C::LTGREY, F_SMALL);
       gfx.text(204, 182, b, C::YELLOW, F_BOLD);
     } else gfx.text(204, 176, g.tag, C::LTGREY);
-    gfx.text(196, 214, "UP+DOWN = OK", C::GREY, F_SMALL);
+    char ok[24];
+    snprintf(ok, sizeof(ok), "%s = start", okKeys());
+    gfx.text(196, 214, ok, C::GREY, F_SMALL);
     gfx.send();
   }
 }

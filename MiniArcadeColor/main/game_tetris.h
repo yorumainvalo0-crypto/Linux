@@ -183,7 +183,9 @@ void tetrisRun() {
       ttDrawPiece(np, 240, 66, 12, false);
       gfx.text(224, 140, "UP turn", C::GREY, F_SMALL);
       gfx.text(224, 154, "DOWN faster", C::GREY, F_SMALL);
-      gfx.text(224, 168, "UP+DOWN drop", C::GREY, F_SMALL);
+      char drop[20];
+      snprintf(drop, sizeof(drop), "%s drop", okKeys());
+      gfx.text(224, 168, drop, C::GREY, F_SMALL);
       gfx.send();
       if (over) { sfx(150, 500); delay(500); break; }
     }

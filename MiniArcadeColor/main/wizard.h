@@ -228,7 +228,8 @@ void soundSetup() {
     snprintf(b, sizeof(b), "testing GPIO%u", list[idx]);
     gfx.center(70, b, C::YELLOW);
     gfx.center(104, "do you hear a beep?", C::WHITE);
-    gfx.center(150, "OK (UP+DOWN) = yes", C::LIME);
+    snprintf(b, sizeof(b), "%s = yes", okKeys());
+    gfx.center(150, b, C::LIME);
     gfx.center(176, "RIGHT = try the next pin", C::LTGREY);
     gfx.send();
     if (btn(B_OK))    { saveSound(); sfx(1200, 120); delay(300); return; }
