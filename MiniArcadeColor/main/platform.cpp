@@ -14,6 +14,7 @@
 #include "soc/rtc.h"
 #include "esp_timer.h"
 #include "esp_random.h"
+#include "esp_rom_sys.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -22,6 +23,7 @@
 // ---------------- timing ----------------
 uint32_t millis(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 void delay(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms ? ms : 1)); }
+void delayMicroseconds(uint32_t us) { esp_rom_delay_us(us); }
 
 // ---------------- gpio ----------------
 void pinMode(uint8_t pin, uint8_t mode) {

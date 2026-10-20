@@ -2,6 +2,15 @@
 // not compiled on its own. LEFT/RIGHT change the value of a line, OK runs
 // the setups, holding OK leaves.
 
+// switching tilt on finds the sensor and learns the axes the first time
+static void tiltToggle() {
+  if (cfgTilt) { cfgTilt = false; gyroClose(); }
+  else if (tiltAx[0] != 0xFF || tiltSetup()) cfgTilt = true;
+  tiltSave();
+  tiltStart();
+  btnClear();
+}
+
 void settingsRun() {
 #if CONFIG_IDF_TARGET_ESP32S3
   static const uint8_t CLOCKS[3] = { 80, 160, 240 };
@@ -9,7 +18,7 @@ void settingsRun() {
   static const uint8_t CLOCKS[3] = { 40, 80, 160 };
 #endif
   static const uint8_t MINS[5] = { 0, 1, 5, 15, 30 };
-  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_FLIP, L_SWAP, L_INVERT, L_KEYS, L_BUZZER, L_BAT, L_WLAN, L_VERSION, L_BACK, L_N };
+  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_KEYS, L_BUZZER, L_BAT, L_WLAN, L_VERSION, L_BACK, L_N };
   uint8_t sel = 0, top = 0;
   const uint8_t ROWS = 7;
   btnClear();
@@ -40,6 +49,7 @@ void settingsRun() {
       else if (sel == L_FLIP)   { cfgDisp ^= 1; applyDisplay(); }
       else if (sel == L_SWAP)   { cfgDisp ^= 2; applyDisplay(); }
       else if (sel == L_INVERT) { cfgDisp ^= 4; applyDisplay(); }
+      else if (sel == L_TILT)   tiltToggle();
       saveCfg();
     }
     if (btn(B_OK)) {
@@ -49,6 +59,7 @@ void settingsRun() {
       else if (sel == L_BAT)     batterySetup();
       else if (sel == L_WLAN)    wlanRun();
       else if (sel == L_VERSION) versionRun(false);
+      else if (sel == L_TILT)    { if (tiltSetup()) { cfgTilt = true; tiltSave(); } tiltStart(); }
       else if (sel == L_BACK)    return;
       else if (sel == L_SOUND)   { cfgMute = !cfgMute; saveCfg(); }
       else if (sel >= L_FLIP && sel <= L_INVERT) { cfgDisp ^= (uint8_t)(1 << (sel - L_FLIP)); saveCfg(); applyDisplay(); }
@@ -65,6 +76,7 @@ void settingsRun() {
     snprintf(line[L_FLIP], 36, "screen       %s", cfgDisp & 1 ? "turned" : "normal");
     snprintf(line[L_SWAP], 36, "red/blue     %s", cfgDisp & 2 ? "swapped" : "normal");
     snprintf(line[L_INVERT], 36, "colours      %s", cfgDisp & 4 ? "inverted" : "normal");
+    snprintf(line[L_TILT], 36, "tilt control %s", !cfgTilt ? "off" : gyroReady ? "on" : "on (no sensor)");
     snprintf(line[L_KEYS], 36, "set up keys...");
     snprintf(line[L_BUZZER], 36, "set up sound...");
     snprintf(line[L_BAT], 36, "set up battery...");
@@ -85,7 +97,8 @@ void settingsRun() {
       if (on) gfx.rbox(6, y - 3, SCR_W - 12, 23, 5, C::CYAN);
       gfx.text(16, y + 1, line[k], on ? C::BLACK : C::WHITE);
     }
-    if (sel <= L_INVERT) gfx.center(SCR_H - 14, "LEFT / RIGHT change", C::GREY, F_SMALL);
+    if (sel == L_TILT) gfx.center(SCR_H - 14, "LEFT / RIGHT on/off - OK set up again", C::GREY, F_SMALL);
+    else if (sel <= L_INVERT) gfx.center(SCR_H - 14, "LEFT / RIGHT change", C::GREY, F_SMALL);
     gfx.send();
   }
 }

@@ -5,7 +5,7 @@ ST7789 optional), four keys, a buzzer and a battery. Its own firmware, apart
 from the OLED MiniArcade: it never installs as an update on the OLED console
 and the OLED firmware never on this one.
 
-Games so far: Snake, Tetris, Pong, Flappy, Breakout. More follow.
+Games so far: Snake, Tetris, Pong, Flappy, Breakout. The other 27 follow.
 
 ## Boards
 
@@ -25,12 +25,21 @@ ESP32-C3 SuperMini or ESP32-S3 WROOM-1. The firmware is built for both.
 With SDO wired the console finds the display's pins by itself at the start
 (it writes a register of the panel and reads it back), so other wirings work
 too; the result is saved. Without SDO the table above is used.
-Touch and SD card stay unconnected for now. The MPU6050 gyroscope (not used
-yet) gets SDA GPIO8 / SCL GPIO18 on the S3; the C3 has no pins left for it.
+Touch and SD card stay unconnected for now.
+
+MPU6050 gyroscope (GY-521): SDA and SCL on any two free pins (S3: GPIO8 /
+GPIO18 are kept for it), VCC 3V3, GND. Settings -> "tilt control" switches it
+on: the console finds the sensor, then asks to tilt it once to the right and
+once away from you. In a game, tilting works like the arrow keys; the way the
+console is held when the game starts counts as level.
 
 Keys, buzzer and battery go on any free pin: the console asks for them at the
-first start (C3: GPIO0..3, 6, 7 and 10 or 20 - the battery needs one of
-GPIO0..3).
+first start. Several keys may share one ADC pin through resistors (for
+example a 10k pull-up and keys to GND directly, via 1k and via 2k): the key
+wizard learns each key by its voltage. OK then works with two keys on
+different pins (e.g. LEFT+RIGHT), or with an own OK key.
+Free on the C3 with the wiring above: GPIO0..3, 6, 7 and 10 or 20; ladder
+keys and the battery need one of GPIO0..3 (ADC).
 
 ## Playing
 
