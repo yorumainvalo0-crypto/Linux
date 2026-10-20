@@ -11,11 +11,10 @@ Rocks, Racer, Frogger, 4 wins, Tic Tac Toe, 2048, Minesweeper, Pac-Man,
 Shooter, Jump & Run, Sokoban, Battleship, Sudoku, Lights Out, Match 3,
 Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
 the CPU or two players on one console (and online, see below). Plus
-Mine 3D, a block world in first person, Palace, a platformer (both below),
-and Chess with all rules
-(castling, en passant, promotion, check, mate, stalemate, 50 moves), against
-the CPU, for two players on one console or online (the board can turn round
-for black):
+Mine 3D, a block world in first person, Palace, a platformer, Skat against
+two CPU players (all below), and Chess with all rules (castling, en passant,
+promotion, check, mate, stalemate, 50 moves), against the CPU, for two
+players on one console or online (the board can turn round for black):
 
 - **vs CPU easy / normal / hard**: you pick white or black, the board faces
   you. The CPU searches with alpha-beta (material, piece-square tables, takes

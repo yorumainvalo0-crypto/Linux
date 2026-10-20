@@ -1817,6 +1817,261 @@ static void mine3dLogic() {
   vox = NULL;
 }
 
+// ---------------- Skat: the rules and the CPU without the screen, and a player for the UI ----------------
+static uint32_t sktMaskOf(std::initializer_list<int> cs) { uint32_t m = 0; for (int c : cs) m |= 1UL << c; return m; }
+static int sktC(int suit, int rank) { return suit * 8 + rank; }
+static uint8_t sktWin3(uint8_t g, int a, int b, int c) {
+  Skat s; memset(&s, 0, sizeof(s)); s.game = g;
+  s.trick[0] = (uint8_t)a; s.trick[1] = (uint8_t)b; s.trick[2] = (uint8_t)c; s.nTrick = 3;
+  return s.trickWin();
+}
+static uint32_t sktLegal1(uint8_t g, int lead, uint32_t hand) {
+  Skat s; memset(&s, 0, sizeof(s)); s.game = g; s.trick[0] = (uint8_t)lead; s.nTrick = 1; s.hand[1] = hand;
+  return s.legal(1);
+}
+static void skatLogic() {
+  enum { K = 0, P = 1, H = 2, D = 3 };                          // Kreuz Pik Herz Karo
+  // the bid values
+  static const uint16_t WANT[] = { 18, 20, 22, 23, 24, 27, 30, 33, 35, 36, 40, 44, 45, 46, 48, 50, 54, 55, 59, 60, 63, 66, 70, 72 };
+  uint16_t v = 0; bool ok = true;
+  for (uint16_t w : WANT) { v = sktNextBid(v); if (v != w) ok = false; }
+  check("skat: bid values 18, 20, 22, 23, 24, 27, 30 ...", ok && sktPrevBid(23) == 22 && sktNextBid(240) == 264 && sktNextBid(264) == 0);
+  // the deal
+  ok = true;
+  for (int i = 0; i < 3000; i++) {
+    Skat s; s.deal(1234 + i * 7919, (uint8_t)(i % 3));
+    uint32_t all = s.skat;
+    if (sktCount(s.skat) != 2) ok = false;
+    for (int p = 0; p < 3; p++) { if (sktCount(s.hand[p]) != 10 || (all & s.hand[p])) ok = false; all |= s.hand[p]; }
+    if (all != 0xFFFFFFFFUL || s.bidActor() != (i + 2) % 3) ok = false;
+  }
+  check("skat: 3000 deals, each the 32 cards as 10 + 10 + 10 + Skat 2, Mittelhand says first", ok);
+  // following
+  uint32_t m = sktMaskOf({ sktC(K, SR_B), sktC(H, SR_A), sktC(P, SR_7) });
+  check("skat: Herz led in a Herz game: a Bube or Herz (trumps)", sktLegal1(SG_HERZ, sktC(H, SR_7), m) == sktMaskOf({ sktC(K, SR_B), sktC(H, SR_A) }));
+  m = sktMaskOf({ sktC(P, SR_B), sktC(P, SR_A), sktC(H, SR_7) });
+  check("skat: Pik led in a Herz game: the Pik-Bube is no Pik", sktLegal1(SG_HERZ, sktC(P, SR_7), m) == sktMaskOf({ sktC(P, SR_A) }));
+  m = sktMaskOf({ sktC(H, SR_B), sktC(H, SR_A), sktC(P, SR_7) });
+  check("skat: Grand, Herz led: Herz-A, not the Herz-Bube", sktLegal1(SG_GRAND, sktC(H, SR_7), m) == sktMaskOf({ sktC(H, SR_A) }));
+  check("skat: Grand, a Bube led: only Buben", sktLegal1(SG_GRAND, sktC(D, SR_B), m) == sktMaskOf({ sktC(H, SR_B) }));
+  check("skat: Null, Herz led: the Herz-Bube is a Herz", sktLegal1(SG_NULL, sktC(H, SR_7), sktMaskOf({ sktC(H, SR_B), sktC(P, SR_7) })) == sktMaskOf({ sktC(H, SR_B) }));
+  m = sktMaskOf({ sktC(P, SR_7), sktC(K, SR_B) });
+  check("skat: no card of the suit led: anything", sktLegal1(SG_GRAND, sktC(H, SR_7), m) == m);
+  // who takes the trick
+  check("skat: Pik game: the Karo-Bube trumps the Pik-A", sktWin3(SG_PIK, sktC(P, SR_7), sktC(D, SR_B), sktC(P, SR_A)) == 1);
+  check("skat: Kreuz game: a Kreuz-7 trumps Herz", sktWin3(SG_KREUZ, sktC(H, SR_A), sktC(H, SR_10), sktC(K, SR_7)) == 2);
+  check("skat: Buben order Kreuz Pik Herz Karo", sktWin3(SG_HERZ, sktC(H, SR_A), sktC(D, SR_B), sktC(K, SR_B)) == 2 &&
+        sktWin3(SG_HERZ, sktC(H, SR_A), sktC(P, SR_B), sktC(H, SR_B)) == 1);
+  check("skat: A 10 K D 9 8 7", sktWin3(SG_KARO, sktC(D, SR_A), sktC(D, SR_10), sktC(D, SR_K)) == 0 &&
+        sktWin3(SG_KARO, sktC(D, SR_K), sktC(D, SR_10), sktC(D, SR_D)) == 1 && sktWin3(SG_GRAND, sktC(H, SR_7), sktC(H, SR_8), sktC(H, SR_K)) == 2);
+  check("skat: Grand: the Herz-A takes the 10, a Bube takes the A", sktWin3(SG_GRAND, sktC(H, SR_10), sktC(H, SR_A), sktC(K, SR_7)) == 1 &&
+        sktWin3(SG_GRAND, sktC(H, SR_A), sktC(D, SR_B), sktC(P, SR_A)) == 1);
+  check("skat: a card of another suit never takes it", sktWin3(SG_GRAND, sktC(P, SR_7), sktC(H, SR_A), sktC(K, SR_A)) == 0);
+  check("skat: Null: B over 10, 10 over 9, no trumps", sktWin3(SG_NULL, sktC(H, SR_10), sktC(H, SR_B), sktC(H, SR_9)) == 1 &&
+        sktWin3(SG_NULL, sktC(H, SR_A), sktC(H, SR_K), sktC(K, SR_B)) == 0 && sktWin3(SG_NULL, sktC(H, SR_7), sktC(K, SR_A), sktC(H, SR_8)) == 2);
+  // game values
+  uint32_t mit3 = sktMaskOf({ sktC(K, SR_B), sktC(P, SR_B), sktC(H, SR_B), sktC(K, SR_A) });
+  SkResult r = sktValue(mit3, SG_KREUZ, 0, 61, 5, 5, 18);
+  check("skat: Kreuz mit 3 = 4 x 12 = 48, won with 61", r.won && r.spitzen == 3 && r.value == 48 && r.score == 48);
+  r = sktValue(mit3, SG_KREUZ, 0, 60, 5, 5, 18);
+  check("skat: 60 Augen lose: -96", !r.won && r.score == -96);
+  r = sktValue(sktMaskOf({ sktC(P, SR_B), sktC(H, SR_B) }), SG_PIK, 0, 70, 6, 4, 18);
+  check("skat: Pik ohne 1 = 2 x 11 = 22", r.won && r.spitzen == -1 && r.value == 22);
+  r = sktValue(sktMaskOf({ sktC(H, SR_10), sktC(H, SR_K) }), SG_HERZ, SKF_HAND, 70, 6, 4, 18);
+  check("skat: Herz ohne 5 Hand = 7 x 10 = 70", r.won && r.spitzen == -5 && r.value == 70);
+  uint32_t mit4 = sktMaskOf({ sktC(K, SR_B), sktC(P, SR_B), sktC(H, SR_B), sktC(D, SR_B) });
+  r = sktValue(mit4, SG_GRAND, SKF_HAND | SKF_SCHN, 92, 8, 2, 18);
+  check("skat: Grand mit 4 Hand Schneider angesagt = 8 x 24 = 192", r.won && r.value == 192);
+  r = sktValue(0, SG_GRAND, 0, 61, 5, 5, 18);
+  check("skat: Grand ohne 4 = 5 x 24 = 120", r.won && r.spitzen == -4 && r.value == 120);
+  uint32_t mit1 = sktMaskOf({ sktC(K, SR_B), sktC(H, SR_B) });
+  r = sktValue(mit1, SG_KREUZ, SKF_HAND | SKF_SCHN | SKF_SCHW, 120, 10, 0, 18);
+  check("skat: Kreuz mit 1 Hand Schwarz angesagt = 7 x 12 = 84", r.won && r.value == 84);
+  r = sktValue(mit1, SG_KREUZ, SKF_HAND | SKF_SCHN | SKF_SCHW, 110, 9, 1, 18);
+  check("skat: Schwarz angesagt, one trick lost: -168", !r.won && r.score == -168);
+  r = sktValue(sktMaskOf({ sktC(K, SR_B), sktC(P, SR_B) }), SG_KREUZ, SKF_HAND | SKF_SCHN | SKF_SCHW | SKF_OUV, 120, 10, 0, 18);
+  check("skat: Kreuz mit 2 Ouvert = 9 x 12 = 108", r.won && r.value == 108);
+  r = sktValue(mit1, SG_PIK, 0, 95, 9, 1, 18);
+  check("skat: Pik mit 1 Schneider = 3 x 11 = 33", r.won && r.schneider && r.value == 33);
+  r = sktValue(mit1, SG_PIK, 0, 120, 10, 0, 18);
+  check("skat: Pik mit 1 Schwarz = 4 x 11 = 44", r.won && r.schwarz && r.value == 44);
+  r = sktValue(mit1, SG_HERZ, 0, 25, 2, 8, 18);
+  check("skat: lost Schneider: Herz mit 1 = 3 x 10, -60", !r.won && r.schneider && r.score == -60);
+  r = sktValue(mit1, SG_HERZ, SKF_HAND | SKF_SCHN, 80, 7, 3, 18);
+  check("skat: Schneider angesagt, 80 Augen: lost 5 x 10, -100", !r.won && r.score == -100);
+  static const uint8_t NFL[4] = { 0, SKF_HAND, SKF_OUV, SKF_HAND | SKF_OUV };
+  static const uint16_t NV[4] = { 23, 35, 46, 59 };
+  ok = true;
+  for (int i = 0; i < 4; i++) {
+    r = sktValue(0, SG_NULL, NFL[i], 0, 0, 10, 18);
+    if (!r.won || r.value != NV[i]) ok = false;
+    r = sktValue(0, SG_NULL, NFL[i], 0, 1, 0, 18);
+    if (r.won || r.score != -2 * NV[i]) ok = false;
+  }
+  check("skat: Null 23, Hand 35, Ouvert 46, Ouvert Hand 59; a trick loses", ok);
+  r = sktValue(mit1, SG_KREUZ, 0, 70, 6, 4, 30);
+  check("skat: overbid (24 for 30): lost with 3 x 12 = 36, -72", !r.won && r.overbid && r.value == 36 && r.score == -72);
+  r = sktValue(mit1, SG_KREUZ, 0, 92, 8, 2, 36);
+  check("skat: ... but Schneider makes 36 enough", r.won && !r.overbid && r.value == 36);
+  r = sktValue(0, SG_NULL, 0, 0, 0, 10, 30);
+  check("skat: Null for a bid of 30: overbid, -70", !r.won && r.overbid && r.score == -70);
+  // bidding: who plays
+  {
+    Skat s; s.deal(5, 0);                                       // Vorhand 1, Mittelhand 2, Hinterhand 0
+    s.bidAct(true); s.bidAct(true); s.bidAct(true); s.bidAct(false);   // M 18, V ja, M 20, V passe
+    bool a = s.bidActor() == 0 && s.bidAsk() == 22;
+    s.bidAct(true, 30); s.bidAct(false);                        // H 30, M passe
+    check("skat: Reizen: M against V, then H against the one left", a && s.decl == 0 && s.bid == 30 && s.stage == 3);
+    Skat t; t.deal(5, 0);
+    t.bidAct(false); t.bidAct(false);                           // M passe, H passe
+    bool b = t.bidActor() == 1 && t.bidAsk() == 18;
+    t.bidAct(false);
+    Skat u; u.deal(5, 0); u.bidAct(false); u.bidAct(false); u.bidAct(true);
+    check("skat: all passe = new deal; Vorhand may still play for 18", b && t.decl == SKT_NONE && t.stage == 3 && u.decl == 1 && u.bid == 18);
+  }
+  // CPU games: always legal, 120 Augen, bidding ends
+  long games = 0, passed = 0, declWon = 0, played = 0, illegal = 0, bad120 = 0, badVoid = 0, overbid = 0, cards = 0;
+  long byType[6] = { 0 }, wonType[6] = { 0 };
+  long forced = 0;
+  uint32_t rr = 77;
+  for (int gi = 0; gi < 6000; gi++) {
+    Skat s; s.deal(99991u * gi + 17, (uint8_t)(gi % 3));
+    bool randomPlay = gi % 5 == 4;                              // sometimes a player that plays any legal card
+    int guard = 0;
+    while (s.stage != 3 && guard++ < 300) { uint8_t a = s.bidActor(); uint16_t ask = s.bidAsk(); s.bidAct(ask && ask <= sktMaxBid(s.hand[a], a ? 0 : -4)); }
+    games++;
+    if (guard >= 300) { illegal++; continue; }
+    if (s.decl == SKT_NONE) { passed++; continue; }
+    uint8_t d = s.decl;
+    SkPlan pl;
+    if (gi % 11 == 3) {                                         // announcements the CPU never makes itself
+      static const uint8_t F[6] = { SKF_HAND, SKF_HAND | SKF_SCHN, SKF_HAND | SKF_SCHW, SKF_HAND | SKF_OUV, SKF_OUV, SKF_HAND | SKF_OUV };
+      pl.game = (uint8_t)(bgRand(rr) % 6); pl.flags = F[bgRand(rr) % 6];
+      if (pl.game == SG_NULL) pl.flags &= SKF_HAND | SKF_OUV;
+      if (!(pl.flags & SKF_HAND)) { s.takeSkat(); pl.push = sktCpuPick(s.hand[d], s.bid).push; s.push(pl.push); }
+      forced++;
+    } else if (!sktCpuHand(s.hand[d], s.bid, pl)) { s.takeSkat(); pl = sktCpuPick(s.hand[d], s.bid); s.push(pl.push); }
+    if (sktCount(s.hand[d]) != 10 || sktCount(s.skat) != 2 || (s.hand[d] | s.skat) != s.cards) illegal++;
+    s.declare(pl.game, pl.flags);
+    while (!s.over()) {
+      if (s.nTrick == 3) { s.collect(); continue; }
+      uint8_t p = s.turn;
+      uint32_t L = s.legal(p);
+      uint8_t c = randomPlay && p == (gi / 5) % 3 ? 255 : sktCpuCard(s, p);
+      if (c == 255) { uint8_t k = (uint8_t)(bgRand(rr) % sktCount(L)); for (uint8_t q = 0; q < 32; q++) if ((L >> q & 1) && !k--) { c = q; break; } }
+      if (c >= 32 || !(L >> c & 1) || !(s.hand[p] >> c & 1)) { illegal++; break; }
+      if (s.nTrick) {                                            // following, checked once more by hand
+        uint8_t e = sktEff(s.game, s.trick[0]);
+        bool has = false;
+        for (uint8_t q = 0; q < 32; q++) if ((s.hand[p] >> q & 1) && sktEff(s.game, q) == e) has = true;
+        if (has && sktEff(s.game, c) != e) illegal++;
+      }
+      s.play(c);
+      cards++;
+      for (int q = 0; q < 3; q++) for (int e = 0; e < 5; e++)
+        if ((s.voids[q] >> e & 1) && (s.hand[q] & sktEffMask(s.game, (uint8_t)e))) badVoid++;
+    }
+    if (s.done == 10 && sktPoints(s.won[0] | s.won[1] | s.won[2] | s.skat) != 120) bad120++;
+    if (s.done == 10 && s.tricks[0] + s.tricks[1] + s.tricks[2] != 10) bad120++;
+    SkResult res = s.result();
+    played++; byType[s.game]++;
+    if (res.won) { declWon++; wonType[s.game]++; }
+    if (res.overbid) overbid++;
+  }
+  printf("      skat: %ld deals, %ld passed in, %ld played (%ld with forced announcements), %ld cards\n", games, passed, played, forced, cards);
+  printf("      skat: declarer won %.1f%%, overbid %ld; won/played Kreuz %ld/%ld Pik %ld/%ld Herz %ld/%ld Karo %ld/%ld Grand %ld/%ld Null %ld/%ld\n",
+         100.0 * declWon / played, overbid, wonType[0], byType[0], wonType[1], byType[1], wonType[2], byType[2],
+         wonType[3], byType[3], wonType[4], byType[4], wonType[5], byType[5]);
+  check("skat: thousands of CPU games: only legal cards", illegal == 0 && cards > 100000);
+  check("skat: the card points always add up to 120, 10 tricks", bad120 == 0);
+  check("skat: a player marked void never holds that kind", badVoid == 0);
+  check("skat: every game type gets played", byType[0] && byType[1] && byType[2] && byType[3] && byType[4] && byType[5]);
+  // the CPU's own games (no forced announcements, no random player): the declarer wins most of them
+  long own = 0, ownWon = 0, ownOver = 0;
+  for (int gi = 0; gi < 2000; gi++) {
+    Skat s; s.deal(424243u * gi + 5, (uint8_t)(gi % 3));
+    while (s.stage != 3) { uint8_t a = s.bidActor(); uint16_t ask = s.bidAsk(); s.bidAct(ask && ask <= sktMaxBid(s.hand[a])); }
+    if (s.decl == SKT_NONE) continue;
+    SkPlan pl;
+    if (!sktCpuHand(s.hand[s.decl], s.bid, pl)) { s.takeSkat(); pl = sktCpuPick(s.hand[s.decl], s.bid); s.push(pl.push); }
+    s.declare(pl.game, pl.flags);
+    while (!s.over()) { if (s.nTrick == 3) s.collect(); else s.play(sktCpuCard(s, s.turn)); }
+    SkResult res = s.result();
+    own++; if (res.won) ownWon++; if (res.overbid) ownOver++;
+  }
+  printf("      skat: CPU against CPU: the declarer won %ld of %ld (%ld overbid)\n", ownWon, own, ownOver);
+  check("skat: the CPU bids sensibly (the declarer wins 55..92%)", own > 800 && ownWon * 100 >= own * 55 && ownWon * 100 <= own * 92);
+  // the defenders put points on a trick the partner surely has, the last one takes it cheaply
+  {
+    Skat s; memset(&s, 0, sizeof(s)); s.game = SG_GRAND; s.decl = 0;
+    s.trick[0] = (uint8_t)sktC(P, SR_7); s.who[0] = 0; s.trick[1] = (uint8_t)sktC(P, SR_A); s.who[1] = 1; s.nTrick = 2; s.turn = 2;
+    s.played = sktMaskOf({ sktC(P, SR_7), sktC(P, SR_A) });
+    s.hand[2] = sktMaskOf({ sktC(H, SR_10), sktC(H, SR_7), sktC(K, SR_8) });
+    check("skat: a defender schmiert the 10 on the partner's trick", sktCpuCard(s, 2) == sktC(H, SR_10));
+    s.trick[0] = (uint8_t)sktC(P, SR_D); s.trick[1] = (uint8_t)sktC(P, SR_8);
+    s.played = sktMaskOf({ sktC(P, SR_D), sktC(P, SR_8) });
+    s.hand[2] = sktMaskOf({ sktC(P, SR_K), sktC(P, SR_10), sktC(H, SR_7) });
+    check("skat: ... and takes the declarer's trick with the cheapest card", sktCpuCard(s, 2) == sktC(P, SR_K));
+  }
+}
+
+// Skat through the keys: bids, declares and plays as the CPU would (a bit bolder)
+static SkPlan sktBotPlan;
+static uint8_t sktBotPhase = 255, sktBotSeenPhase = 255;
+static uint32_t sktBotAt = 0;
+static int sktBotDeclared = 0, sktBotPushed = 0, sktBotBid = 0, sktBotCards = 0;
+static bool sktEndSet = false, sktCapBid = false, sktCapPlay = false, sktCapRes = false, sktCapList = false;
+static void skatBot(uint32_t t) {
+  if (botBusy(t)) return;
+  if (sktRows == sktGames && sktGames && seen("FINAL LIST") && sktPhase == SKP_NONE && !sktEndSet) { simEnd = t + 4000; sktEndSet = true; }
+  if (sktPhase != sktBotSeenPhase) {                               // a new screen: look at it for a moment
+    sktBotSeenPhase = sktPhase;
+    sktBotAt = t + (sktPhase == SKP_RESULT || sktPhase == SKP_LIST ? 1200 : 250);
+    if (sktPhase == SKP_BID && !sktCapBid && !skt.toSay) { captureAt.insert(frames + 3); sktCapBid = true; }
+    if (sktPhase == SKP_RESULT && !sktCapRes && skt.decl == 0) { captureAt.insert(frames + 20); sktCapRes = true; }
+    if (sktPhase == SKP_LIST && !sktCapList && sktRows >= 4) { captureAt.insert(frames + 20); sktCapList = true; }
+    return;
+  }
+  if (t < sktBotAt) return;
+  uint8_t cs[12], n = sktHandList(cs);
+  switch (sktPhase) {
+  case SKP_BID: {
+    uint16_t ask = skt.bidAsk();
+    uint8_t want = ask && ask <= sktMaxBid(skt.hand[0], -4) ? 0 : 1;
+    if (sktSel != want) botPress(t, RT, 50);
+    else { botPress(t, OK, 60); sktBotBid++; }
+    break; }
+  case SKP_TAKE: {
+    bool hand = sktCpuHand(skt.hand[0], skt.bid, sktBotPlan);
+    botPress(t, sktSel == (hand ? 1 : 0) ? OK : RT, 60);
+    sktBotPhase = SKP_TAKE;
+    break; }
+  case SKP_PUSH: {
+    if (sktBotPhase != SKP_PUSH) { sktBotPlan = sktCpuPick(skt.hand[0], skt.bid); sktBotPhase = SKP_PUSH; }
+    uint32_t diff = sktMark ^ sktBotPlan.push;
+    uint8_t target = n;
+    for (uint8_t i = 0; i < n && target == n; i++) if (diff >> cs[i] & 1) target = i;
+    if (sktCur != target) botPress(t, target > sktCur ? RT : LT, 50);
+    else { botPress(t, OK, 60); if (target == n) sktBotPushed++; }
+    break; }
+  case SKP_GAME: {
+    uint8_t row = sktBotPlan.game == SG_NULL ? (sktBotPlan.flags & SKF_OUV ? 6 : 5) : sktBotPlan.game;
+    if (sktSel != row) botPress(t, row > sktSel ? DN : UP, 50);
+    else { botPress(t, OK, 60); sktBotDeclared++; sktBotPhase = 255; }
+    break; }
+  case SKP_PLAY: {
+    if (!sktCapPlay && skt.done >= 2 && skt.nTrick && skt.legal(0) != skt.hand[0]) { captureAt.insert(frames + 2); sktCapPlay = true; }
+    uint8_t c = sktCpuCard(skt, 0), idx = 0;
+    while (idx < n && cs[idx] != c) idx++;
+    if (sktCur != idx) botPress(t, idx > sktCur ? RT : LT, 50);
+    else { botPress(t, OK, 60); sktBotCards++; }
+    break; }
+  case SKP_RESULT: case SKP_LIST:
+    botPress(t, OK, 80); sktBotAt = t + 1500;
+    break;
+  }
+}
+
 int main(int argc, char **argv) {
   scenario = argc > 1 ? argv[1] : "menu";
   srand(1);
@@ -2122,6 +2377,14 @@ int main(int argc, char **argv) {
     simBot = maumauBot; botFrom = t + 1600;
     captureMs = { t + 9000 };
     setenv("GRAB", "WISH A SUIT", 1);
+  } else if (scenario == "skat") {
+    uint32_t t = openGameNamed("Skat", M); simEnd = t + 1000000;
+    press(t + 400, OK, 80);                                      // "Liste: 12 games"
+    simBot = skatBot; botFrom = t + 1000;
+  } else if (scenario == "skatlogic") {
+    printf("== %s\n", scenario.c_str());
+    skatLogic();
+    return failures ? 1 : 0;
   } else if (scenario == "minigolf") {
     uint32_t t = openGameNamed("Minigolf", M); simEnd = t + 300000;
     simBot = golfBot; botFrom = t + 800;
@@ -2308,6 +2571,13 @@ int main(int argc, char **argv) {
     check("mau-mau ran with three CPUs", seen("MAU-MAU") && seen("CPU3 5") && seen("DRAW"));
     check("cards were played and drawn", seen("YOU: draw") && seen("CPU1: draw"));
     check("a game ended with game overShown", (seen("MAU-MAU!") || seen("YOU LOST")) && overShown);
+  }
+  if (scenario == "skat") {
+    printf("      skat: %u games, totals %d %d %d; the bot bid %d times, declared %d (pushed %d), played %d cards\n",
+           sktRows, sktTotal[0], sktTotal[1], sktTotal[2], sktBotBid, sktBotDeclared, sktBotPushed, sktBotCards);
+    check("skat ran: bidding, the Skat, trick play", seen("SKAT") && seen("REIZEN") && seen("Skat") && sktBotCards > 50);
+    check("skat: you bid and declared through the keys", sktBotBid > 3 && sktBotDeclared > 0 && sktBotPushed > 0);
+    check("skat: a Liste of 12 games to the end, game over shown", sktRows == 12 && seen("FINAL LIST") && overShown);
   }
   if (scenario == "minigolf") {
     printf("      score %u, card %u %u %u %u %u %u %u %u %u\n", mgScore, mgCard[0], mgCard[1], mgCard[2], mgCard[3],

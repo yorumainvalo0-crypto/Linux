@@ -58,6 +58,7 @@
 #include "game_battleship.h"
 #include "game_checkers.h"
 #include "game_maumau.h"
+#include "game_skat.h"
 #include "game_minigolf.h"
 #include "game_palace.h"
 #include "game_chess.h"
@@ -131,6 +132,7 @@ static const Game GAMES[] = {
   { "Match 3",     "M3X", match3Run,      IC_MATCH3,      C::PINK,          NULL },
   { "Checkers",    "CHK", checkersRun,    IC_CHECKERS,    C::BROWN,         NULL },
   { "Mau-Mau",     "MAU", maumauRun,      IC_MAUMAU,      C::RED,           NULL },
+  { "Skat",        "SKT", skatRun,        IC_SKAT,        C::DKGRN,         NULL },
   { "Bomberman",   "BMB", bomberRun,      IC_BOMBER,      C::ORANGE,        NULL },
   { "Cave",        "CAV", caveRun,        IC_CAVE,        C::BROWN,         NULL },
   { "Stack",       "STK", stackRun,       IC_STACK,       C::CYAN,          NULL },
