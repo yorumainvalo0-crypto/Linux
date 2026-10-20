@@ -32,6 +32,8 @@ static uint32_t simEnd = 0;
 static bool autoplay = false;
 static uint32_t autoplayFrom = 0;
 static int grabNext = 0;
+static void (*pzBot)(uint32_t t) = NULL;         // puzzle games: a bot that plays through the keys
+static std::vector<uint32_t> captureMs;          // frames to keep, by time (ms)
 static bool simSlept = false;
 static int8_t  LADDER = -1;                      // pin with three keys through resistors
 static uint8_t ladder = 0;                       // which of them is pressed (0 = none)
@@ -92,6 +94,7 @@ void simDelayMs(uint32_t ms) {
       static const uint8_t o[] = { 0, 0, 1, 2, 4, 8, 4, 8 };
       applyMask(o[rand() % 8]);
     }
+    if (pzBot) pzBot(t);
     if (simEnd && t >= simEnd) throw SimEnd{};
   }
 }
@@ -140,6 +143,8 @@ void Gfx::send() {
   memcpy(lastFrame, fb, sizeof(fb));
   if (grabNext) { grabNext = 0; captureAt.insert(frames + 3); }
   if (captureAt.count(frames)) writeFrame(fb);
+  for (size_t i = 0; i < captureMs.size(); i++)
+    if (clockUs / 1000 >= captureMs[i]) { writeFrame(fb); captureMs.erase(captureMs.begin() + i); break; }
 }
 
 // ---------------- scenarios ----------------
@@ -164,6 +169,229 @@ static uint32_t openGameNamed(const char *name, uint32_t t) {
   printf("no game %s\n", name);
   exit(2);
 }
+
+// ---------------- puzzle games: bots and logic checks ----------------
+#include "sksolve.h"                                            // the OLED tests' Sokoban solver
+static uint32_t pzNext = 0, pzUp = 0, pzStart = 0;
+static void pzPress(uint32_t t, uint8_t mask, uint32_t gap) { applyMask(mask); pzUp = t + 40; pzNext = t + gap; }
+static bool pzBusy(uint32_t t) {                                // a press still running or not time yet
+  if (pzUp && t >= pzUp) { applyMask(0); pzUp = 0; }
+  return pzUp || t < pzNext || t < pzStart;
+}
+static const uint8_t PZ_OK = 3;                                 // UP + DOWN together
+
+// Sudoku: writes the first empty field, the first two times a wrong number
+static int suBotWrong = 2;
+static void sudokuBot(uint32_t t) {
+  if (pzBusy(t) || !suM) return;
+  if (!suPicking) {
+    int target = -1;
+    for (int i = 0; i < 81 && target < 0; i++) if (!suM->grid[i]) target = i;
+    if (target < 0) return;
+    if (target == suCur) pzPress(t, PZ_OK, 110);
+    else if (target / 9 != suCur / 9) pzPress(t, 2, 110);
+    else pzPress(t, 8, 110);
+  } else {
+    uint8_t want = suBotWrong > 0 ? suM->sol[suCur] % 9 + 1 : suM->sol[suCur];
+    if (suPick != want) pzPress(t, 1, 110);
+    else { pzPress(t, PZ_OK, 110); if (suBotWrong > 0) suBotWrong--; }
+  }
+}
+
+// Lights Out: light chasing - try all 32 first rows, the rest follows; the shortest solution
+static int loSolve(uint32_t b, uint8_t *out) {
+  int bestN = 99;
+  for (int m = 0; m < 32; m++) {
+    uint32_t x = b;
+    uint8_t pr[25]; int n = 0;
+    for (int c = 0; c < 5; c++) if (m & (1 << c)) { x = loPress(x, 0, (uint8_t)c); pr[n++] = (uint8_t)c; }
+    for (int r = 1; r < 5; r++) for (int c = 0; c < 5; c++)
+      if (x & (1UL << ((r - 1) * 5 + c))) { x = loPress(x, (uint8_t)r, (uint8_t)c); pr[n++] = (uint8_t)(r * 5 + c); }
+    if (!x && n < bestN) { bestN = n; memcpy(out, pr, n); }
+  }
+  return bestN == 99 ? -1 : bestN;
+}
+static uint32_t loBotStop = 0;
+static void lightsBot(uint32_t t) {
+  if (pzBusy(t)) return;
+  if (t > loBotStop) { static const uint8_t K[5] = { 1, 2, 4, 8, PZ_OK }; pzPress(t, K[rand() % 5], 140); return; }
+  uint8_t pr[25];
+  int n = loSolve(loBoard, pr);
+  if (n <= 0) return;
+  int r = pr[0] / 5, c = pr[0] % 5;
+  if (r != loR) pzPress(t, r > loR ? 2 : 1, 100);
+  else if (c != loC) pzPress(t, c > loC ? 8 : 4, 100);
+  else pzPress(t, PZ_OK, 120);
+}
+
+// Match 3: the first swap that makes a row
+static void match3Bot(uint32_t t) {
+  if (pzBusy(t)) return;
+  bool mark[M3_H][M3_W]; uint8_t best;
+  for (int r = 0; r < M3_H; r++) for (int c = 0; c < M3_W; c++)
+    for (int d = 0; d < 2; d++) {
+      int r2 = r + d, c2 = c + 1 - d;
+      if (r2 >= M3_H || c2 >= M3_W) continue;
+      m3Swap((uint8_t)r, (uint8_t)c, (uint8_t)r2, (uint8_t)c2);
+      bool ok = m3Find(mark, &best) > 0;
+      m3Swap((uint8_t)r, (uint8_t)c, (uint8_t)r2, (uint8_t)c2);
+      if (!ok) continue;
+      if (m3Held && r == m3R && c == m3C) { pzPress(t, d ? 2 : 8, 200); return; }   // swap it
+      if (m3Held) { pzPress(t, PZ_OK, 120); return; }                                // wrong one: drop it
+      if (r != m3R) pzPress(t, r > m3R ? 2 : 1, 90);
+      else if (c != m3C) pzPress(t, c > m3C ? 8 : 4, 90);
+      else pzPress(t, PZ_OK, 120);
+      return;
+    }
+}
+
+// Minesweeper: knows where the mines are; flags one with a double tap, then opens every free cell
+static int  msBotStep = 0;
+static bool msBotFlagged = false;
+static void minesBot(uint32_t t) {
+  if (pzBusy(t) || !ms) return;
+  bool placed = false;
+  for (int y = 0; y < MS_H; y++) for (int x = 0; x < MS_W; x++) if (ms[y][x] & MS_OPEN) placed = true;
+  int cx = msCx, cy = msCy;
+  int tx = -1, ty = -1, bestD = 99;
+  if (placed && !msBotFlagged) {                                // the flag: to the nearest mine, tap twice
+    for (int y = 0; y < MS_H; y++) for (int x = 0; x < MS_W; x++)
+      if ((ms[y][x] & MS_MINE) && !(ms[y][x] & MS_OPEN)) {
+        int d = abs(x - cx) + abs(y - cy);
+        if (d < bestD) { bestD = d; tx = x; ty = y; }
+      }
+    if (ty != cy) { pzPress(t, ty > cy ? 2 : 1, 160); return; }
+    if (tx != cx) { pzPress(t, tx > cx ? 8 : 4, 160); return; }
+    pzPress(t, PZ_OK, msBotStep == 0 ? 120 : 600);
+    if (++msBotStep == 2) msBotFlagged = true;
+    return;
+  }
+  for (int y = 0; y < MS_H; y++) for (int x = 0; x < MS_W; x++) {
+    uint8_t v = ms[y][x];
+    if (placed && (v & (MS_MINE | MS_OPEN | MS_FLAG))) continue;
+    if (!placed && (x != MS_W / 2 || y != MS_H / 2)) continue;
+    int d = abs(x - cx) + abs(y - cy);
+    if (d < bestD) { bestD = d; tx = x; ty = y; }
+  }
+  if (tx < 0) return;
+  if (ty != cy) pzPress(t, ty > cy ? 2 : 1, 160);
+  else if (tx != cx) pzPress(t, tx > cx ? 8 : 4, 160);
+  else pzPress(t, PZ_OK, 600);                                  // one tap, then wait out the double tap time
+}
+
+static bool pzLogic() {
+  if (scenario == "g2logic") {
+    struct Case { uint8_t in[4]; uint8_t out[4]; uint32_t gain; };
+    static const Case CS[] = {                                  // one row, moved left (exponents)
+      {{1,1,1,1},{2,2,0,0},8}, {{1,1,2,0},{2,2,0,0},4}, {{0,0,0,1},{1,0,0,0},0},
+      {{2,1,1,0},{2,2,0,0},4}, {{1,2,1,2},{1,2,1,2},0}, {{3,0,3,3},{4,3,0,0},16} };
+    for (auto &c : CS) {
+      uint8_t b[16]; memset(b, 0, 16); memcpy(b, c.in, 4);
+      uint32_t g = 0; g2Move(b, B_LEFT, &g);
+      bool ok = !memcmp(b, c.out, 4) && g == c.gain;
+      if (!ok) printf("      %u%u%u%u -> %u%u%u%u gain %u\n", c.in[0], c.in[1], c.in[2], c.in[3], b[0], b[1], b[2], b[3], (unsigned)g);
+      check("row slides and merges once per pair", ok);
+    }
+    uint8_t b[16]; memset(b, 0, 16); b[0] = 1; b[4] = 1; b[12] = 2; uint32_t g = 0;
+    int8_t dest[16]; memset(dest, -1, 16); uint16_t merged = 0;
+    g2Move(b, B_DOWN, &g, dest, &merged);
+    check("column moves down", b[12] == 2 && b[8] == 2 && !b[0] && !b[4] && g == 4);
+    check("the slide animation knows where each tile went", dest[0] == 8 && dest[4] == 8 && dest[12] == 12 && merged == (1u << 8));
+    uint8_t full[16]; for (int i = 0; i < 16; i++) full[i] = (uint8_t)(1 + (i % 2 + (i / 4) % 2) % 2);
+    check("no move left on a checkerboard", !g2CanMove(full));
+    full[5] = full[6]; check("a pair is a move", g2CanMove(full));
+    return true;
+  }
+  if (scenario == "mslogic") {
+    check("field on the heap", msAlloc());
+    int bad = 0, zeroOpen = 0;
+    for (int round = 0; round < 300; round++) {
+      randomSeed(50 + round);
+      uint8_t sx = (uint8_t)random(MS_W), sy = (uint8_t)random(MS_H), mines = (uint8_t)(20 + (round % 3) * 8);
+      msPlace(mines, sx, sy);
+      int n = 0;
+      for (int y = 0; y < MS_H; y++) for (int x = 0; x < MS_W; x++) {
+        if (ms[y][x] & MS_MINE) { n++; if (abs(x - sx) <= 1 && abs(y - sy) <= 1) bad++; }
+        int c = 0;
+        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) { int X = x + dx, Y = y + dy;
+          if ((dx || dy) && X >= 0 && X < MS_W && Y >= 0 && Y < MS_H && (ms[Y][X] & MS_MINE)) c++; }
+        if (c != (ms[y][x] & 0x0F)) bad++;
+      }
+      if (n != mines) bad++;
+      if (!msOpen(sx, sy)) bad++;
+      for (int y = 0; y < MS_H; y++) for (int x = 0; x < MS_W; x++) {      // flood fill complete, no mine open
+        uint8_t c = ms[y][x];
+        if ((c & MS_OPEN) && (c & MS_MINE)) bad++;
+        if ((c & MS_OPEN) && !(c & 0x0F) && !(c & MS_MINE)) { zeroOpen++;
+          for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) { int X = x + dx, Y = y + dy;
+            if (X >= 0 && X < MS_W && Y >= 0 && Y < MS_H && !(ms[Y][X] & MS_OPEN)) bad++; } }
+      }
+    }
+    printf("      %d empty cells opened by flood fill\n", zeroOpen);
+    check("mines placed right, first cell safe, flood fill complete", bad == 0);
+    msFree();
+    return true;
+  }
+  if (scenario == "sklevels") {
+    check("map on the heap", skAlloc());
+    int bad = 0;
+    for (uint8_t l = 0; l < SK_N; l++) {
+      SkLevel L = skParse(SK_LEVELS[l]);
+      int goals = 0; for (uint8_t g : L.goal) goals += g;
+      if (L.w > SK_W || L.h > SK_H || goals != (int)L.boxes.size() || L.boxes.empty()) { bad++; printf("      level %u malformed\n", l + 1); continue; }
+      int p = skSolve(L);
+      if (!skLoad(l) || skW != L.w || skH != L.h || skX != L.px || skY != L.py) { bad++; printf("      level %u loads differently\n", l + 1); }
+      printf("      level %2u: %dx%d, %d boxes, %d pushes, tile %d px\n", l + 1, L.w, L.h, (int)L.boxes.size(), p, skTile());
+      if (p <= 0) { bad++; continue; }
+      if (skW * skTile() > SCR_W || skH * skTile() > SK_Y1 - SK_Y0) { bad++; printf("      level %u does not fit\n", l + 1); }
+      uint8_t before[SK_H * SK_W]; memcpy(before, sk, sizeof(before)); uint8_t bx = skX, by = skY;
+      randomSeed(l); int n = 0;
+      for (int k = 0; k < 300; k++) if (skStep((uint8_t)random(4))) n++;
+      while (skBack()) {}
+      if (n > SK_UNDO) skLoad(l);                                // more than the undo holds: fine
+      else if (memcmp(before, sk, sizeof(before)) || skX != bx || skY != by) { bad++; printf("      level %u: undo does not restore\n", l + 1); }
+    }
+    check("all levels well formed, fit the screen and solvable, undo exact", bad == 0);
+    skFree();
+    return true;
+  }
+  if (scenario == "pzlogic") {
+    // Sudoku: valid, consistent, unique, about as many givens as asked
+    suM = (SuMem *)malloc(sizeof(SuMem));
+    bool ok = true; int given[3] = { 0, 0, 0 };
+    static const uint8_t KEEP[3] = { 40, 32, 26 };
+    for (int m = 0; m < 3; m++)
+      for (int k = 0; k < 15; k++) {
+        int n = suMake(KEEP[m]);
+        given[m] += n;
+        for (int i = 0; i < 81; i++) {                           // the solution follows the rules
+          uint8_t v = suM->sol[i]; suM->sol[i] = 0;
+          if (!v || (suMask(suM->sol, (uint8_t)i) & (1 << v))) ok = false;
+          suM->sol[i] = v;
+        }
+        memcpy(suM->tmp, suM->grid, 81);
+        if (suSolve(suM->tmp, 2, false) != 1 || memcmp(suM->tmp, suM->grid, 81)) ok = false;   // one solution, grid as it was
+        memcpy(suM->tmp, suM->grid, 81);
+        if (suSolve(suM->tmp, 1, false) != 1 || memcmp(suM->tmp, suM->sol, 81)) ok = false;    // and it is the right one
+        for (int i = 0; i < 81; i++) if (suM->grid[i] && suM->grid[i] != suM->sol[i]) ok = false;
+      }
+    printf("      sudoku givens: easy %d, medium %d, hard %d (average)\n", given[0] / 15, given[1] / 15, given[2] / 15);
+    check("sudoku: 45 puzzles valid with exactly one solution", ok);
+    check("sudoku: harder levels give fewer numbers", given[0] > given[1] && given[1] > given[2] && given[2] / 15 <= 32);
+    free(suM); suM = NULL;
+    // Lights Out: every level solvable
+    ok = true;
+    for (int par = 3; par <= 15; par++) for (int k = 0; k < 20; k++) { uint8_t pr[25]; uint32_t b = loMake((uint8_t)par); if (!b || loSolve(b, pr) < 0) ok = false; }
+    check("lights out: 260 levels, all solvable, none empty", ok);
+    // Match 3: fresh boards have no rows and a move
+    ok = true;
+    for (int k = 0; k < 200; k++) { m3Fill(); bool mark[M3_H][M3_W]; uint8_t best; if (m3Find(mark, &best) || !m3CanMove()) ok = false; }
+    check("match 3: 200 new boards without rows, with a move", ok);
+    return true;
+  }
+  return false;
+}
+
 static uint8_t colsInFrame() {                                  // how many colours one frame shows
   std::set<uint8_t> c(lastFrame, lastFrame + sizeof(lastFrame));
   return (uint8_t)c.size();
@@ -305,6 +533,42 @@ int main(int argc, char **argv) {
     press(M + 19500, OK, 80);                                    // ... continue
     simEnd = M + 21000;
     setenv("GRAB", "TILT SETUP", 1);
+  } else if (scenario == "g2048") {
+    uint32_t t = openGameNamed("2048", M); simEnd = t + 150000;
+    autoplay = true; autoplayFrom = t + 300; captureMs = { t + 6000, t + 6070 };
+    setenv("GRAB", "NO MOVES", 1);
+  } else if (scenario == "mines") {
+    uint32_t t = openGameNamed("Minesweeper", M); simEnd = t + 120000;
+    press(t + 300, OK, 80);                                      // easy
+    pzStart = t + 1000; pzBot = minesBot; captureMs = { t + 9000 };
+    setenv("GRAB", "CLEARED!", 1);
+  } else if (scenario == "sokoban") {
+    uint32_t t = openGameNamed("Sokoban", M); simEnd = t + 9000;
+    captureMs = { t + 500 };
+    press(t + 700, OK, 80);                                      // level 1
+    t += 1300;
+    press(t, LT); press(t + 250, OK, 80);                        // a step, taken back
+    static const uint8_t SOL[] = { UP, LT, LT, LT, DN, RT, UP, RT, DN, UP, LT, LT, LT, UP, LT, LT, DN, RT, RT };
+    t += 600;
+    for (uint8_t k = 0; k < sizeof(SOL); k++, t += 200) press(t, SOL[k], 50);
+    captureMs.push_back(t - 1430);
+    setenv("GRAB", "SOLVED!", 1);
+  } else if (scenario == "sudoku") {
+    uint32_t t = openGameNamed("Sudoku", M); simEnd = t + 120000;
+    press(t + 300, OK, 80);                                      // easy
+    pzStart = t + 1200; pzBot = sudokuBot; captureMs = { t + 6000 };
+    setenv("GRAB", "SOLVED", 1);
+  } else if (scenario == "lightsout") {
+    uint32_t t = openGameNamed("Lights Out", M); simEnd = t + 80000;
+    pzStart = t + 600; loBotStop = t + 40000; pzBot = lightsBot; captureMs = { t + 5000 };
+  } else if (scenario == "match3") {
+    uint32_t t = openGameNamed("Match 3", M); simEnd = t + 150000;
+    pzStart = t + 900; pzBot = match3Bot; captureMs = { t + 6000 };
+    setenv("GRAB", "END", 1);
+  } else if (pzLogic()) {
+    printf("== %s\n", scenario.c_str());
+    printf("%s\n", failures ? "### FAILURES ###" : "   all checks passed");
+    return failures ? 1 : 0;
   } else { printf("unknown scenario %s\n", scenario.c_str()); return 2; }
   printf("== %s\n", scenario.c_str());
   try {
@@ -334,6 +598,41 @@ int main(int argc, char **argv) {
   if (scenario == "pacman")    check("pac-man ran to game over", seen("PAC-MAN") && seen("READY!") && overShown);
   if (scenario == "bomber")    check("bomberman ran to its end", seen("BOMBERMAN") && seen("BOMBER") && overShown &&
                                      (seen("CAUGHT") || seen("YOU WIN") || seen("TIME UP")));
+  auto over = []() { return seen("GAME OVER") || seen("NEW RECORD!"); };
+  if (scenario == "g2048") {
+    printf("   best stored %u\n", simNvsU16["h2K4"]);
+    check("2048 ran", seen("BEST TILE") && seen("MOVES"));
+    check("no moves left ends it, score kept", seen("NO MOVES") && over() && simNvsU16["h2K4"] > 0);
+  }
+  if (scenario == "mines") {
+    printf("   best stored %u\n", simNvsU16["hMSW"]);
+    check("minesweeper ran", seen("MINESWEEPER") && seen("easy - 20 mines"));
+    check("double tap set a flag", msBotFlagged && seen("019"));
+    check("field cleared, points for the time", seen("CLEARED!") && over() && simNvsU16["hMSW"] > 0);
+  }
+  if (scenario == "sokoban") {
+    printf("   levels solved %u, last level %u\n", simNvsU16["hSOK"], simNvsU16["SOKlv"]);
+    check("level list shown", seen("LEVEL 1 / 12"));
+    check("level 1 solved (with an undo), progress saved", seen("SOLVED!") && simNvsU16["hSOK"] == 1);
+    check("on to level 2", seen("LEVEL 2") && simNvsU16["SOKlv"] == 1);
+  }
+  if (scenario == "sudoku") {
+    printf("   best stored %u\n", simNvsU16["hSUD"]);
+    check("sudoku drawn with the number pad", seen("SUDOKU") && seen("OK = write") && seen("OK = place it"));
+    check("mistakes counted, puzzle solved", suBotWrong == 0 && seen("SOLVED") && simNvsU16["hSUD"] > 0);
+  }
+  if (scenario == "lightsout") {
+    printf("   best stored %u\n", simNvsU16["hLGT"]);
+    check("lights out ran", seen("LIGHTS OUT") && seen("MOVES"));
+    check("levels solved", seen("DONE!") && seen("4"));
+    check("the move limit ends it", seen("LIMIT") && over() && simNvsU16["hLGT"] > 0);
+  }
+  if (scenario == "match3") {
+    printf("   best stored %u\n", simNvsU16["hM3X"]);
+    check("board and moves shown", seen("MATCH 3") && seen("MOVES"));
+    check("chains happen", seen("x2"));
+    check("game ends when the moves are used up", seen("END") && over() && simNvsU16["hM3X"] > 0);
+  }
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);

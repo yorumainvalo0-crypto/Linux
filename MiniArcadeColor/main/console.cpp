@@ -41,6 +41,12 @@
 #include "game_tunnel.h"
 #include "game_pacman.h"
 #include "game_bomber.h"
+#include "game_2048.h"
+#include "game_mines.h"
+#include "game_sokoban.h"
+#include "game_sudoku.h"
+#include "game_lightsout.h"
+#include "game_match3.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -96,6 +102,12 @@ static const Game GAMES[] = {
   { "Tunnel 3D", "TUN", tunnelRun,   IC_TUNNEL,   C::CYAN,   NULL },
   { "Pac-Man",   "PAC", pacmanRun,   IC_PACMAN,   C::YELLOW, NULL },
   { "Bomberman", "BMB", bomberRun,   IC_BOMBER,   C::ORANGE, NULL },
+  { "2048",        "2K4", g2048Run,     IC_2048,    C::ORANGE, NULL },
+  { "Minesweeper", "MSW", minesRun,     IC_MINES,   C::BLUE,   NULL },
+  { "Sokoban",     "SOK", sokobanRun,   IC_SOKOBAN, C::BROWN,  NULL },
+  { "Sudoku",      "SUD", sudokuRun,    IC_SUDOKU,  C::CYAN,   NULL },
+  { "Lights Out",  "LGT", lightsOutRun, IC_LIGHTS,  C::YELLOW, NULL },
+  { "Match 3",     "M3X", match3Run,    IC_MATCH3,  C::PINK,   NULL },
   // more games come here (before the entries with a tag)
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };
