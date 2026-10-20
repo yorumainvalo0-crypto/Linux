@@ -1,0 +1,8 @@
+build/
+build-c3/
+build-s3/
+sdkconfig
+sdkconfig.old
+test/colorsim
+test/frames/
+test/screens.png

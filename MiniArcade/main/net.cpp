@@ -24,7 +24,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define GITHUB_BASE "https://github.com/" CONFIG_ARCADE_GITHUB_REPO "/releases/latest/download/"
+// where the updates come from: the OLED console takes the latest release,
+// the colour console (MiniArcadeColor) a channel of its own
+#ifndef CONFIG_ARCADE_UPDATE_PATH
+#define CONFIG_ARCADE_UPDATE_PATH "releases/latest/download/"
+#endif
+#ifndef CONFIG_ARCADE_UPDATE_BIN
+#define CONFIG_ARCADE_UPDATE_BIN "miniarcade.bin"
+#endif
+#define GITHUB_BASE "https://github.com/" CONFIG_ARCADE_GITHUB_REPO "/" CONFIG_ARCADE_UPDATE_PATH
 #define AP_IP       "192.168.4.1"         // default address of the ESP hotspot
 
 static volatile NetState state = NET_OFF;
@@ -254,7 +262,7 @@ static const char *checkImage(const uint8_t *b, size_t n) {
   if (h->chip_id != CONFIG_IDF_FIRMWARE_CHIP_ID) return "firmware for another chip";
   esp_app_desc_t d;
   memcpy(&d, b + at, sizeof(d));
-  if (d.magic_word != ESP_APP_DESC_MAGIC_WORD) return "full image - use miniarcade.bin";
+  if (d.magic_word != ESP_APP_DESC_MAGIC_WORD) return "full image - use " CONFIG_ARCADE_UPDATE_BIN;
   if (strncmp(d.project_name, esp_app_get_description()->project_name, sizeof(d.project_name)))
     return "not a MiniArcade firmware";
   return NULL;
@@ -348,7 +356,7 @@ static bool fetchVersion() {
 
 static void installFromGithub() {
   esp_http_client_config_t cfg;
-  clientCfg(&cfg, GITHUB_BASE "miniarcade.bin");
+  clientCfg(&cfg, GITHUB_BASE CONFIG_ARCADE_UPDATE_BIN);
   cfg.timeout_ms = 30000;
   esp_https_ota_config_t oc = {};
   oc.http_config = &cfg;
@@ -708,7 +716,7 @@ static const char PAGE_UPDATE[] =
   "<h2>Update from GitHub</h2>"
   "<button id=c onclick=gh('check')>check for update</button>"
   "<button id=i onclick=gh('install') hidden>install</button><p id=g class=m></p>"
-  "<h2>Update from a file</h2><p class=m>miniarcade.bin from a release or from build/</p>"
+  "<h2>Update from a file</h2><p class=m>" CONFIG_ARCADE_UPDATE_BIN " from a release or from build/</p>"
   "<input type=file id=f accept=.bin><button onclick=up()>flash</button>"
   "<progress id=p max=100 value=0></progress><p id=u class=m></p>";
 

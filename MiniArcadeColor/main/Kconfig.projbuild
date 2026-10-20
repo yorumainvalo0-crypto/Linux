@@ -1,0 +1,67 @@
+menu "MiniArcade Color"
+    config ARCADE_GITHUB_REPO
+        string "GitHub repository that publishes the firmware releases"
+        default "yorumainvalo0-crypto/Linux"
+        help
+            owner/name of the repository. The GitHub build sets this to the
+            repository it runs in.
+    config ARCADE_UPDATE_PATH
+        string "Release path of the updates (own channel, not the OLED console's)"
+        default "releases/download/color-latest/"
+    config ARCADE_UPDATE_BIN
+        string "Firmware file in that release"
+        default "miniarcade-color-s3.bin" if IDF_TARGET_ESP32S3
+        default "miniarcade-color-c3.bin"
+    config ARCADE_WIFI_TX_POWER
+        int "WLAN transmit power limit (0.25 dBm steps, 0 = no limit)"
+        default 34 if IDF_TARGET_ESP32C3
+        default 0
+        range 0 84
+
+    menu "Display (ILI9341 / ST7789, SPI)"
+        config ARCADE_TFT_SCK
+            int "SCK pin"
+            default 12 if IDF_TARGET_ESP32S3
+            default 6
+        config ARCADE_TFT_MOSI
+            int "SDI (MOSI) pin"
+            default 11 if IDF_TARGET_ESP32S3
+            default 7
+        config ARCADE_TFT_MISO
+            int "SDO (MISO) pin, -1 = not wired"
+            default 13 if IDF_TARGET_ESP32S3
+            default 20
+            help
+                Not needed for the picture. Kept for the SD card and touch,
+                which share the bus.
+        config ARCADE_TFT_CS
+            int "CS pin"
+            default 10
+        config ARCADE_TFT_DC
+            int "DC pin"
+            default 9 if IDF_TARGET_ESP32S3
+            default 5
+        config ARCADE_TFT_RST
+            int "RESET pin (-1 = wired to 3V3)"
+            default -1
+        config ARCADE_TFT_BL
+            int "LED (backlight) pin (-1 = wired to 3V3)"
+            default -1
+        config ARCADE_TFT_MHZ
+            int "SPI clock in MHz"
+            default 40
+        config ARCADE_TFT_ST7789
+            bool "ST7789 controller instead of ILI9341"
+            default n
+    endmenu
+
+    menu "Gyroscope (MPU6050, I2C - not used yet)"
+        config ARCADE_I2C_SDA
+            int "SDA pin"
+            default 8
+        config ARCADE_I2C_SCL
+            int "SCL pin"
+            default 18 if IDF_TARGET_ESP32S3
+            default 9
+    endmenu
+endmenu
