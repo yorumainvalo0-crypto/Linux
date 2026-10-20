@@ -1,6 +1,6 @@
 // MiniArcade Color: Palace. Part of console.cpp, which includes it.
 // A cinematic platformer: a nameless runner escapes from a palace
-// dungeon, four levels in ten minutes. A level is a grid of rooms of
+// dungeon, eight levels in twenty minutes. A level is a grid of rooms of
 // 10 x 3 tiles; the screen flips when the runner leaves a room.
 //   LEFT/RIGHT run         DOWN+LEFT/RIGHT careful step (safe on spikes,
 //   UP+LEFT/RIGHT jump     stops at an edge); a running jump clears three
@@ -9,9 +9,12 @@
 //   OK draws the sword (it also comes out by itself when a guard is near):
 //   then LEFT/RIGHT step, OK strikes, UP parries, DOWN puts it away.
 // One floor down is safe, two cost a flask of health, three kill. Loose
-// tiles crumble, spikes spring out, plates open gates (and others shut
-// them), one plate opens the exit door. Dying restarts the level, the
-// clock runs on. Score: 100 per level, plus the seconds left at the end.
+// tiles crumble, spikes spring out, scythes sweep out of the floor in a
+// beat, plates open gates (and others shut them; some gates fall shut
+// again soon), one plate opens the exit door. The Warden waits at the
+// end. Dying restarts the level, the clock runs on. Score: 100 per
+// level, plus the seconds left at the end. The level reached is kept:
+// the start offers to go on from there (with the time left for it).
 // Everything moves in steps of PAL_TICK ms, so the speed does not depend
 // on the frame rate. Level data is const (flash); the state is small.
 
@@ -39,16 +42,25 @@
 #define PAL_HURT   160                 // ... up to this one costs a flask, more kills
 #define PAL_GRAB   20                  // how far from a ledge the hands still catch it
 #define PAL_HANGY  57                  // hanging: feet this far below the ledge's line
-#define PAL_TIME   600000UL            // ten minutes for all levels
-#define PAL_LEVELS 4
+#define PAL_LEVELS 8
+#define PAL_TIME   1200000UL           // twenty minutes for all levels, 150 s each
+#define PAL_CAPT   PAL_LEVELS          // the captain's skill row ...
+#define PAL_BOSS   (PAL_LEVELS + 1)    // ... and the Warden's
+#define PAL_SCYP   64                  // a scythe's beat in steps ...
+#define PAL_SCYK   14                  // ... the first ones of it out of the floor
+#define PAL_SCYW   13                  // it hits this close to the tile's middle (px)
+#define PAL_POOLY  46                  // the pool's face in the lowest row's tiles (px from the top)
 
 /* Tiles: ' ' nothing (fall through)  _ floor  # wall  t floor with a
-   torch  | floor with a pillar  ^ spikes  ~ loose floor  - rubble
-   a..d gate (closed at the start)  1..4 plate that opens gate a..d
-   5..8 plate that shuts gate a..d  X plate that opens the exit
-   E exit door  h small potion  H big potion (one more flask)  S sword
-   @ start  G guard  C the captain. Rows of w*10 characters, h*3 rows. */
-struct PalLevel { uint8_t w, h, theme; const char *name; const char *const *rows; };
+   torch  | floor with a pillar  F floor before a furnace  R before the
+   throne  ^ spikes
+   ~ loose floor  - rubble  K a scythe in the floor  a..d gate (closed at
+   the start)  1..4 plate that opens gate a..d  5..8 plate that shuts gate
+   a..d  X plate that opens the exit  E exit door  h small potion  H big
+   potion (one more flask)  S sword  @ start  G guard  C the captain
+   W the Warden. Rows of w*10 characters, h*3 rows. The gates in `timed`
+   (bit 0 = a) fall shut again gt/10 s after the runner left their plate. */
+struct PalLevel { uint8_t w, h, theme, timed, gt; const char *name; const char *const *rows; };
 
 static const char *const PAL_L1[3] = {
   "#@_t__ __|__  _St_ #### _a_Et#",
@@ -78,17 +90,56 @@ static const char *const PAL_L4[9] = {
   "##########" "##########" "##########" "####__ __#",
   "#@_t_~~_|_" "__  __G___" "_^_t_ _^__" "__h__t___#",
   "#####__###" "##^^######" "#####^####" "##########" };
+// the baths: water lies at the bottom of the deepest pits
+static const char *const PAL_L5[3] = {
+  "##########" "##########" "##########" "##########" "##########",
+  "#@_t__~~__" "t_|__G__ #" "##########" "#### _t_H#" "####___ E#",
+  "######  ##" "########__" "1__   _a__" "_^^__ __ _" "_G___ __X#" };
+static const char *const PAL_L6[9] = {
+  "##########" "##########" "##########" "##########",
+  "#@_t_  __|" "_t__G___~#" "##########" "## __t_E_#",
+  "#####__###" "########__" "__|____ _H" "# _#######",
+  "##########" "##########" "####### ##" "#_ #######",
+  "##########" "##########" "# _hG____#" "# _#######",
+  "##########" " _h_~~~___" "__########" "#_ #######",
+  "##########" " ###___###" "##########" "# _#######",
+  "#_X1_G_t__" "__^^_  _5_" "a__G___t__" "__########",
+  "##########" "#####^^###" "##########" "##########" };
+// the forges: molten iron at the bottom of the deepest pits
+static const char *const PAL_L7[6] = {
+  "##########" "##########" "##########" "##########" "##########",
+  "#@_F__K__F" "_t_G___K__" "_1__  _a_t" "__C___t___" "_~~~__ ###",
+  "##########" "##########" "####__####" "##########" "#   ## ###",
+  "##E_ #####" "##########" "##########" "##########" "#   #~_Xh#",
+  "##___F__h_" "_b_   _2__" "_K__K__^^_" "__h_G_t___" "_   __####",
+  "##########" "###   ####" "##########" "##########" "#   ######" };
+static const char *const PAL_L8[9] = {
+  "##########" "##########" "##########" "##########",
+  "##########" "###_1h_ ##" "##########" "##########",
+  "## _t____|" "__K_____a_" "__G___   _" "_|_tW_RXE#",
+  "# _#######" "##########" "######^^^#" "##########",
+  "#_ #######" "##########" "##########" "##########",
+  "#___h_C___" "___b_^^__2" "_K__K____ " "##########",
+  "##########" "##########" "######## _" "##########",
+  "#@_t__K___" "_~~~_  _t_" "___G_|____" "__H#######",
+  "##########" "#   #^^###" "##########" "##########" };
 static const PalLevel PAL_LEVEL[PAL_LEVELS] = {
-  { 3, 1, 0, "THE CELLARS",    PAL_L1 },
-  { 4, 2, 0, "THE OLD WELLS",  PAL_L2 },
-  { 5, 2, 1, "THE GUARD HALLS", PAL_L3 },
-  { 4, 3, 2, "THE SKY TOWER",  PAL_L4 } };
+  { 3, 1, 0, 0, 0,  "THE CELLARS",       PAL_L1 },
+  { 4, 2, 0, 0, 0,  "THE OLD WELLS",     PAL_L2 },
+  { 5, 2, 1, 0, 0,  "THE GUARD HALLS",   PAL_L3 },
+  { 4, 3, 2, 0, 0,  "THE SKY TOWER",     PAL_L4 },
+  { 5, 1, 3, 1, 60, "THE SUNKEN BATHS",  PAL_L5 },
+  { 4, 3, 4, 0, 0,  "THE GREAT LIBRARY", PAL_L6 },
+  { 5, 2, 5, 3, 55, "THE FORGES",        PAL_L7 },
+  { 4, 3, 6, 2, 45, "THE DAWN THRONE",   PAL_L8 } };
 
-// the guards get better level by level; the last row is the captain
+// the guards get better level by level; the last rows are the captain and the Warden
 struct PalSkill { uint8_t hp, wind, cool, rnd, block, counter; int16_t speed; };
-static const PalSkill PAL_SKILL[PAL_LEVELS + 1] = {
+static const PalSkill PAL_SKILL[PAL_LEVELS + 2] = {
   { 2, 24, 50, 40, 20, 10, 180 }, { 3, 20, 42, 35, 35, 25, 205 }, { 3, 17, 34, 30, 50, 35, 230 },
-  { 4, 15, 28, 25, 60, 45, 250 }, { 6, 13, 24, 20, 70, 55, 260 } };
+  { 4, 15, 28, 25, 60, 45, 250 }, { 4, 15, 27, 24, 62, 45, 252 }, { 4, 14, 26, 22, 64, 48, 255 },
+  { 5, 14, 25, 22, 66, 50, 258 }, { 5, 13, 24, 20, 68, 52, 262 },
+  { 6, 13, 24, 20, 70, 55, 260 }, { 9, 12, 22, 18, 72, 58, 270 } };
 
 enum { PH_STAND, PH_RUN, PH_STEP, PH_JUMP, PH_FALL, PH_LAND, PH_JUP, PH_HANG, PH_CLIMB, PH_DOWN,
        PH_FIGHT, PH_DEAD, PH_EXIT };
@@ -103,7 +154,8 @@ struct PalHero {
   int8_t   lr, dir;                    // the ledge's row; facing
   uint8_t  st, act, hp, maxHp, coyote, lt, hurt;
   uint16_t t, at;
-  bool     sword, spiked;
+  bool     sword;
+  uint8_t  how;                        // how he died: 0 a fall or a blow, 1 spikes, 2 a scythe, 3 into the pool
 };
 struct PalGuard {
   int32_t  x, x0, x1;                  // 1/256 px, and the floor it keeps to
@@ -119,6 +171,8 @@ static char     palMap[PAL_MAXR][PAL_MAXC];
 static uint8_t  palW, palH, palLv, palNG;
 static uint8_t  palGate[4], palGateWant, palExit;   // gates 0 (shut) .. 64 (open)
 static bool     palExitOn;
+static uint8_t  palTimed, palGt, palPool;           // gates that fall shut again after gt/10 s; 1 water, 2 iron below
+static uint16_t palGateT[4];                        // steps until a timed gate falls shut (0xFFFF: held for good)
 static PalHero  palHero;
 static PalGuard palG[PAL_NG];
 static PalShake palSh[PAL_NL];
@@ -149,7 +203,8 @@ static void palLoadRows(const char *const *rows, uint8_t w, uint8_t h_, uint8_t 
   palW = w; palH = h_;
   memset(palMap, '#', sizeof(palMap));
   memset(palG, 0, sizeof(palG)); memset(palSh, 0, sizeof(palSh)); memset(palF, 0, sizeof(palF));
-  memset(palGate, 0, sizeof(palGate));
+  memset(palGate, 0, sizeof(palGate)); memset(palGateT, 0, sizeof(palGateT));
+  palTimed = palGt = palPool = 0;
   palNG = 0; palGateWant = 0; palExit = 0; palExitOn = false;
   PalHero &h = palHero;
   h.maxHp = palStartHp; h.hp = palStartHp; h.sword = palStartSword;
@@ -159,10 +214,10 @@ static void palLoadRows(const char *const *rows, uint8_t w, uint8_t h_, uint8_t 
       if (ch == '@') {
         h.x = (int32_t)(c * PAL_TW + PAL_TW / 2) << 8; h.y = (int32_t)palLine(r) << 8;
         ch = '_';
-      } else if ((ch == 'G' || ch == 'C') && palNG < PAL_NG) {
+      } else if ((ch == 'G' || ch == 'C' || ch == 'W') && palNG < PAL_NG) {
         PalGuard &g = palG[palNG++];
         g.x = (int32_t)(c * PAL_TW + PAL_TW / 2) << 8; g.row = (int8_t)r; g.dir = -1;
-        g.sk = ch == 'C' ? PAL_LEVELS : sk;
+        g.sk = ch == 'C' ? PAL_CAPT : (ch == 'W' ? PAL_BOSS : sk);
         g.hp = PAL_SKILL[g.sk].hp; g.st = PG_IDLE;
         ch = '_';
       }
@@ -172,7 +227,7 @@ static void palLoadRows(const char *const *rows, uint8_t w, uint8_t h_, uint8_t 
     PalGuard &g = palG[i];
     int16_t c = palColOf(g.x), lo = c, hi = c, r0 = (int16_t)(c / 10 * 10);
     auto ok = [&](int16_t cc) { char ch = palAt(cc, g.row);
-      return cc >= r0 && cc < r0 + 10 && palIsFloor(ch) && ch != '~' && ch != '^' && !(ch >= 'a' && ch <= 'd'); };
+      return cc >= r0 && cc < r0 + 10 && palIsFloor(ch) && ch != '~' && ch != '^' && ch != 'K' && !(ch >= 'a' && ch <= 'd'); };
     while (ok(lo - 1)) lo--;
     while (ok(hi + 1)) hi++;
     // and not too near the room's sides, so that a fight stays on one screen
@@ -183,14 +238,17 @@ static void palLoadRows(const char *const *rows, uint8_t w, uint8_t h_, uint8_t 
     if (g.x > g.x1) g.x = g.x1;
   }
   h.vx = h.vy = 0; h.dir = 1; h.st = PH_STAND; h.act = PA_NONE; h.t = h.at = 0;
-  h.coyote = h.lt = h.hurt = 0; h.spiked = false; h.walk = 0; h.lr = -1;
+  h.coyote = h.lt = h.hurt = 0; h.how = 0; h.walk = 0; h.lr = -1;
   palTicks = 0; palMsgT = 0;
 }
 static void palLoad(uint8_t lv) {
   const PalLevel &L = PAL_LEVEL[lv];
   palLv = lv;
   palLoadRows(L.rows, (uint8_t)(L.w * 10), (uint8_t)(L.h * 3), lv);
+  palTimed = L.timed; palGt = L.gt; palPool = L.theme == 3 ? 1 : (L.theme == 5 ? 2 : 0);
 }
+// a scythe's place in its beat: out of the floor while below PAL_SCYK
+static uint8_t palScy(int16_t c, int16_t r) { return (uint8_t)((palTicks + (uint32_t)(c * 37 + r * 11)) % PAL_SCYP); }
 
 // moving sideways: walls, shut gates and living guards stop the body
 static int32_t palMoveX(int32_t x, int32_t dx, int16_t r) {
@@ -274,9 +332,18 @@ static void palShake(int16_t c, int16_t r, uint8_t t) {
   for (uint8_t i = 0; i < PAL_NL; i++)
     if (!palSh[i].on) { palSh[i] = { (int8_t)c, (int8_t)r, t, true }; sfx(260, 20); return; }
 }
-static void palPlate(char ch) {
-  if (ch >= '1' && ch <= '4') { uint8_t b = (uint8_t)(1 << (ch - '1')); if (!(palGateWant & b)) { palGateWant |= b; sfx(700, 40); } }
-  if (ch >= '5' && ch <= '8') { uint8_t b = (uint8_t)(1 << (ch - '5')); if (palGateWant & b) { palGateWant &= (uint8_t)~b; sfx(300, 40); } }
+// held: a tile fell onto it, so a timed gate stays open for good
+static void palPlate(char ch, bool held = false) {
+  if (ch >= '1' && ch <= '4') {
+    uint8_t i = (uint8_t)(ch - '1'), b = (uint8_t)(1 << i);
+    if (!(palGateWant & b)) { palGateWant |= b; sfx(700, 40); }
+    if ((palTimed & b) && palGateT[i] != 0xFFFF) palGateT[i] = held ? 0xFFFF : (uint16_t)(palGt * 5);
+  }
+  if (ch >= '5' && ch <= '8') {
+    uint8_t b = (uint8_t)(1 << (ch - '5'));
+    palGateT[ch - '5'] = 0;
+    if (palGateWant & b) { palGateWant &= (uint8_t)~b; sfx(300, 40); }
+  }
   if (ch == 'X' && !palExitOn) { palExitOn = true; sfx(1000, 200); palSay("THE EXIT DOOR OPENS"); }
 }
 
@@ -290,7 +357,7 @@ static void palEnter(int16_t c, int16_t r) {
   case 'H': ch = '_'; if (h.maxHp < 8) h.maxHp++; h.hp = h.maxHp; sfx(1600, 250); palSay("A DRAUGHT OF LIFE!"); break;
   case 'S': ch = '_'; h.sword = true; sfx(1800, 150); palSay("A SWORD! OK DRAWS IT"); break;
   case '~': palShake(c, r, 0); break;
-  case '^': if (h.st == PH_RUN && abs(h.vx) > PAL_STEPV * 3 / 2) { h.spiked = true; palDie(); } break;
+  case '^': if (h.st == PH_RUN && abs(h.vx) > PAL_STEPV * 3 / 2) { h.how = 1; palDie(); } break;
   }
 }
 
@@ -299,7 +366,7 @@ static void palLand(int16_t c, int16_t r) {
   int16_t fall = (int16_t)((h.y - h.peak) >> 8);
   bool jump = h.st == PH_JUMP;
   h.vy = 0; h.t = 0;
-  if (palAt(c, r) == '^') { h.spiked = true; palDie(); return; }
+  if (palAt(c, r) == '^') { h.how = 1; palDie(); return; }
   if (fall > PAL_HURT) { palDie(); return; }
   h.st = PH_LAND;
   h.vx = jump && abs(h.vx) > PAL_RUN ? h.dir * PAL_RUN : 0;
@@ -426,7 +493,22 @@ static void palAir(const PalIn &in) {
   }
   h.y = ny;
   if (h.st == PH_JUMP && h.vy > 0 && h.y > h.ty + (4 << 8)) { h.st = PH_FALL; h.coyote = 0; }
+  if (palPool && (h.y >> 8) > (palH - 1) * PAL_TH + PAL_POOLY + 8) {   // into the pool
+    h.how = 3; palDie(); h.vy = 0; sfx(palPool == 1 ? 90 : 60, 400);
+  }
   if ((h.y >> 8) > palH * PAL_TH + 150) palDie();      // into the depths
+}
+
+// a scythe out of the floor next to the runner cuts him down
+static void palScythes() {
+  PalHero &h = palHero;
+  if (h.st == PH_DEAD || h.st == PH_EXIT || h.st == PH_HANG || h.st == PH_CLIMB || h.st == PH_DOWN) return;
+  int16_t r = palRowOf(h.y), c = palColOf(h.x), x = (int16_t)(h.x >> 8);
+  for (int16_t cc = (int16_t)(c - 1); cc <= c + 1; cc++)
+    if (palAt(cc, r) == 'K' && abs(x - (cc * PAL_TW + PAL_TW / 2)) < PAL_SCYW && palScy(cc, r) < PAL_SCYK) {
+      h.how = 2; h.vx = 0; palDie(); sfx(2400, 60);
+      return;
+    }
 }
 
 static void palStrike(PalGuard *g) {
@@ -437,10 +519,11 @@ static void palStrike(PalGuard *g) {
   if (g->st == PG_BLOCK) { sfx(2200, 40); return; }
   g->hp--; g->t = 0;
   g->st = g->hp ? PG_HURT : PG_DYING;
+  if (g->sk == PAL_BOSS && g->hp && g->hp * 2 <= PAL_SKILL[PAL_BOSS].hp && (g->hp + 1) * 2 > PAL_SKILL[PAL_BOSS].hp) palSay("THE WARDEN RAGES!");
   int32_t nx = g->x + h.dir * (10 << 8);
   g->x = nx < g->x0 ? g->x0 : (nx > g->x1 ? g->x1 : nx);
   sfx(g->hp ? 300 : 160, 140);
-  if (!g->hp) palSay("THE GUARD FALLS");
+  if (!g->hp) palSay(g->sk == PAL_BOSS ? "THE WARDEN FALLS!" : (g->sk == PAL_CAPT ? "THE CAPTAIN FALLS" : "THE GUARD FALLS"));
 }
 
 static void palFight(const PalIn &in) {
@@ -512,7 +595,10 @@ static void palHeroTick(const PalIn &in) {
     else palClimbAt((uint8_t)(30 - h.t * 30 / 20));
     break;
   case PH_FIGHT: palFight(in); break;
-  case PH_DEAD: if (h.t < 1000) h.t++; break;
+  case PH_DEAD:
+    if (h.t < 1000) h.t++;
+    if (h.how == 3 && h.t < 60) h.y += 1 << 8;           // sinking
+    return;
   case PH_EXIT: {
     h.t++;
     int32_t cx = (int32_t)(palColOf(h.x) * PAL_TW + PAL_TW / 2) << 8;
@@ -521,6 +607,7 @@ static void palHeroTick(const PalIn &in) {
     break;
   }
   }
+  palScythes();
 }
 
 // ---------------- guards ----------------
@@ -552,7 +639,10 @@ static void palGuardTick(PalGuard &g) {
   switch (g.st) {
   case PG_STRIKE:
     if (++g.t == S.wind) palGuardHit(g);
-    if (g.t >= S.wind + 12) { g.st = PG_READY; g.cool = (uint8_t)(S.cool + random(S.rnd)); }
+    if (g.t >= S.wind + 12) {
+      g.st = PG_READY; g.cool = (uint8_t)(S.cool + random(S.rnd));
+      if (g.sk == PAL_BOSS && g.hp * 2 <= S.hp) g.cool = (uint8_t)(g.cool * 2 / 3);   // enraged: no rest
+    }
     return;
   case PG_BLOCK:
     if (++g.t >= 14) { g.st = PG_READY; g.cool = random(100) < S.counter ? 2 : S.cool / 2; }
@@ -588,7 +678,7 @@ static void palGuardTick(PalGuard &g) {
 // ---------------- the world: gates, the door, loose and falling tiles ----------------
 static void palRubble(int16_t c, int16_t r) {
   char &ch = palMap[r][c];
-  palPlate(ch);                                        // a falling tile presses a plate for good
+  palPlate(ch, true);                                  // a falling tile presses a plate for good
   if (ch == '_') ch = '-';
   else if (ch == '~') palShake(c, r, 22);
   sfx(80, 120);
@@ -599,6 +689,17 @@ static void palWorldTick() {
   for (uint8_t i = 0; i < 4; i++) {
     if (palGateWant >> i & 1) { if (palGate[i] < 64) { palGate[i] += 2; if (palGate[i] % 16 == 0) sfx(160, 15); } }
     else if (palGate[i]) { palGate[i] = palGate[i] > 8 ? palGate[i] - 8 : 0; if (!palGate[i]) sfx(90, 90); }
+  }
+  for (uint8_t i = 0; i < 4; i++)                      // timed gates: the clock runs once the plate is left
+    if ((palTimed >> i & 1) && palGateT[i] && palGateT[i] != 0xFFFF) {
+      if (!--palGateT[i]) { palGateWant &= (uint8_t)~(1 << i); sfx(200, 60); }
+      else if (palGateT[i] % 25 == 0) sfx(palGateT[i] < 100 ? 1500 : 1100, 10);
+    }
+  {                                                    // the scythes in the runner's room ring when they come out
+    int16_t c0 = (int16_t)((h.x >> 8) / SCR_W * 10), r0 = (int16_t)(palRowOf(h.y) / 3 * 3);
+    for (int16_t r = r0; r < r0 + 3; r++)
+      for (int16_t c = c0; c < c0 + 10; c++)
+        if (palAt(c, r) == 'K' && palScy(c, r) == 0) sfx(1800, 25);
   }
   if (palExitOn && palExit < 64) palExit++;
   uint8_t looseT = palLv >= 2 ? 20 : 25;
@@ -705,7 +806,7 @@ static void palStride(PalPose &o, uint8_t q, int8_t amp, int8_t knee, int8_t lea
   o.v[P_LEAN] = lean;
 }
 
-struct PalLook { col skin, hair, top, legs, boots, sash; bool helm; };
+struct PalLook { col skin, hair, top, legs, boots, sash; bool helm; col cape; };   // cape 0: none
 struct PalPt { int16_t x, y; };
 static PalPt palGo(PalPt p, int16_t len, int a) {
   return { (int16_t)(p.x + len * palS(a) / 127), (int16_t)(p.y + len * palC(a) / 127) };
@@ -730,7 +831,11 @@ static void palFigure(int16_t ox, int16_t oy, int8_t dir, const PalPose &p, cons
   PalPt tip = palGo(hF, 21, sa), gA = palGo(hF, 3, sa + 16), gB = palGo(hF, 3, sa - 16), pm = palGo(hF, 3, sa + 32);
   PalPt toeF = { (int16_t)(fF.x + 4), fF.y }, toeB = { (int16_t)(fB.x + 4), fB.y };
   PalPt crown = palGo(hd, 4, 32 - lean), plume = palGo(hd, 7, 32 - lean - 10);
-  PalPt *pts[] = { &hip, &nk, &hd, &kF, &fF, &kB, &fB, &eF, &hF, &eB, &hB, &tip, &gA, &gB, &pm, &toeF, &toeB, &crown, &plume };
+  int16_t fl = (int16_t)(palS((int)(palTicks * 3)) / 50);
+  PalPt cb = { (int16_t)(nk.x - 4), (int16_t)(nk.y + 1) }, cl = { (int16_t)(hip.x - 10 - fl), (int16_t)(hip.y + 17) },
+        cr = { (int16_t)(hip.x - 1), (int16_t)(hip.y + 19) };
+  PalPt *pts[] = { &hip, &nk, &hd, &kF, &fF, &kB, &fB, &eF, &hF, &eB, &hB, &tip, &gA, &gB, &pm, &toeF, &toeB, &crown, &plume,
+                   &cb, &cl, &cr };
   int16_t ts = palS(tl), tc = palC(tl);
   for (PalPt *q : pts) {                              // tilt, mirror, place
     int16_t x = q->x, y = q->y;
@@ -742,6 +847,11 @@ static void palFigure(int16_t ox, int16_t oy, int8_t dir, const PalPose &p, cons
   if (fx == 1) skin = top = legs = boots = hair = sash = steel = gold = C::WHITE;
   if (fx == 2) { skin = colDark(skin, 2); top = colDark(top, 2); legs = colDark(legs, 2); boots = colDark(boots, 2);
                  hair = colDark(hair, 2); sash = colDark(sash, 2); steel = colDark(steel, 2); gold = colDark(gold, 2); }
+  if (L.cape) {                                                                      // a cape behind
+    col cc = fx == 1 ? C::WHITE : (fx == 2 ? colDark(L.cape, 2) : L.cape);
+    gfx.triangle(nk.x, nk.y, cl.x, cl.y, cr.x, cr.y, cc);
+    gfx.triangle(nk.x, nk.y, cb.x, cb.y, cl.x, cl.y, colDark(cc));
+  }
   palLimb(nk, eB, colDark(top), 1); palLimb(eB, hB, colDark(skin), 1);              // back arm
   palLimb(hip, kB, colDark(legs), 2); palLimb(kB, fB, colDark(legs), 1);            // back leg
   palLimb(fB, toeB, colDark(boots), 1);
@@ -768,9 +878,10 @@ static void palFigure(int16_t ox, int16_t oy, int8_t dir, const PalPose &p, cons
 }
 
 static const PalLook PAL_HERO_LOOK = { rgb(236, 184, 140), rgb(60, 36, 20), rgb(0, 165, 175), rgb(240, 232, 210),
-                                       rgb(130, 75, 30), C::RED, false };
-static const col PAL_GUARD_TOP[PAL_LEVELS + 1] = { rgb(60, 150, 60), rgb(225, 125, 40), rgb(150, 60, 180),
-                                                    rgb(40, 90, 200), rgb(190, 30, 40) };
+                                       rgb(130, 75, 30), C::RED, false, 0 };
+static const col PAL_GUARD_TOP[PAL_LEVELS + 2] = { rgb(60, 150, 60), rgb(225, 125, 40), rgb(150, 60, 180),
+  rgb(40, 90, 200), rgb(230, 90, 150), rgb(50, 120, 220), rgb(60, 200, 220), rgb(30, 160, 80),
+  rgb(190, 30, 40), rgb(110, 70, 170) };
 
 static void palHeroPose(PalPose &o, int16_t &dy) {
   PalHero &h = palHero;
@@ -816,7 +927,8 @@ static void palHeroPose(PalPose &o, int16_t &dy) {
     }
     break;
   case PH_DEAD:
-    if (h.spiked) { o = PP_CROUCH; o.v[P_LEAN] = 14; o.v[P_ARA] = 2; o.v[P_ALA] = -4; }
+    if (h.how == 1) { o = PP_CROUCH; o.v[P_LEAN] = 14; o.v[P_ARA] = 2; o.v[P_ALA] = -4; }
+    else if (h.how == 3) { o = PP_FALL; o.v[P_ARA] = (int8_t)(28 + palS(h.t * 5) / 30); }
     else palMix(o, PP_STAND, PP_LIE, h.t, 22);
     break;
   case PH_EXIT: palStride(o, (uint8_t)(h.t * 4), 7, 8, 1); dy = (int16_t)(-h.t / 4); break;
@@ -849,14 +961,23 @@ static void palGuardPose(const PalGuard &g, PalPose &o) {
 }
 
 // ---------------- drawing the rooms ----------------
-struct PalTheme { col back, mortar, backLt, top, front, frontDk, wall, wallLt, wallDk; };
-static const PalTheme PAL_THEME[3] = {                 // colours straight from the cube
+// style: 0 stone, 1 a mosaic of the baths, 2 bookshelves, 3 a forge's glowing seams, 4 windows at dawn
+struct PalTheme { col back, mortar, backLt, top, front, frontDk, wall, wallLt, wallDk; uint8_t style; };
+static const PalTheme PAL_THEME[7] = {                 // colours straight from the cube
   { rgb(0, 42, 102), rgb(0, 0, 51), rgb(51, 42, 102), rgb(153, 170, 204), rgb(102, 128, 153), rgb(51, 42, 102),
-    rgb(51, 85, 153), rgb(102, 128, 204), rgb(0, 42, 102) },                         // dungeon blue
+    rgb(51, 85, 153), rgb(102, 128, 204), rgb(0, 42, 102), 0 },                      // dungeon blue
   { rgb(102, 42, 0), rgb(51, 0, 0), rgb(153, 85, 51), rgb(255, 213, 153), rgb(204, 128, 51), rgb(102, 42, 0),
-    rgb(204, 170, 102), rgb(255, 213, 153), rgb(153, 85, 51) },                      // sandstone halls
+    rgb(204, 170, 102), rgb(255, 213, 153), rgb(153, 85, 51), 0 },                   // sandstone halls
   { rgb(51, 0, 102), rgb(0, 0, 51), rgb(102, 42, 153), rgb(204, 170, 255), rgb(153, 85, 204), rgb(51, 0, 102),
-    rgb(102, 85, 153), rgb(153, 128, 204), rgb(51, 42, 102) } };                     // the tower at night
+    rgb(102, 85, 153), rgb(153, 128, 204), rgb(51, 42, 102), 0 },                    // the tower at night
+  { rgb(0, 102, 102), rgb(0, 51, 51), rgb(51, 153, 153), rgb(204, 255, 255), rgb(153, 213, 204), rgb(51, 128, 128),
+    rgb(102, 170, 170), rgb(204, 255, 255), rgb(51, 102, 102), 1 },                  // the sunken baths
+  { rgb(51, 42, 0), rgb(0, 0, 0), rgb(153, 85, 51), rgb(255, 213, 153), rgb(153, 85, 51), rgb(102, 42, 0),
+    rgb(153, 128, 102), rgb(204, 170, 153), rgb(102, 85, 51), 2 },                   // the library
+  { rgb(51, 0, 0), rgb(153, 42, 0), rgb(102, 42, 0), rgb(204, 170, 153), rgb(102, 85, 85), rgb(51, 42, 51),
+    rgb(102, 42, 51), rgb(153, 85, 51), rgb(51, 0, 0), 3 },                          // the forges
+  { rgb(153, 85, 102), rgb(102, 42, 51), rgb(204, 128, 153), rgb(255, 255, 204), rgb(255, 213, 102), rgb(153, 85, 0),
+    rgb(204, 128, 102), rgb(255, 170, 153), rgb(153, 85, 51), 4 } };                // the throne at dawn
 
 static void palTorch(int16_t x, int16_t y, uint8_t seed) {           // x = middle, y = flame bottom
   gfx.fill(x - 1, y + 2, 3, 9, rgb(90, 60, 30));
@@ -867,6 +988,107 @@ static void palTorch(int16_t x, int16_t y, uint8_t seed) {           // x = midd
   gfx.triangle(x - 3, y - 2, x + 3, y - 2, x + lean, y - 2 - fh, C::ORANGE);
   gfx.disc(x, y - 1, 1, C::YELLOW);
   gfx.vline(x + lean / 2, y - 1 - fh / 2, fh / 2, C::YELLOW);
+}
+
+static const col PAL_BOOK[6] = { rgb(153, 0, 0), rgb(0, 85, 51), rgb(0, 42, 102), rgb(153, 85, 0), rgb(102, 42, 102), rgb(204, 170, 102) };
+
+static void palBack(int16_t c, int16_t r, int16_t sx, int16_t sy, const PalTheme &T, uint32_t hs) {
+  gfx.fill(sx, sy, PAL_TW, PAL_TH, T.back);
+  if (T.style == 1) {                                  // the baths: small tiles under a band of waves
+    for (int16_t y = (int16_t)(sy + 7); y < sy + PAL_TH; y += 8) gfx.hline(sx, y, PAL_TW, T.mortar);
+    for (int16_t x = (int16_t)(sx + 7); x < sx + PAL_TW; x += 8) gfx.vline(x, sy, PAL_TH, T.mortar);
+    for (uint8_t k = 0; k < 3; k++)
+      if ((hs >> (k * 7)) % 3 == 0) gfx.fill(sx + (hs >> (k * 7 + 2)) % 4 * 8, sy + 24 + (hs >> (k * 7 + 4)) % 4 * 8, 7, 7, T.backLt);
+    gfx.fill(sx, sy + 8, PAL_TW, 7, T.backLt);
+    for (int16_t x = sx; x < sx + PAL_TW; x += 8) {
+      gfx.line(x, sy + 14, x + 3, sy + 9, T.top);
+      gfx.line(x + 3, sy + 9, x + 6, sy + 12, T.top);
+    }
+    return;
+  }
+  if (T.style == 2) {                                  // the library: three shelves of books
+    for (uint8_t k = 0; k < 3; k++) {
+      int16_t y = (int16_t)(sy + 2 + k * 17), x = (int16_t)(sx + 1);
+      uint32_t q = hs ^ (uint32_t)(k * 0x9E3779B9u);
+      while (x < sx + PAL_TW - 3) {
+        q = q * 1103515245u + 12345u;
+        int16_t w = (int16_t)(2 + (q >> 16) % 3), bh = (int16_t)(9 + (q >> 20) % 6);
+        col bc = PAL_BOOK[(q >> 24) % 6];
+        if ((q >> 12) % 9 == 0) { gfx.line(x, y + 15, x + 4, y + 15 - bh + 2, bc); x += 6; continue; }   // one leans
+        gfx.fill(x, y + 15 - bh, w, bh, bc);
+        gfx.hline(x, y + 17 - bh, w, colLight(bc));
+        x += w + ((q >> 28) % 5 == 0 ? 2 : 0);
+      }
+      gfx.fill(sx, y + 15, PAL_TW, 2, T.backLt);
+    }
+    if (c % 3 == 0) { gfx.vline(sx, sy, PAL_TH, T.mortar); gfx.vline(sx + 1, sy, PAL_TH, T.backLt); }
+    return;
+  }
+  for (uint8_t k = 0; k < 4; k++) {                    // stone, bricks
+    int16_t y = (int16_t)(sy + k * 13);
+    gfx.hline(sx, y + 12, PAL_TW, T.mortar);
+    gfx.vline(sx + ((k + c) & 1) * 16 + 6, y, 12, T.mortar);
+    if ((hs >> (k * 4)) % 7 == 0) gfx.fill(sx + ((k + c) & 1) * 16 + 8, y + 1, 12, 10, T.backLt);
+  }
+  if (T.style == 3) {                                  // the forge: sparks drift up
+    uint16_t e = (uint16_t)((palTicks * 2 + (hs & 255)) % 90);
+    if (e < 60) gfx.pixel((int16_t)(sx + 2 + (hs >> 8) % 28 + palS((int)e * 3) / 64), (int16_t)(sy + 60 - e), e < 30 ? C::YELLOW : C::ORANGE);
+  }
+  if (T.style == 4) {
+    if (c % 4 == 1 && r % 3 != 2) {                     // a tall window: the sky at dawn
+      int16_t x = sx + 9, y = sy + 10, w = 14, wh = 36;
+      gfx.fill(x - 2, y - 6, w + 4, wh + 8, T.wallLt);
+      gfx.disc(x + w / 2, y, w / 2 + 2, T.wallLt);
+      gfx.gradient(x, y, w, wh, rgb(102, 42, 153), rgb(255, 170, 51));
+      gfx.disc(x + w / 2, y, w / 2, rgb(102, 42, 153));
+      gfx.fill(x, y, w, 2, rgb(102, 42, 153));
+      if ((c + r) % 3 == 0) gfx.disc(x + w / 2, y + wh - 2, 5, rgb(255, 230, 102));
+      gfx.fill(x, y + wh - 2, w, 2, T.wallLt);
+      gfx.vline(x + w / 2, y - 6, wh + 6, T.wallLt);
+      gfx.hline(x, y + 14, w, T.wallLt);
+    }
+    if (c % 4 == 3) {                                  // a banner
+      int16_t x = sx + 10, y = sy + 4;
+      gfx.fill(x - 2, y, 16, 2, rgb(240, 190, 40));
+      gfx.fill(x, y + 2, 12, 30, rgb(204, 0, 51));
+      gfx.triangle(x, y + 32, x + 11, y + 32, x + 6, y + 38, rgb(204, 0, 51));
+      gfx.triangle(x + 6, y + 10, x + 2, y + 16, x + 10, y + 16, rgb(240, 190, 40));
+      gfx.triangle(x + 2, y + 16, x + 10, y + 16, x + 6, y + 22, rgb(240, 190, 40));
+    }
+  }
+}
+
+// a furnace's mouth behind the floor, fire inside
+static void palFurnace(int16_t sx, int16_t sy, int16_t fy, const PalTheme &T, uint8_t seed) {
+  int16_t x = sx + 5, y = sy + 22, w = 22, fh = (int16_t)(fy - 4 - y);
+  gfx.fill(x - 3, y - 2, w + 6, fh + 2, T.wallLt);
+  gfx.disc(x + w / 2, y - 2, w / 2 + 3, T.wallLt);
+  gfx.disc(x + w / 2, y - 2, w / 2 + 1, colDark(T.wallLt));
+  gfx.fill(x - 1, y - 2, w + 2, fh + 2, colDark(T.wallLt));
+  gfx.disc(x + w / 2, y, w / 2 - 1, rgb(102, 0, 0));
+  gfx.gradient(x, y, w, fh, rgb(102, 0, 0), rgb(255, 128, 0));
+  uint8_t f = (uint8_t)((palTicks / 3 + seed) % 4);
+  for (uint8_t k = 0; k < 4; k++) {
+    int16_t ax = (int16_t)(x + 1 + k * 5), ah = (int16_t)(7 + ((f + k) % 3) * 4);
+    gfx.triangle(ax, y + fh, ax + 6, y + fh, ax + 3, y + fh - ah, C::ORANGE);
+    gfx.triangle(ax + 1, y + fh, ax + 5, y + fh, ax + 3, y + fh - ah / 2, C::YELLOW);
+  }
+  gfx.hline(x, y + fh - 1, w, C::YELLOW);
+}
+
+// the throne: gold, a red cushion
+static void palThrone(int16_t sx, int16_t sy, int16_t fy) {
+  col gold = rgb(240, 190, 40), dk = rgb(153, 85, 0), red = rgb(170, 0, 30);
+  int16_t x = sx + 6, top = sy + 16;
+  gfx.disc(x + 10, top, 10, gold);
+  gfx.fill(x, top, 21, fy - 4 - top, gold);
+  gfx.fill(x + 4, top - 2, 13, 22, red);
+  gfx.disc(x + 10, top - 3, 3, rgb(204, 0, 51));
+  gfx.fill(x - 3, fy - 22, 27, 5, gold);
+  gfx.hline(x - 3, fy - 18, 27, dk);
+  gfx.fill(x - 3, fy - 17, 4, 13, gold);
+  gfx.fill(x + 20, fy - 17, 4, 13, gold);
+  gfx.fill(x + 1, fy - 26, 19, 4, red);
 }
 
 static void palSlab(int16_t sx, int16_t fy, const PalTheme &T, bool capL, bool capR) {
@@ -895,14 +1117,10 @@ static void palCell(int16_t c, int16_t r, int16_t sx, int16_t sy, const PalTheme
     if (palAt(c + 1, r) != '#') gfx.vline(sx + PAL_TW - 1, sy, PAL_TH, T.wallDk);
     return;
   }
-  gfx.fill(sx, sy, PAL_TW, PAL_TH, T.back);              // the wall behind
-  for (uint8_t k = 0; k < 4; k++) {
-    int16_t y = (int16_t)(sy + k * 13);
-    gfx.hline(sx, y + 12, PAL_TW, T.mortar);
-    gfx.vline(sx + ((k + c) & 1) * 16 + 6, y, 12, T.mortar);
-    if ((hs >> (k * 4)) % 7 == 0) gfx.fill(sx + ((k + c) & 1) * 16 + 8, y + 1, 12, 10, T.backLt);
-  }
+  palBack(c, r, sx, sy, T, hs);                         // the wall behind
   int16_t fy = (int16_t)(sy + PAL_FL);
+  if (ch == 'F') palFurnace(sx, sy, fy, T, (uint8_t)c);
+  if (ch == 'R') palThrone(sx, sy, fy);
   if (ch == 't') palTorch(sx + 16, sy + 20, (uint8_t)(c * 3 + r));
   if (ch == 'E') {                                       // the exit door, its panel rises
     int16_t dx = sx + 3, dy = sy + 8, dw = 26, dh = (int16_t)(fy - 4 - dy);
@@ -940,11 +1158,31 @@ static void palCell(int16_t c, int16_t r, int16_t sx, int16_t sy, const PalTheme
       if (out) { gfx.triangle(x, fy - 3, x + 5, fy - 3, x + 2, fy - 17, rgb(205, 210, 220)); gfx.vline(x + 2, fy - 15, 11, C::WHITE); }
       else gfx.fill(x + 1, fy - 5, 3, 2, rgb(150, 150, 160));
     }
-    if (out && palHero.spiked && hc == c) for (uint8_t k = 0; k < 6; k++) gfx.pixel(sx + 5 + k * 4, fy - 8 - (k * 5) % 7, C::RED);
+    if (out && palHero.how == 1 && hc == c) for (uint8_t k = 0; k < 6; k++) gfx.pixel(sx + 5 + k * 4, fy - 8 - (k * 5) % 7, C::RED);
+    break;
+  }
+  case 'K': {                                            // a scythe: out of its slot, a sweep, back in
+    uint8_t ph = palScy(c, r);
+    int16_t x = sx + 16;
+    gfx.fill(sx + 7, fy - 4, 18, 2, rgb(25, 20, 20));
+    int16_t e = ph < 4 ? (int16_t)((ph + 1) * 5) : (ph < 10 ? 22 : (ph < PAL_SCYK ? (int16_t)(22 - (ph - 9) * 5) : 0));
+    if (ph >= PAL_SCYP - 8) e = 2;                       // the tip shows: it is coming
+    if (e > 0) {
+      int16_t sw = (int16_t)(ph < PAL_SCYK ? ph * 14 / PAL_SCYK - 7 : -7), tx = (int16_t)(x + sw), ty = (int16_t)(fy - 4 - e);
+      int16_t mx = (int16_t)(x + sw / 2 + 4), my = (int16_t)(fy - 4 - e / 2);
+      col st = rgb(200, 205, 215);
+      gfx.triangle(x - 6, fy - 4, x + 6, fy - 4, mx, my, st);
+      gfx.triangle(x - 6, fy - 4, mx, my, tx, ty, st);
+      gfx.line(x + 6, fy - 4, mx, my, C::WHITE); gfx.line(mx, my, tx, ty, C::WHITE);
+      if (palHero.st == PH_DEAD && palHero.how == 2 && abs(palColOf(palHero.x) - c) <= 1 && palRowOf(palHero.y) == r)
+        for (uint8_t k = 0; k < 5; k++) gfx.pixel(mx - 2 + k, my - 2 + (k * 3) % 5, C::RED);
+    }
+    gfx.disc(x, fy - 3, 2, rgb(90, 90, 100));
     break;
   }
   case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case 'X': {
-    col pc = ch == 'X' ? rgb(240, 200, 60) : (ch <= '4' ? rgb(200, 170, 120) : rgb(170, 80, 60));
+    col pc = ch == 'X' ? rgb(240, 200, 60) : (ch <= '4' ? ((palTimed >> (ch - '1') & 1) ? rgb(110, 190, 240) : rgb(200, 170, 120))
+                                                         : rgb(170, 80, 60));
     gfx.fill(sx + 6, fy - (onIt ? 5 : 7), 20, onIt ? 2 : 4, pc);
     gfx.hline(sx + 6, fy - (onIt ? 5 : 7), 20, colLight(pc));
     break;
@@ -982,7 +1220,13 @@ static void palFront(int16_t c, int16_t r, int16_t sx, int16_t sy, const PalThem
     gfx.hline(x - 3, bot - 1, 20, T.wallDk);
   }
   if (ch >= 'a' && ch <= 'd') {
-    int16_t lvl = palGate[ch - 'a'];
+    uint8_t i = (uint8_t)(ch - 'a');
+    int16_t lvl = palGate[i];
+    if ((palTimed >> i & 1) && palGateT[i] && palGateT[i] != 0xFFFF) {    // a timed gate: how long it stays open
+      int16_t w = (int16_t)(14 * palGateT[i] / (palGt * 5));
+      gfx.fill(sx + 9, sy - 3, 14, 3, C::BLACK);
+      gfx.fill(sx + 9, sy - 3, w, 3, palGateT[i] < 100 ? C::RED : C::YELLOW);
+    }
     int16_t len = (int16_t)((PAL_FL - 4) * (64 - lvl) / 64);
     gfx.fill(sx + 9, sy, 14, 3, T.wallDk);
     if (len > 0) {
@@ -990,6 +1234,38 @@ static void palFront(int16_t c, int16_t r, int16_t sx, int16_t sy, const PalThem
       for (int16_t y = (int16_t)(sy + 3 + len - 2); y > sy + 3; y -= 10) gfx.hline(sx + 9, y, 14, rgb(110, 115, 130));
       for (uint8_t k = 0; k < 4; k++) gfx.pixel(sx + 10 + k * 4, sy + 2 + len, rgb(150, 155, 170));
     }
+  }
+}
+
+// a pool at the bottom of the deepest pits: water with the room mirrored in it, or molten iron
+static void palPoolAt(int16_t c, int16_t sx, int16_t sy) {
+  int16_t wy = (int16_t)(sy + PAL_POOLY), wh = (int16_t)(PAL_TH - PAL_POOLY);
+  PalHero &h = palHero;
+  int16_t hx = (int16_t)((h.x >> 8) - c * PAL_TW + sx);
+  bool sank = h.st == PH_DEAD && h.how == 3 && palColOf(h.x) == c;
+  if (palPool == 1) {
+    col deep = rgb(0, 42, 102);
+    for (int16_t k = 1; k < wh; k++) {
+      int16_t wob = (int16_t)(palS((int)(palTicks / 2 + k * 9 + c * 5)) / 64);
+      for (int16_t x = 0; x < PAL_TW; x++)
+        gfx.pixel(sx + x, wy + k, colLerp(gfx.get(sx + x + wob, wy - k), deep, (uint8_t)(100 + k * 7)));
+    }
+    gfx.hline(sx, wy, PAL_TW, rgb(153, 213, 255));
+    for (uint8_t k = 0; k < 2; k++) gfx.hline((int16_t)(sx + (palTicks / 3 + k * 13 + c * 7) % 28), wy + 4 + k * 6, 4, rgb(204, 255, 255));
+  } else {
+    gfx.gradient(sx, wy, PAL_TW, wh, rgb(255, 230, 0), rgb(204, 42, 0));
+    for (uint8_t k = 0; k < 3; k++) gfx.fill((int16_t)(sx + (palTicks / 4 + k * 13 + c * 9) % 28), wy + 3 + k * 4, 6, 2, rgb(153, 42, 0));
+    if ((palTicks / 6 + c) % 5 == 0) gfx.circle(sx + (c * 13) % 24 + 4, wy + 1, 2, C::YELLOW);
+    gfx.hline(sx, wy - 1, PAL_TW, C::ORANGE);
+  }
+  if (sank && h.t < 40) {                                // the splash
+    col sc = palPool == 1 ? C::WHITE : C::YELLOW;
+    for (uint8_t k = 0; k < 6; k++) {
+      int16_t t = (int16_t)h.t, dx = (int16_t)((k * 2 - 5) * t / 5), dy = (int16_t)(t < 24 ? t * (24 - t) / 8 : 0);
+      gfx.pixel(hx + dx, wy - dy, sc);
+      gfx.pixel(hx + dx + 1, wy - dy, sc);
+    }
+    gfx.hline((int16_t)(hx - 4 - h.t / 3), wy, (int16_t)(8 + h.t / 3 * 2), sc);
   }
 }
 
@@ -1031,8 +1307,9 @@ static void palDraw(int32_t left) {
       if ((g.st >= PG_DYING) != (pass == 0)) continue;
       int16_t gx = (int16_t)((g.x >> 8) - ox), gy = (int16_t)(palLine(g.row) - 1 - oy);
       if (gx < -40 || gx > SCR_W + 40 || gy < 0 || gy > PAL_HUD + 50) continue;
-      PalLook L = { rgb(200, 150, 110), C::BLACK, PAL_GUARD_TOP[g.sk], rgb(70, 60, 90), rgb(50, 40, 40),
-                    g.sk == PAL_LEVELS ? rgb(240, 190, 40) : rgb(40, 40, 40), true };
+      bool boss = g.sk == PAL_BOSS;
+      PalLook L = { rgb(200, 150, 110), C::BLACK, PAL_GUARD_TOP[g.sk], boss ? rgb(40, 30, 40) : rgb(70, 60, 90), rgb(50, 40, 40),
+                    g.sk >= PAL_CAPT ? rgb(240, 190, 40) : rgb(40, 40, 40), true, boss ? rgb(170, 0, 30) : (col)0 };
       PalPose p;
       palGuardPose(g, p);
       palFigure(gx, gy, g.dir, p, L, true, g.st == PG_HURT && g.t < 4 ? 1 : 0);
@@ -1046,7 +1323,10 @@ static void palDraw(int32_t left) {
               h.st == PH_EXIT && h.t > 12 ? 2 : (h.hurt && (h.hurt / 3) % 2 && h.st != PH_DEAD ? 1 : 0));
   }
   for (int16_t r = 0; r < 3; r++)
-    for (int16_t c = 0; c < 10; c++) palFront(c0 + c, r0 + r, c * PAL_TW, TOP_H + r * PAL_TH, T);
+    for (int16_t c = 0; c < 10; c++) {
+      palFront(c0 + c, r0 + r, c * PAL_TW, TOP_H + r * PAL_TH, T);
+      if (palPool && r0 + r == palH - 1 && palAt(c0 + c, r0 + r) == ' ') palPoolAt(c0 + c, c * PAL_TW, TOP_H + r * PAL_TH);
+    }
 
   // the strip below: flasks, the message or the level, the guard's flasks
   gfx.gradient(0, PAL_HUD, SCR_W, SCR_H - PAL_HUD, rgb(30, 22, 16), C::BLACK);
@@ -1057,8 +1337,12 @@ static void palDraw(int32_t left) {
   if (g) palTris(SCR_W - 16, PAL_HUD + 6, PAL_SKILL[g->sk].hp, g->hp, PAL_GUARD_TOP[g->sk], -12);
   char b[32];
   const char *s = palMsgT ? palMsg : b;
-  if (h.st == PH_DEAD) s = "YOU HAVE FALLEN";
-  if (s == b) snprintf(b, sizeof(b), "LEVEL %u", palLv + 1);
+  static const char *const DEATH[4] = { "YOU HAVE FALLEN", "YOU HAVE FALLEN", "CUT DOWN BY A SCYTHE", "LOST IN THE DEEP" };
+  if (h.st == PH_DEAD) s = DEATH[h.how & 3];
+  if (s == b) {
+    if (g && g->sk >= PAL_CAPT) s = g->sk == PAL_BOSS ? "THE WARDEN" : "THE CAPTAIN";
+    else snprintf(b, sizeof(b), "LEVEL %u", palLv + 1);
+  }
   gfx.text(180 - Gfx::width(s, F_SMALL) / 2, PAL_HUD + 9, s, palMsgT || h.st == PH_DEAD ? C::YELLOW : C::LTGREY, F_SMALL);
 
   statusBar("PALACE", palScore, curHigh, rgb(210, 150, 40));
@@ -1069,6 +1353,35 @@ static void palDraw(int32_t left) {
 }
 
 // ---------------- title, the run ----------------
+// the palace against the sky: by night (the title) or at dawn (the end); t in ms
+static void palScene(uint32_t t, bool dawn) {
+  if (dawn) {
+    gfx.gradient(0, 0, SCR_W, SCR_H, rgb(102, 42, 153), rgb(255, 170, 51));
+    int16_t sy = (int16_t)(160 - (t > 3000 ? 3000 : t) / 50);       // the sun comes up
+    gfx.disc(250, sy, 22, rgb(255, 213, 102));
+    gfx.disc(250, sy, 16, rgb(255, 255, 204));
+    for (uint8_t k = 0; k < 3; k++) gfx.hline((int16_t)(20 + k * 90 + t / 90 % 40), (int16_t)(96 + k * 12), 50, rgb(255, 170, 153));
+  } else {
+    gfx.gradient(0, 0, SCR_W, SCR_H, rgb(10, 10, 50), rgb(90, 40, 90));
+    for (uint8_t i = 0; i < 40; i++) {
+      uint32_t hs = (uint32_t)i * 2654435761u;
+      gfx.pixel((int16_t)(hs % SCR_W), (int16_t)((hs >> 12) % 120), ((t / 300 + i) % 7) ? C::GREY : C::WHITE);
+    }
+    gfx.disc(262, 44, 16, rgb(255, 240, 190));
+    gfx.disc(270, 38, 15, rgb(16, 14, 58));
+  }
+  col sil = dawn ? rgb(60, 20, 50) : rgb(24, 14, 40), win = dawn ? rgb(153, 85, 51) : rgb(255, 200, 80);
+  gfx.fill(20, 150, 280, 60, sil);                       // the palace
+  gfx.disc(160, 150, 38, sil);
+  gfx.triangle(156, 112, 164, 112, 160, 96, sil);
+  gfx.disc(80, 150, 22, sil); gfx.disc(240, 150, 22, sil);
+  gfx.fill(34, 104, 10, 50, sil); gfx.disc(39, 102, 7, sil); gfx.triangle(35, 98, 43, 98, 39, 86, sil);
+  gfx.fill(276, 104, 10, 50, sil); gfx.disc(281, 102, 7, sil); gfx.triangle(277, 98, 285, 98, 281, 86, sil);
+  for (uint8_t k = 0; k < 7; k++)
+    if (dawn || (k * 5 + t / 900) % 4) gfx.fill(52 + k * 34, 166, 6, 9, win);
+  gfx.rbox(150, 176, 20, 34, 9, win);
+}
+
 static bool palTitle() {
   palPhase = 0;
   btnClear();
@@ -1077,25 +1390,9 @@ static bool palTitle() {
     if (btn(B_OK)) { sfx(1200, 60); return true; }
     uint32_t t = gameMillis() - t0;
     palTicks = t / PAL_TICK;
-    gfx.gradient(0, 0, SCR_W, SCR_H, rgb(10, 10, 50), rgb(90, 40, 90));
-    for (uint8_t i = 0; i < 40; i++) {
-      uint32_t hs = (uint32_t)i * 2654435761u;
-      gfx.pixel((int16_t)(hs % SCR_W), (int16_t)((hs >> 12) % 120), ((t / 300 + i) % 7) ? C::GREY : C::WHITE);
-    }
-    gfx.disc(262, 44, 16, rgb(255, 240, 190));
-    gfx.disc(270, 38, 15, rgb(16, 14, 58));
-    col sil = rgb(24, 14, 40), win = rgb(255, 200, 80);
-    gfx.fill(20, 150, 280, 60, sil);                       // the palace
-    gfx.disc(160, 150, 38, sil);
-    gfx.triangle(156, 112, 164, 112, 160, 96, sil);
-    gfx.disc(80, 150, 22, sil); gfx.disc(240, 150, 22, sil);
-    gfx.fill(34, 104, 10, 50, sil); gfx.disc(39, 102, 7, sil); gfx.triangle(35, 98, 43, 98, 39, 86, sil);
-    gfx.fill(276, 104, 10, 50, sil); gfx.disc(281, 102, 7, sil); gfx.triangle(277, 98, 285, 98, 281, 86, sil);
-    for (uint8_t k = 0; k < 7; k++)
-      if ((k * 5 + t / 900) % 4) gfx.fill(52 + k * 34, 166, 6, 9, win);
-    gfx.rbox(150, 176, 20, 34, 9, win);
+    palScene(t, false);
     gfx.textShadow(160 - Gfx::width("PALACE", F_BIG) / 2, 14, "PALACE", rgb(250, 200, 70), rgb(120, 40, 20), F_BIG);
-    gfx.center(54, "escape before the time runs out", C::LTGREY, F_SMALL);
+    gfx.center(54, "eight levels - escape in twenty minutes", C::LTGREY, F_SMALL);
     PalPose p;
     palStride(p, (uint8_t)(t / 12), 13, 15, 4);
     palFigure((int16_t)(-20 + (t / 8) % 360), 222, 1, p, PAL_HERO_LOOK, false, 0);
@@ -1113,7 +1410,45 @@ static bool palTitle() {
   return false;
 }
 
-// a few seconds of a still picture with a box on it (level done, time up, the end)
+// the level reached is kept (the index of the highest one begun)
+static uint8_t palSaved() {
+  prefs.begin("arcade", true);
+  uint16_t v = prefs.getUShort("PALlv", 0);
+  prefs.end();
+  return v < PAL_LEVELS ? (uint8_t)v : 0;
+}
+static void palSave(uint8_t lv) {
+  if (lv <= palSaved()) return;
+  prefs.begin("arcade", false);
+  prefs.putUShort("PALlv", lv);
+  prefs.end();
+}
+// flasks at the start of a level when going on from there: every big draught before it counted
+static uint8_t palFlasksAt(uint8_t lv) {
+  uint8_t n = 3;
+  for (uint8_t i = 0; i < lv; i++)
+    for (uint8_t r = 0; r < PAL_LEVEL[i].h * 3; r++)
+      for (const char *q = PAL_LEVEL[i].rows[r]; *q; q++) n = (uint8_t)(n + (*q == 'H'));
+  return n > 8 ? 8 : n;
+}
+// where to begin: on from the level reached, an earlier one, or anew (255 = back)
+static uint8_t palPick() {
+  uint8_t n = palSaved();
+  if (!n) return 0;
+  char txt[PAL_LEVELS][24];
+  const char *opt[PAL_LEVELS];
+  for (uint8_t i = 0; i <= n; i++) {                     // n, the new game, then n - 1 down to 2
+    uint8_t lv = (uint8_t)(i < 2 ? (i ? 0 : n) : n + 1 - i);
+    if (!i) snprintf(txt[i], sizeof(txt[i]), "continue: level %u", lv + 1);
+    else if (lv) snprintf(txt[i], sizeof(txt[i]), "level %u", lv + 1);
+    else snprintf(txt[i], sizeof(txt[i]), "new game");
+    opt[i] = txt[i];
+  }
+  uint8_t k = chooseMode("PALACE", opt, (uint8_t)(n + 1), rgb(210, 150, 40));
+  return k == 255 ? 255 : (uint8_t)(k < 2 ? (k ? 0 : n) : n + 1 - k);
+}
+
+// a few seconds of a still picture with a box on it (level done, time up)
 static bool palBanner(const char *a, const char *b, uint16_t ms) {
   palPhase = 2;
   uint32_t t0 = gameMillis();
@@ -1129,17 +1464,44 @@ static bool palBanner(const char *a, const char *b, uint16_t ms) {
   return true;
 }
 
+// out: the runner runs off into the morning
+static bool palEnding(uint32_t sec) {
+  palPhase = 2;
+  char s[32];
+  snprintf(s, sizeof(s), "%lu:%02lu to spare", (unsigned long)(sec / 60), (unsigned long)(sec % 60));
+  uint32_t t0 = gameMillis();
+  while (gameMillis() - t0 < 5000) {
+    if (!poll()) return false;
+    uint32_t t = gameMillis() - t0;
+    palTicks = t / PAL_TICK;
+    palScene(t, true);
+    PalPose p;
+    palStride(p, (uint8_t)(t / 12), 13, 15, 4);
+    palFigure((int16_t)(30 + t / 14), 222, 1, p, PAL_HERO_LOOK, false, 0);
+    gfx.fill(0, 222, SCR_W, 18, rgb(60, 30, 40));
+    gfx.textShadow(160 - Gfx::width("FREE AT LAST!", F_BIG) / 2, 12, "FREE AT LAST!", rgb(255, 230, 102), rgb(120, 40, 20), F_BIG);
+    gfx.center(52, "the Warden is beaten, the palace behind you", C::WHITE, F_SMALL);
+    gfx.center(64, s, C::WHITE, F_TEXT);
+    gfx.send();
+  }
+  palPhase = 1;
+  return true;
+}
+
 void palaceRun() {
   bool again = true, title = true;
   while (again) {
     again = false;
     if (title && !palTitle()) return;
     title = false;
-    palScore = 0; palStartHp = 3; palStartSword = false;
-    palLoad(0);
-    uint32_t deadline = gameMillis() + PAL_TIME;
+    uint8_t lv0 = palPick();
+    if (lv0 == 255) return;
+    palScore = 0; palStartHp = palFlasksAt(lv0); palStartSword = lv0 > 0;
+    palLoad(lv0);
+    uint32_t total = PAL_TIME / PAL_LEVELS * (PAL_LEVELS - lv0);   // going on: the time those levels have
+    uint32_t deadline = gameMillis() + total;
     char b[32];
-    palDraw((int32_t)PAL_TIME);
+    palDraw((int32_t)total);
     snprintf(b, sizeof(b), "LEVEL %u", palLv + 1);
     if (!palBanner(b, PAL_LEVEL[palLv].name, 1600)) return;
     deadline += 1600;
@@ -1171,14 +1533,13 @@ void palaceRun() {
       if (palLv + 1 >= PAL_LEVELS) {
         uint32_t sec = (uint32_t)left / 1000;
         palScore = (uint16_t)(palScore + sec);
-        char s[32];
-        snprintf(s, sizeof(s), "%lu:%02lu to spare", (unsigned long)(sec / 60), (unsigned long)(sec % 60));
         sfx(1500, 400);
-        if (!palBanner("FREE AT LAST!", s, 3500)) return;
+        if (!palBanner(b, "the dawn is near", 1500) || !palEnding(sec)) return;
         ended = 2;
         break;
       }
       sfx(1400, 250);
+      palSave((uint8_t)(palLv + 1));
       if (!palBanner(b, PAL_LEVEL[palLv + 1].name, 2200)) return;
       deadline += gameMillis() - t0;                     // the clock stops between levels
       next = gameMillis();
