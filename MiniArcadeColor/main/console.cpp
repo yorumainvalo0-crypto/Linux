@@ -58,6 +58,7 @@
 #include "game_checkers.h"
 #include "game_maumau.h"
 #include "game_minigolf.h"
+#include "game_chess.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -131,6 +132,7 @@ static const Game GAMES[] = {
   { "Minigolf",    "GLF", minigolfRun,    IC_MINIGOLF,    C::GREEN,         NULL },
   { "Lander",      "LND", landerRun,      IC_LANDER,      C::GREY,          NULL },
   // more games come here (before the entries with a tag)
+  { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };
 static const uint8_t GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
@@ -172,10 +174,11 @@ void menu() {
       sfx(1200, 50);
       curGame = sel;
       bool real = sel < REAL_GAMES;
+      bool play = real || !strcmp(GAMES[sel].tag, "2P");   // two players: a game too, only without a best
       do {
         wantRestart = false;
         curHigh = real ? loadHigh(sel) : 0;
-        pauseOk = real;
+        pauseOk = play;
         tiltGame = real;
         tiltGameStart();                         // level: as held now, or the saved position
         GAMES[sel].run();

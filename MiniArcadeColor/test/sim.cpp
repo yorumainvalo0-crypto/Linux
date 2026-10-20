@@ -404,6 +404,51 @@ static bool pzLogic() {
   return false;
 }
 
+// Chess: plays the moves of a list, given as (row, column) of the board: cursor there, OK
+static const uint8_t CH_FOOL[8][2] = { {6,5},{5,5}, {1,4},{3,4}, {6,6},{4,6}, {0,3},{4,7} };   // f3 e5 g4 Qh4#
+static int chBotStep = 0;
+static void chessBot(uint32_t t) {
+  if (pzBusy(t) || !ch || chBotStep >= 8) return;
+  int r = CH_FOOL[chBotStep][0], c = CH_FOOL[chBotStep][1];
+  if (ch->cr != r) pzPress(t, ch->cr < r ? 2 : 1, 120);
+  else if (ch->cc != c) pzPress(t, ch->cc < c ? 8 : 4, 120);
+  else { pzPress(t, PZ_OK, 250); chBotStep++; }
+}
+
+// move generator against the known counts (perft)
+static uint64_t chPerft(ChPos &p, int depth) {
+  ChMove m[220];
+  int n = chMoves(p, m);
+  if (depth == 1) return (uint64_t)n;
+  uint64_t sum = 0;
+  for (int i = 0; i < n; i++) { ChPos q = p; chPlay(q, m[i]); sum += chPerft(q, depth - 1); }
+  return sum;
+}
+static void chessLogic() {
+  struct { const char *fen; int depth; uint64_t want; } T[] = {
+    { "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -", 3, 8902 },
+    { "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -", 4, 197281 },
+    { "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -", 3, 97862 },   // castling, pins
+    { "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - -", 5, 674624 },                          // en passant
+    { "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq -", 3, 9467 },     // promotions
+  };
+  for (auto &tc : T) {
+    ChPos p;
+    bool ok = chFromFen(p, tc.fen);
+    uint64_t n = ok ? chPerft(p, tc.depth) : 0;
+    printf("      perft %d = %llu (want %llu)\n", tc.depth, (unsigned long long)n, (unsigned long long)tc.want);
+    check("chess moves counted right", ok && n == tc.want);
+  }
+  ChPos p;
+  chFromFen(p, "7k/5Q2/6K1/8/8/8/8/8 b - -");
+  ChMove m[220];
+  check("stalemate: no move, not in check", chMoves(p, m) == 0 && !chInCheck(p, false));
+  chFromFen(p, "7k/6Q1/6K1/8/8/8/8/8 b - -");
+  check("checkmate: no move, in check", chMoves(p, m) == 0 && chInCheck(p, false));
+  chFromFen(p, "8/8/4k3/8/8/2B5/4K3/8 w - -");
+  check("king and bishop against king is a draw", chTooLittle(p));
+}
+
 static uint8_t colsInFrame() {                                  // how many colours one frame shows
   std::set<uint8_t> c(lastFrame, lastFrame + sizeof(lastFrame));
   return (uint8_t)c.size();
@@ -1097,6 +1142,15 @@ int main(int argc, char **argv) {
     simBot = golfBot; botFrom = t + 800;
     captureMs = { t + 2500, t + 60000 };
     setenv("GRAB", "HOLE 6/9", 1);
+  } else if (scenario == "chess") {
+    uint32_t t = openGameNamed("Chess", M); simEnd = t + 20000;
+    press(t + 300, DN); press(t + 600, OK, 80);                  // board stays
+    pzStart = t + 1400; pzBot = chessBot; captureMs = { t + 5000 };
+    setenv("GRAB", "WINS", 1);
+  } else if (scenario == "chesslogic") {
+    printf("== %s\n", scenario.c_str());
+    chessLogic();
+    return failures ? 1 : 0;
   } else { printf("unknown scenario %s\n", scenario.c_str()); return 2; }
   printf("== %s\n", scenario.c_str());
   try {
@@ -1208,6 +1262,10 @@ int main(int argc, char **argv) {
     check("all nine holes played", seen("HOLE 9/9") && overShown);
     check("the bot played well", mgScore >= 9 * 40);
   }
+  if (scenario == "chess") {
+    check("chess drawn for two players", seen("CHESS") && seen("2 players") && seen("WHITE") && seen("BLACK"));
+    check("fool's mate: black wins", chBotStep == 8 && seen("WINS") && seen("BLACK"));
+  }
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);
@@ -1241,7 +1299,7 @@ int main(int argc, char **argv) {
     check("RIGHT on its own pin", BTN_PIN[3] == 6 && !BTN_MV[3]);
     check("LEFT+RIGHT opened a game", seen("SNAKE"));
   }
-  check("sounds played", scenario == "wizard" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
+  check("sounds played", scenario == "wizard" || scenario == "chess" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }
