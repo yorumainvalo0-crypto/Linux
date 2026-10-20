@@ -1,7 +1,8 @@
 // MiniArcade Color: the panel - ILI9341 (or ST7789) on SPI, 320 x 240 in
 // landscape. The frame buffer holds colour indices (gfx.h); a row goes out
-// as RGB565 through two DMA buffers, and rows that did not change since
-// the last frame are skipped, so a mostly still picture is quick.
+// as RGB565 through two DMA buffers. Every row is kept as ten hashes of
+// 32 pixels: only the part of the picture that changed since the last
+// frame goes out, so a ball moving over a still background is quick.
 // The pins are found at the start by reading the panel back (SDO wired),
 // see "finding the pins" below.
 #include "gfx.h"
@@ -31,10 +32,14 @@ bool tftPinUsed(uint8_t p) {
   return p == t.sck || p == t.mosi || p == t.cs || p == t.dc || p == t.miso || p == t.rst;
 }
 
-#define CHUNK_ROWS 12                          // rows per DMA transfer
+#define CHUNK_ROWS 12                          // DMA buffer: this many full rows
+#define BLK_W      32                          // pixels per hashed block
+#define BLKS       (SCR_W / BLK_W)
 static spi_device_handle_t dev;
+static spi_device_interface_config_t devCfg;   // kept for a change of the clock
+static uint8_t  curMhz = CONFIG_ARCADE_TFT_MHZ;
 static uint16_t lut[256];                      // colour index -> RGB565, bytes swapped for SPI
-static uint32_t rowHash[SCR_H];                // what each row held last time
+static uint32_t blkHash[SCR_H][BLKS];          // what each block held last time
 static bool     fullNext = true;               // send everything next time
 static uint16_t *dma[2];
 static uint8_t  madctl = 0x28;                 // landscape (MV), BGR
@@ -58,8 +63,8 @@ static void cmd(uint8_t c, const uint8_t *data = NULL, uint8_t n = 0) {
   }
 }
 
-static void window(uint16_t y0, uint16_t y1) {
-  uint8_t ca[4] = { 0, 0, (SCR_W - 1) >> 8, (SCR_W - 1) & 0xFF };
+static void window(uint16_t x0, uint16_t x1, uint16_t y0, uint16_t y1) {
+  uint8_t ca[4] = { (uint8_t)(x0 >> 8), (uint8_t)x0, (uint8_t)(x1 >> 8), (uint8_t)x1 };
   uint8_t ra[4] = { (uint8_t)(y0 >> 8), (uint8_t)y0, (uint8_t)(y1 >> 8), (uint8_t)y1 };
   cmd(0x2A, ca, 4);
   cmd(0x2B, ra, 4);
@@ -253,8 +258,8 @@ void Gfx::begin() {
   bus.quadhd_io_num = -1;
   bus.max_transfer_sz = SCR_W * CHUNK_ROWS * 2;
   spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
-  spi_device_interface_config_t d = {};
-  d.clock_speed_hz = CONFIG_ARCADE_TFT_MHZ * 1000 * 1000;
+  spi_device_interface_config_t &d = devCfg;
+  d.clock_speed_hz = CONFIG_ARCADE_TFT_MHZ * 1000 * 1000;   // the commands always go out at this speed
   d.mode = 0;
   d.spics_io_num = P.cs;
   d.queue_size = 3;
@@ -349,48 +354,84 @@ void Gfx::sleep(bool off) {
   fullNext = true;
 }
 
+// faster clock for the pictures; long wires may not take it (settings)
+void Gfx::setSpeed(uint8_t mhz) {
+  if (!mhz || mhz == curMhz || !dev) return;
+  spi_device_interface_config_t d = devCfg;
+  d.clock_speed_hz = mhz * 1000 * 1000;
+  spi_device_handle_t h;
+  if (spi_bus_remove_device(dev) != ESP_OK) return;
+  if (spi_bus_add_device(SPI2_HOST, &d, &h) != ESP_OK) {       // back to the old one
+    spi_bus_add_device(SPI2_HOST, &devCfg, &dev);
+    curMhz = (uint8_t)(devCfg.clock_speed_hz / 1000000);
+    return;
+  }
+  dev = h;
+  devCfg = d;
+  curMhz = mhz;
+  fullNext = true;
+}
+
 // ---------------- frame ----------------
-static uint32_t hashRow(const uint8_t *p) {
-  uint32_t h = 2166136261u;
-  const uint32_t *w = (const uint32_t *)p;
-  for (int i = 0; i < SCR_W / 4; i++) { h ^= w[i]; h *= 16777619u; }
-  return h;
+// the changed blocks of row y as a bit mask (all of them after fullNext);
+// the row's hashes are brought up to date
+static uint16_t rowChanged(const uint8_t *fb, int16_t y) {
+  const uint32_t *w = (const uint32_t *)(fb + y * SCR_W);
+  uint16_t m = 0;
+  for (int b = 0; b < BLKS; b++, w += BLK_W / 4) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < BLK_W / 4; i++) { h ^= w[i]; h *= 16777619u; }
+    if (fullNext || h != blkHash[y][b]) { m |= (uint16_t)(1 << b); blkHash[y][b] = h; }
+  }
+  return m;
 }
 
 void Gfx::send() {
+  if (overlay) overlay();
   int16_t y = 0;
   uint8_t which = 0;
   int pending = 0;
+  uint16_t m = 0;
+  bool have = false;                           // m holds row y already
   while (y < SCR_H) {
-    // find the next run of changed rows
-    uint32_t h = hashRow(fb + y * SCR_W);
-    if (!fullNext && h == rowHash[y]) { y++; continue; }
+    if (!have) m = rowChanged(fb, y);
+    have = false;
+    if (!m) { y++; continue; }
+    // a run of changed rows; the window spans every changed block in it
     int16_t y0 = y;
-    while (y < SCR_H) {
-      uint32_t hh = hashRow(fb + y * SCR_W);
-      if (!fullNext && hh == rowHash[y]) break;
-      rowHash[y] = hh;
-      y++;
+    uint16_t span = m;
+    for (y++; y < SCR_H; y++) {
+      m = rowChanged(fb, y);
+      if (!m) break;
+      span |= m;
     }
+    int16_t b0 = 0, b1 = BLKS - 1;
+    while (!(span & (1 << b0))) b0++;
+    while (!(span & (1 << b1))) b1--;
+    int16_t x0 = b0 * BLK_W, w = (b1 - b0 + 1) * BLK_W;
     // wait for what is still in flight before changing the window
     spi_transaction_t *done;
     while (pending) { spi_device_get_trans_result(dev, &done, portMAX_DELAY); pending--; }
-    window((uint16_t)y0, (uint16_t)(y - 1));
+    window((uint16_t)x0, (uint16_t)(x0 + w - 1), (uint16_t)y0, (uint16_t)(y - 1));
     static spi_transaction_t tr[2];
-    for (int16_t r = y0; r < y; r += CHUNK_ROWS) {
-      int16_t n = (y - r) < CHUNK_ROWS ? (y - r) : CHUNK_ROWS;
+    const int16_t rows = (SCR_W * CHUNK_ROWS) / w;
+    for (int16_t r = y0; r < y; r += rows) {
+      int16_t n = (y - r) < rows ? (y - r) : rows;
       if (pending == 2) { spi_device_get_trans_result(dev, &done, portMAX_DELAY); pending--; }   // this buffer is free again
       uint16_t *out = dma[which];
-      const uint8_t *src = fb + r * SCR_W;
-      for (int i = 0; i < n * SCR_W; i++) out[i] = lut[src[i]];
+      for (int16_t k = 0; k < n; k++) {
+        const uint8_t *src = fb + (r + k) * SCR_W + x0;
+        for (int16_t i = 0; i < w; i++) *out++ = lut[src[i]];
+      }
       memset(&tr[which], 0, sizeof(spi_transaction_t));
-      tr[which].length = n * SCR_W * 16;
-      tr[which].tx_buffer = out;
+      tr[which].length = n * w * 16;
+      tr[which].tx_buffer = dma[which];
       tr[which].user = (void *)1;
       spi_device_queue_trans(dev, &tr[which], portMAX_DELAY);
       pending++;
       which ^= 1;
     }
+    have = y < SCR_H;                          // the row that ended the run: m is its mask (0)
   }
   spi_transaction_t *done;
   while (pending) { spi_device_get_trans_result(dev, &done, portMAX_DELAY); pending--; }

@@ -41,8 +41,7 @@ void breakoutRun() {
       if (dt > 40) dt = 40;
       last = now;
       int32_t pv = (int32_t)dt * 256 * 24 / 100;                // about 240 px/s
-      if (btnHeld(B_LEFT))  px -= pv;
-      if (btnHeld(B_RIGHT)) px += pv;
+      px += pv * keyAxis(B_LEFT, B_RIGHT) / 256;
       int32_t lo = (pw / 2 + 2) * 256, hi = (SCR_W - pw / 2 - 2) * 256;
       if (px < lo) px = lo;
       if (px > hi) px = hi;

@@ -48,6 +48,36 @@ static void tiltToggle() {
   btnClear();
 }
 
+// a faster panel clock is kept only when the player can still read this
+static void screenSpeed(uint8_t mhz) {
+  uint8_t old = cfgSpi;
+  gfx.setSpeed(mhz);
+  uint32_t t0 = millis();
+  bool ok = false;
+  btnClear();
+  while (millis() - t0 < 10000) {
+    if (!poll()) break;
+    if (btn(B_OK)) { ok = true; break; }
+    uint32_t t = millis() - t0;
+    for (int16_t y = 0; y < SCR_H; y += 8)                 // moving bars: every row changes
+      gfx.fill(0, y, SCR_W, 8, colLerp(C::DKBLUE, C::PURPLE, (uint8_t)((y * 2 + t / 8) & 0xFF)));
+    gfx.rbox(20, 50, SCR_W - 40, 140, 10, C::BLACK);
+    char b[32];
+    snprintf(b, sizeof(b), "SCREEN %u MHz", mhz);
+    gfx.center(62, b, C::WHITE, F_BOLD);
+    gfx.center(100, "picture clean? press OK", C::YELLOW);
+    snprintf(b, sizeof(b), "back to %u MHz in %lu s", old, (unsigned long)((10999 - t) / 1000));
+    gfx.center(130, b, C::LTGREY);
+    gfx.center(166, "a key held while switching on resets it", C::GREY, F_SMALL);
+    gfx.send();
+  }
+  if (!ok) gfx.setSpeed(mhz = old);
+  cfgSpi = mhz;
+  saveCfg();
+  sfx(ok ? 1500 : 300, 80);
+  btnClear();
+}
+
 void settingsRun() {
 #if CONFIG_IDF_TARGET_ESP32S3
   static const uint8_t CLOCKS[3] = { 80, 160, 240 };
@@ -55,7 +85,8 @@ void settingsRun() {
   static const uint8_t CLOCKS[3] = { 40, 80, 160 };
 #endif
   static const uint8_t MINS[5] = { 0, 1, 5, 15, 30 };
-  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_TLEVEL, L_TSENS, L_KEYS, L_BUZZER, L_BAT, L_WLAN, L_VERSION, L_BACK, L_N };
+  static const uint8_t SPEEDS[3] = { 20, 27, 40 };
+  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_SPEED, L_FPS, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_TLEVEL, L_TSENS, L_KEYS, L_BUZZER, L_BAT, L_WLAN, L_VERSION, L_BACK, L_N };
   uint8_t sel = 0, top = 0;
   const uint8_t ROWS = 7;
   btnClear();
@@ -83,6 +114,15 @@ void settingsRun() {
         if (left && i) i--;
         cfgSleep = MINS[i];
       } else if (sel == L_SOUND) cfgMute = !cfgMute;
+      else if (sel == L_SPEED) {
+        uint8_t i = 0;
+        for (uint8_t k = 0; k < 3; k++) if (SPEEDS[k] <= cfgSpi) i = k;
+        if (right && i < 2) i++;
+        else if (left && i) i--;
+        if (SPEEDS[i] < cfgSpi) { gfx.setSpeed(SPEEDS[i]); cfgSpi = SPEEDS[i]; }   // slower is always safe
+        else if (SPEEDS[i] > cfgSpi) screenSpeed(SPEEDS[i]);
+      }
+      else if (sel == L_FPS)    { cfgFps = !cfgFps; applyDisplay(); }
       else if (sel == L_FLIP)   { cfgDisp ^= 1; applyDisplay(); }
       else if (sel == L_SWAP)   { cfgDisp ^= 2; applyDisplay(); }
       else if (sel == L_INVERT) { cfgDisp ^= 4; applyDisplay(); }
@@ -102,6 +142,7 @@ void settingsRun() {
       else if (sel == L_TLEVEL)  tiltLevelScreen();
       else if (sel == L_BACK)    return;
       else if (sel == L_SOUND)   { cfgMute = !cfgMute; saveCfg(); }
+      else if (sel == L_FPS)     { cfgFps = !cfgFps; saveCfg(); applyDisplay(); }
       else if (sel >= L_FLIP && sel <= L_INVERT) { cfgDisp ^= (uint8_t)(1 << (sel - L_FLIP)); saveCfg(); applyDisplay(); }
       btnClear();
     }
@@ -113,6 +154,8 @@ void settingsRun() {
     if (cfgSleep) snprintf(line[L_SLEEP], 36, "sleep after  %u min", cfgSleep);
     else snprintf(line[L_SLEEP], 36, "sleep after  never");
     snprintf(line[L_SOUND], 36, "sound        %s", cfgMute ? "off" : "on");
+    snprintf(line[L_SPEED], 36, "screen speed %u MHz", cfgSpi);
+    snprintf(line[L_FPS], 36, "show fps     %s", cfgFps ? "on" : "off");
     snprintf(line[L_FLIP], 36, "screen       %s", cfgDisp & 1 ? "turned" : "normal");
     snprintf(line[L_SWAP], 36, "red/blue     %s", cfgDisp & 2 ? "swapped" : "normal");
     snprintf(line[L_INVERT], 36, "colours      %s", cfgDisp & 4 ? "inverted" : "normal");
@@ -143,6 +186,7 @@ void settingsRun() {
     if (sel == L_TILT) gfx.center(SCR_H - 14, "LEFT / RIGHT on/off - OK set up again", C::GREY, F_SMALL);
     else if (sel == L_TLEVEL) gfx.center(SCR_H - 14, "OK = save how you hold it now as level", C::GREY, F_SMALL);
     else if (sel == L_TSENS) gfx.center(SCR_H - 14, "LEFT / RIGHT: how far to tilt", C::GREY, F_SMALL);
+    else if (sel == L_SPEED) gfx.center(SCR_H - 14, "faster = more fps; long wires may not take it", C::GREY, F_SMALL);
     else if (sel <= L_INVERT) gfx.center(SCR_H - 14, "LEFT / RIGHT change", C::GREY, F_SMALL);
     gfx.send();
   }

@@ -287,6 +287,16 @@ int main() {
     check("lost answer is repeated", A.core.state == LK_PLAYING && B.core.state == LK_PLAYING);
   }
 
+  {  // the games a console offers: this one the nine of LK_CAPS, a colour console Chess too
+    Air a; a.loss = 0; Node A, B; addNode(a, A, 1, "ANNA"); addNode(a, B, 2, "TOM");
+    B.core.caps = LK_CAPS | LK_CAP_CHESS;
+    a.step(2500);
+    const LkPeer &pb = A.core.peer(idxOf(A.core, B)), &pa = B.core.peer(idxOf(B.core, A));
+    check("an OLED console offers its games but no Chess", (pa.caps & LK_CAPS) == LK_CAPS && !(pa.caps & LK_CAP_CHESS));
+    check("a colour console's beacon says Chess", (pb.caps & LK_CAP_CHESS) && LinkCore::capOf(LKG_CHESS) == LK_CAP_CHESS);
+    check("Chess is no game of the OLED console", LKG_CHESS > LKG_LAST && !LinkCore::realtime(LKG_CHESS));
+  }
+
   printf("%s\n", fails ? "### FAILURES ###" : "all checks passed");
   return fails ? 1 : 0;
 }

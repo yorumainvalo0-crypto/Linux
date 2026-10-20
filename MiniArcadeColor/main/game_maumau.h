@@ -29,6 +29,10 @@ static struct { bool on; uint8_t face; int16_t x, y; } mmFly;
 static uint8_t mmShown[MM_MAXP];        // while dealing: cards each one has got so far (255 = all)
 
 static const char *const MM_NAMES[4] = { "YOU", "CPU1", "CPU2", "CPU3" };
+// the player sitting at the bottom and the names; another seat in an online game (multiplayer.h)
+static uint8_t mmMe = 0;
+static const char *const *mmWho = MM_NAMES;
+static uint8_t mmSeat(uint8_t k, uint8_t players) { return (uint8_t)((mmMe + k) % players); }   // k-th seat from the bottom
 static const char *const MM_RN[8] = { "7", "8", "9", "10", "J", "Q", "K", "A" };
 static const char *const MM_SN[4] = { "clubs", "spades", "hearts", "diamonds" };
 
@@ -121,13 +125,14 @@ static void mmDraw(const MauMau &g, int8_t cursor, const char *msg) {
   // the others: name, cards (fanned backs), a frame round the one to move
   for (uint8_t k = 1; k < g.players; k++) {
     int16_t cx = mmZoneX(k, g.players);
-    uint8_t n = MauMau::count(g.hand[k]);
-    if (n > mmShown[k]) n = mmShown[k];
+    uint8_t p = mmSeat(k, g.players);
+    uint8_t n = MauMau::count(g.hand[p]);
+    if (n > mmShown[p]) n = mmShown[p];
     uint8_t shown = n > 10 ? 10 : n;
-    bool act = g.turn == k && !g.winner;
+    bool act = g.turn == p && !g.winner;
     if (act) { gfx.rbox(cx - 50, 29, 100, 52, 8, rgb(0, 80, 30)); gfx.rframe(cx - 50, 29, 100, 52, 8, C::YELLOW); }
     char b[16];
-    snprintf(b, sizeof(b), "%s %u", MM_NAMES[k], n);
+    snprintf(b, sizeof(b), "%s %u", mmWho[p], n);
     gfx.text(cx - Gfx::width(b, F_SMALL) / 2, 32, b, act ? C::YELLOW : C::WHITE, F_SMALL);
     int16_t x0 = cx - (shown ? (shown - 1) * 6 + 14 : 0) / 2;
     for (uint8_t i = 0; i < shown; i++) mmBack(x0 + i * 6, 44, 14, 22);
@@ -156,8 +161,8 @@ static void mmDraw(const MauMau &g, int8_t cursor, const char *msg) {
   }
   gfx.center(164, mmMsg, C::WHITE, F_SMALL);
   // own hand along the bottom, the draw place first
-  uint8_t cards[MM_CARDS], n = mmHand(g, 0, cards);
-  if (n > mmShown[0]) n = mmShown[0];
+  uint8_t cards[MM_CARDS], n = mmHand(g, mmMe, cards);
+  if (n > mmShown[mmMe]) n = mmShown[mmMe];
   uint8_t slots = n + 1, first;
   int16_t step;
   mmLayout(slots, cursor, first, step);
@@ -168,11 +173,11 @@ static void mmDraw(const MauMau &g, int8_t cursor, const char *msg) {
     int16_t y = MM_HY - (on ? 10 : 0);
     if (s == 0) {
       mmBack(x, y, MM_HW, MM_HH);
-      const char *lab = g.turn == 0 && g.drew ? "PASS" : "DRAW";
+      const char *lab = g.turn == mmMe && g.drew ? "PASS" : "DRAW";
       gfx.rbox(x + 3, y + 18, MM_HW - 6, 14, 3, C::BLACK);
       gfx.text(x + (MM_HW - Gfx::width(lab, F_SMALL)) / 2, y + 21, lab, on ? C::YELLOW : C::WHITE, F_SMALL);
     } else {
-      bool fits = g.turn == 0 && g.canPlay(cards[s - 1]);
+      bool fits = g.turn == mmMe && g.canPlay(cards[s - 1]);
       mmCard(x, y, MM_HW, MM_HH, cards[s - 1], on);
       if (cursor >= 0 && !fits) gfx.dim(x + 1, y + 1, step < MM_HW ? step - 1 : MM_HW - 2, MM_HH - 2);
     }
@@ -235,7 +240,7 @@ static uint8_t mmWish(bool &left) {
 /* The keys of the player on its turn: returns a move (see boardgames.h)
    or -1 (-2 = left the game). A jack asks for the wished suit.       */
 static int16_t mmInput() {
-  uint8_t cards[MM_CARDS], n = mmHand(mm, 0, cards);
+  uint8_t cards[MM_CARDS], n = mmHand(mm, mmMe, cards);
   if (mmCur > n) mmCur = n;
   if (btn(B_LEFT)  && mmCur > 0) { mmCur--; sfx(700, 8); }
   if (btn(B_RIGHT) && mmCur < n) { mmCur++; sfx(700, 8); }
@@ -262,20 +267,20 @@ static void mmSay(const char *who, uint8_t m) {
    ones come from the draw pile. false = left the game.             */
 static bool mmPlay(uint8_t who, uint8_t m) {
   int16_t hx, hy;                                               // the player's place on the table
-  if (who == 0) {
-    uint8_t cards[MM_CARDS], n = mmHand(mm, 0, cards), first, slot = n;
+  if (who == mmMe) {
+    uint8_t cards[MM_CARDS], n = mmHand(mm, mmMe, cards), first, slot = n;
     int16_t step;
     if (m != MM_DRAW && m != MM_PASS) for (uint8_t i = 0; i < n; i++) if (cards[i] == (m & 31)) slot = i + 1;
     mmLayout(n + 1, (int8_t)slot, first, step);
     hx = 4 + (slot - first) * step; hy = MM_HY;
-  } else { hx = mmZoneX(who, mm.players) - MM_HW / 2; hy = 36; }
+  } else { hx = mmZoneX((uint8_t)((who + mm.players - mmMe) % mm.players), mm.players) - MM_HW / 2; hy = 36; }
   if (m == MM_DRAW && mm.nDeck + mm.nPile > 1) {
     if (!mmFlyCard(0xFF, MM_DX, MM_DY, hx, hy, 380)) return false;
   } else if (m != MM_DRAW && m != MM_PASS) {
     if (!mmFlyCard(m & 31, hx, hy, MM_PX + (MM_BW - MM_HW) / 2, MM_PY + (MM_BH - MM_HH) / 2, 420)) return false;
   }
   mm.move(m);
-  mmSay(MM_NAMES[who], m);
+  mmSay(mmWho[who], m);
   sfx(m == MM_DRAW ? 400 : 800, 25);
   return true;
 }

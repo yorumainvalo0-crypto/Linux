@@ -26,6 +26,7 @@
 #include "tilt.h"
 #include "wlan.h"
 #include "settings.h"
+#include "fx.h"
 #include "game_snake.h"
 #include "game_tetris.h"
 #include "game_pong.h"
@@ -38,6 +39,7 @@
 #include "game_lander.h"
 #include "game_doom.h"
 #include "game_mine.h"
+#include "game_mine3d.h"
 #include "game_tunnel.h"
 #include "game_pacman.h"
 #include "game_bomber.h"
@@ -57,7 +59,9 @@
 #include "game_battleship.h"
 #include "game_checkers.h"
 #include "game_maumau.h"
+#include "game_skat.h"
 #include "game_minigolf.h"
+#include "game_palace.h"
 #include "game_chess.h"
 
 // =========================================================
@@ -98,12 +102,15 @@ static const char *const IC_SETTINGS[12] = {
   ".....ss.....", "..s.ssss.s..", ".ssssssssss.", "..sss..sss..", ".sss....sss.", "ssss....ssss",
   "ssss....ssss", ".sss....sss.", "..sss..sss..", ".ssssssssss.", "..s.ssss.s..", ".....ss....." };
 
+#include "multiplayer.h"           // online play: uses the games above and the icons
+
 static const Game GAMES[] = {
   { "Snake",       "SNK", snakeRun,       IC_SNAKE,       C::GREEN,         NULL },
   { "Tetris",      "TET", tetrisRun,      IC_TETRIS,      C::PURPLE,        NULL },
   { "Pong",        "PNG", pongRun,        IC_PONG,        C::BLUE,          NULL },
   { "Doom",        "DOM", doomRun,        IC_DOOM,        C::RED,           NULL },
   { "Mine",        "MIN", mineRun,        IC_MINE,        C::GREEN,         NULL },
+  { "Mine 3D",     "MN3", mine3dRun,      IC_MINE3D,      rgb(40,170,110),  NULL },
   { "Tunnel 3D",   "TUN", tunnelRun,      IC_TUNNEL,      C::CYAN,          NULL },
   { "Flappy",      "FLP", flappyRun,      IC_FLAPPY,      C::ORANGE,        NULL },
   { "Invaders",    "INV", invadersRun,    IC_INVADERS,    C::GREEN,         NULL },
@@ -126,13 +133,16 @@ static const Game GAMES[] = {
   { "Match 3",     "M3X", match3Run,      IC_MATCH3,      C::PINK,          NULL },
   { "Checkers",    "CHK", checkersRun,    IC_CHECKERS,    C::BROWN,         NULL },
   { "Mau-Mau",     "MAU", maumauRun,      IC_MAUMAU,      C::RED,           NULL },
+  { "Skat",        "SKT", skatRun,        IC_SKAT,        C::DKGRN,         NULL },
   { "Bomberman",   "BMB", bomberRun,      IC_BOMBER,      C::ORANGE,        NULL },
   { "Cave",        "CAV", caveRun,        IC_CAVE,        C::BROWN,         NULL },
   { "Stack",       "STK", stackRun,       IC_STACK,       C::CYAN,          NULL },
   { "Minigolf",    "GLF", minigolfRun,    IC_MINIGOLF,    C::GREEN,         NULL },
   { "Lander",      "LND", landerRun,      IC_LANDER,      C::GREY,          NULL },
+  { "Palace",      "PAL", palaceRun,      IC_PALACE,      rgb(210,150,40),  NULL },
   // more games come here (before the entries with a tag)
   { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
+  { "Online",      "ONL", onlineRun,      IC_ONLINE,      MP_ACCENT,        "nearby" },
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };
 static const uint8_t GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
@@ -338,6 +348,7 @@ void setup() {
   // keys: first start, or a key held while starting
   bool held = false;
   if (havePins) { delay(300); for (uint8_t i = 0; i < 4; i++) if (rawPressed(i)) held = true; }
+  if (held && cfgSpi != CONFIG_ARCADE_TFT_MHZ) { cfgSpi = CONFIG_ARCADE_TFT_MHZ; saveCfg(); }   // way back from a white screen
   if (!havePins || held) learnKeys();
   if (!soundAsked) {
     soundSetup();
@@ -348,6 +359,7 @@ void setup() {
   batDetect();
   applyPinModes();
   tiltStart();
+  gfx.setSpeed(cfgSpi);
   fwUnconfirmed = fwPending();
   versionRun(true);
 }

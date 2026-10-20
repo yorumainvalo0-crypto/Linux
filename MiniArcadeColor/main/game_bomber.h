@@ -75,9 +75,14 @@ static void bombFire(const RtBomb &g, int16_t sx, int16_t sy, uint8_t x, uint8_t
   gfx.fill(sx + 6, sy + 6, BOMB_T - 12, BOMB_T - 12, C::WHITE);
 }
 
+// the names in the HUD and whose bombs and fire it shows; others in an online game (multiplayer.h)
+static const char *const BOMB_NAMES[RB_MAXP] = { "YOU", "CPU1", "CPU2", "CPU3" };
+static const char *const *bombWho = BOMB_NAMES;
+static uint8_t bombMe = 0;
+
 /* the field, the players and the HUD below; msg over the field */
 static void bombDraw(const RtBomb &g, const char *msg, uint32_t now) {
-  static const char *const NAMES[RB_MAXP] = { "YOU", "CPU1", "CPU2", "CPU3" };
+  const char *const *NAMES = bombWho;
   gfx.fill(0, TOP_H, SCR_W, SCR_H - TOP_H, rgb(20, 40, 25));
   for (uint8_t y = 0; y < RB_H; y++)
     for (uint8_t x = 0; x < RB_W; x++) {
@@ -112,7 +117,7 @@ static void bombDraw(const RtBomb &g, const char *msg, uint32_t now) {
     gfx.text(x + 21, BOMB_HUD + 2, NAMES[p], g.alive[p] ? C::WHITE : C::GREY);
     if (!g.alive[p]) gfx.line(x + 2, BOMB_HUD + 20, x + 18, BOMB_HUD + 2, C::RED);
   }
-  snprintf(b, sizeof(b), "BOMBS %u   FIRE %u", g.maxB[0], g.range[0]);
+  snprintf(b, sizeof(b), "BOMBS %u   FIRE %u", g.maxB[bombMe], g.range[bombMe]);
   gfx.text(8, BOMB_HUD + 26, b, C::LTGREY, F_SMALL);
   uint16_t left = g.ticks < RB_TIME ? (RB_TIME - g.ticks) / 50 : 0;
   snprintf(b, sizeof(b), "%u:%02u", left / 60, left % 60);

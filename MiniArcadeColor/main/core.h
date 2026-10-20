@@ -122,6 +122,7 @@ void applyPinModes() {
 }
 
 static bool tiltKey[4];                  // the gyroscope tilts like a key (tilt.h)
+static int16_t tiltAn[4];                // ... and how far: 0..256 towards each key
 static void (*tiltHook)() = NULL;        // reads the gyroscope, before the keys
 static int8_t gyroSda = -1, gyroScl = -1; // its pins, saved as "gsda" / "gscl" (+1, 0 = none)
 static bool   cfgTilt = false;           // tilt control switched on (saved as "tilt")
@@ -194,6 +195,19 @@ bool btn(uint8_t i)     { if (bEdge[i]) { bEdge[i] = false; return true; } retur
 bool btnTap(uint8_t i)  { if (bTap[i]) { bTap[i] = false; return true; } return false; }
 bool btnHeld(uint8_t i) { return i == B_OK ? okDown : (kDown[i] && !kChord[i]); }
 
+/* Steering without steps: -256..256 for a pair of keys. A key gives the
+   full value, tilting as much as the console is tilted.               */
+int16_t keyAxis(uint8_t neg, uint8_t pos) {
+  if (btnHeld(pos) && !tiltKey[pos]) return 256;
+  if (btnHeld(neg) && !tiltKey[neg]) return -256;
+  return (int16_t)(tiltAn[pos] - tiltAn[neg]);
+}
+// whole steps of up to `full` per tick from an axis, the rest carried over
+struct AxisStep {
+  int32_t rest = 0;
+  int32_t operator()(int16_t a, int32_t full) { rest += a * full; int32_t s = rest / 256; rest -= s * 256; return s; }
+};
+
 /* Called whenever a screen is entered or left: a key still held is muted
    until it is released - letting go of OK after "hold to leave" would
    otherwise start the game again.                                     */
@@ -214,6 +228,8 @@ static uint8_t  cfgClock  = 160;      // cpu clock in MHz
 static uint8_t  cfgSleep  = 5;        // minutes without a key press, 0 = never
 static bool     cfgMute   = false;
 static uint8_t  cfgDisp   = 0;        // 1 = upside down, 2 = red/blue swapped, 4 = inverted
+static uint8_t  cfgSpi    = CONFIG_ARCADE_TFT_MHZ;   // panel clock for the pictures
+static bool     cfgFps    = false;    // frames per second in the corner
 static uint32_t lastInput = 0;        // for the sleep timer
 static uint8_t  runClock  = 160;      // the clock this start runs at
 
@@ -226,12 +242,29 @@ void saveCfg() {
   prefs.putUShort("slp", cfgSleep);
   prefs.putUShort("mut", cfgMute);
   prefs.putUShort("dsp", cfgDisp);
+  prefs.putUShort("spi", cfgSpi);
+  prefs.putUShort("fps", cfgFps);
   prefs.end();
+}
+
+// the frames that really went out in the last second, bottom right
+static void fpsOverlay() {
+  static uint32_t t0 = 0;
+  static uint16_t n = 0, shown = 0;
+  uint32_t now = millis();
+  n++;
+  if (now - t0 >= 1000) { shown = (uint16_t)(n * 1000UL / (now - t0)); n = 0; t0 = now; }
+  char b[12];
+  snprintf(b, sizeof(b), "%u fps", shown);
+  int16_t w = gfx.width(b, F_SMALL) + 4;
+  gfx.fill(SCR_W - w, SCR_H - 11, w, 11, C::BLACK);
+  gfx.text(SCR_W - w + 2, SCR_H - 10, b, C::LIME, F_SMALL);
 }
 
 void applyDisplay() {
   gfx.setOrientation(cfgDisp & 1, !(cfgDisp & 2), cfgDisp & 4);
   gfx.setBacklight(cfgBright);
+  gfx.overlay = cfgFps ? fpsOverlay : nullptr;
 }
 
 static uint8_t  sndPin = 255;          // 255 = no buzzer
@@ -285,6 +318,8 @@ bool loadPins() {
   cfgSleep  = (uint8_t)prefs.getUShort("slp", 5);
   cfgMute   = prefs.getUShort("mut", 0) != 0;
   cfgDisp   = (uint8_t)prefs.getUShort("dsp", 0);
+  cfgSpi    = (uint8_t)prefs.getUShort("spi", CONFIG_ARCADE_TFT_MHZ);
+  cfgFps    = prefs.getUShort("fps", 0) != 0;
   bool ok = prefs.getUShort("pset", 0) == 3;      // version 3 = four keys + optional OK
   if (ok)
     for (uint8_t i = 0; i < B_COUNT; i++) {
@@ -477,11 +512,18 @@ bool poll(bool clear = true) {          // clear = false keeps the picture (dial
 
 // ---------------- shared drawing ----------------
 #define TOP_H 26                       // status bar on top of the games
+static const char *barRight = NULL;    // online games: this instead of score and best (multiplayer.h)
 
 void statusBar(const char *title, uint16_t score, uint16_t best, col accent = C::BLUE) {
   gfx.gradient(0, 0, SCR_W, TOP_H, colLight(accent), colDark(accent, 2));
   gfx.hline(0, TOP_H - 1, SCR_W, colLight(accent, 2));
   gfx.textShadow(6, 5, title, C::WHITE, C::BLACK, F_TEXT);
+  if (barRight) {
+    Font f = Gfx::width(barRight) <= SCR_W - 56 - Gfx::width(title) ? F_TEXT : F_SMALL;
+    gfx.textShadow(SCR_W - 34 - Gfx::width(barRight, f), f == F_TEXT ? 5 : 9, barRight, C::WHITE, C::BLACK, f);
+    batIcon(SCR_W - 28, 7);
+    return;
+  }
   char b[24];
   snprintf(b, sizeof(b), "%u", score);
   int16_t x = gfx.text(150, 5, b, C::YELLOW, F_TEXT);

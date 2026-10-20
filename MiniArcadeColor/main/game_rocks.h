@@ -147,6 +147,7 @@ void asteroidsRun() {
     again = false;
     int32_t sx = (SCR_W / 2) * 256, sy = ((RK_TOP + SCR_H) / 2) * 256, svx = 0, svy = 0;
     uint8_t ang = 192, lives = 3, wave = 1;                     // 192 = nose up
+    AxisStep turn;                                              // tilting: turn as far as tilted
     uint16_t safe = RK_SAFE, score = 0;
     memset(rk->rock, 0, sizeof(rk->rock));
     memset(rk->shot, 0, sizeof(rk->shot));
@@ -162,8 +163,7 @@ void asteroidsRun() {
       if ((int32_t)(now - tick) > 40) tick = now - 40;          // a slow frame: catch up at most 40 ms
       while ((int32_t)(now - tick) >= 0 && !over) {
         tick += RK_TICK;
-        if (btnHeld(B_LEFT))  ang -= 4;
-        if (btnHeld(B_RIGHT)) ang += 4;
+        ang = (uint8_t)(ang + turn(keyAxis(B_LEFT, B_RIGHT), 4));
         flame = btnHeld(B_UP);
         if (flame) { svx += RK_COS(ang) * 5 / 64; svy += RK_SIN(ang) * 5 / 64; if ((tick / 60) % 2) sfx(70, 20); }
         if (svx * svx + svy * svy > 600 * 600) { svx = svx * 19 / 20; svy = svy * 19 / 20; }   // speed limit

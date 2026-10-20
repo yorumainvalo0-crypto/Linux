@@ -47,9 +47,9 @@ static void pacPos(const RmEnt &e, uint8_t period, int16_t *x, int16_t *y) {
   *y = (int16_t)(PAC_Y0 + e.y * PAC_T + RtPac::dy(e.dir) * off);
 }
 
-static void pacMan(int16_t x, int16_t y, uint8_t face, uint8_t open) {
+static void pacMan(int16_t x, int16_t y, uint8_t face, uint8_t open, col body = C::YELLOW) {
   int16_t cx = x + 5, cy = y + 5;
-  gfx.disc(cx, cy, 5, C::YELLOW);
+  gfx.disc(cx, cy, 5, body);
   if (!open) return;
   int16_t w = open == 1 ? 3 : 6;                     // mouth, towards where he looks
   int16_t ex = cx + 7 * RtPac::dx(face), ey = cy + 7 * RtPac::dy(face);

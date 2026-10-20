@@ -24,12 +24,14 @@ static struct {
   uint8_t  fp, mode;
   uint16_t score;
   bool     two;
+  bool     flip;                       // online as player 1: the board turned, own side at the bottom
+  const char *who[2];                  // online: the names of player 0 / 1, NULL = the usual
 } ckV;
 
-// screen square <-> board square; player 0 is always at the bottom
-static int8_t ckFromScreen(uint8_t s) { return Checkers::at(s / 8, s % 8); }
-static int16_t ckSx(int8_t i) { int8_t c; Checkers::rc((uint8_t)i, &c); return CK_X + c * CK_C + CK_C / 2; }
-static int16_t ckSy(int8_t i) { int8_t c, r = Checkers::rc((uint8_t)i, &c); return CK_Y + r * CK_C + CK_C / 2; }
+// screen square <-> board square; player 0 at the bottom unless flipped
+static int8_t ckFromScreen(uint8_t s) { if (ckV.flip) s = 63 - s; return Checkers::at(s / 8, s % 8); }
+static int16_t ckSx(int8_t i) { int8_t c; Checkers::rc((uint8_t)i, &c); if (ckV.flip) c = 7 - c; return CK_X + c * CK_C + CK_C / 2; }
+static int16_t ckSy(int8_t i) { int8_t c, r = Checkers::rc((uint8_t)i, &c); if (ckV.flip) r = 7 - r; return CK_Y + r * CK_C + CK_C / 2; }
 
 static const col CK_RED = rgb(204, 34, 34), CK_WHITE = rgb(240, 230, 200);
 
@@ -94,13 +96,13 @@ static void ckDraw(const Checkers &b, int8_t cursor, int8_t sel, const char *lin
   ckBoard(b, cursor, sel);
   gfx.rbox(CK_PX, 32, 94, 200, 8, rgb(45, 25, 10));
   for (uint8_t p = 0; p < 2; p++) {                             // the top side first
-    uint8_t who = 1 - p;
+    uint8_t who = ckV.flip ? p : 1 - p;
     int16_t y = 48 + p * 40;
     ckPiece(CK_PX + 20, y, who ? CK_MAN1 : CK_MAN0);
     char buf[8];
     snprintf(buf, sizeof(buf), "%u", b.count(who));
     gfx.text(CK_PX + 40, y - 8, buf, C::WHITE, F_TEXT);
-    const char *name = ckV.two ? (who ? "top" : "bottom") : (who ? "CPU" : "you");
+    const char *name = ckV.who[who] ? ckV.who[who] : ckV.two ? (who ? "top" : "bottom") : (who ? "CPU" : "you");
     gfx.text(CK_PX + 64, y - 3, name, C::LTGREY, F_SMALL);
     if (!b.winner && b.turn == who) gfx.triangle(CK_PX + 4, y - 5, CK_PX + 4, y + 5, CK_PX + 8, y, C::YELLOW);
   }

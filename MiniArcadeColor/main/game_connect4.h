@@ -126,7 +126,8 @@ static uint8_t c4Think(uint8_t level) {
 static const col C4_DISC[3] = { C::BLACK, C::RED, C::YELLOW };
 
 // what the screen shows besides the board
-static struct { uint8_t mode, turn, tally[3]; uint16_t score; bool two; } c4V;
+// who[]: the names in an online game (multiplayer.h), NULL = YOU / CPU, P1 / P2
+static struct { uint8_t mode, turn, tally[3]; uint16_t score; bool two; const char *who[3]; } c4V;
 
 static void c4Disc(int16_t cx, int16_t cy, uint8_t who) {
   col b = C4_DISC[who];
@@ -197,11 +198,13 @@ static void c4Side(int16_t x0, uint8_t p, bool active, const char *note) {
     gfx.rbox(x0 + 2, 34, C4_SIDE - 4, 160, 8, colDark(base, 3));
     gfx.rframe(x0 + 2, 34, C4_SIDE - 4, 160, 8, base);
   }
-  c4Center(x0, 42, c4V.two ? (p == 1 ? "P1" : "P2") : (p == 1 ? "YOU" : "CPU"), C::WHITE, F_TEXT);
+  c4Center(x0, 42, c4V.who[p] ? c4V.who[p] : c4V.two ? (p == 1 ? "P1" : "P2") : (p == 1 ? "YOU" : "CPU"),
+           C::WHITE, c4V.who[p] && Gfx::width(c4V.who[p]) > C4_SIDE ? F_SMALL : F_TEXT);
   gfx.disc(x0 + C4_SIDE / 2 + 2, 86, C4_R + 1, C::BLACK);
   c4Disc(x0 + C4_SIDE / 2, 84, p);
   char b[8];
-  if (c4V.two || p == 1) {
+  if (c4V.who[p]) {}                                            // online: one game, no tally
+  else if (c4V.two || p == 1) {
     snprintf(b, sizeof(b), "%u", c4V.tally[p]);
     c4Center(x0, 112, b, C::WHITE, F_BOLD);
     c4Center(x0, 140, "wins", C::LTGREY, F_SMALL);

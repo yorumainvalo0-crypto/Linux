@@ -103,6 +103,7 @@ void tunnelRun() {
   while (again) {
     again = false;
     int16_t  shipX = 0, shipY = 0;
+    AxisStep stepX, stepY;                            // tilting: as fast as tilted
     int32_t  travel = 0, ring = 0;          // travel Q8 inside the current ring
     uint16_t score = 0;
     uint8_t  speed = 10;
@@ -116,10 +117,8 @@ void tunnelRun() {
       if ((int32_t)(now - next) > 120) next = now - 120;           // a long frame: no huge jump
       while (!over && (int32_t)(now - next) >= 0) {
         next += TUN_TICK;
-        if (btnHeld(B_LEFT))  shipX -= 3;
-        if (btnHeld(B_RIGHT)) shipX += 3;
-        if (btnHeld(B_UP))    shipY -= 3;
-        if (btnHeld(B_DOWN))  shipY += 3;
+        shipX = (int16_t)(shipX + stepX(keyAxis(B_LEFT, B_RIGHT), 3));
+        shipY = (int16_t)(shipY + stepY(keyAxis(B_UP, B_DOWN), 3));
         shipX = constrain(shipX, -60, 60);
         shipY = constrain(shipY, -40, 40);
         travel += speed;

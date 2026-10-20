@@ -1,6 +1,6 @@
 // MiniArcade Color: Minesweeper. Part of console.cpp, which includes it.
-// 21 x 8 field of 15 px cells in the classic grey look: raised closed
-// cells, coloured numbers, a mine counter, a face and a timer on top.
+// 21 x 8 field of 15 px cells in a cool blue-grey: raised closed cells,
+// classic number colours, a mine counter, a face and a timer on top.
 // OK opens the cell under the cursor, a quick double tap on OK sets or
 // takes away a flag. OK on an open number whose flags are all set opens
 // the rest around it. The first cell opened is never a mine. Points: the
@@ -99,53 +99,70 @@ static bool msWon() {
 }
 
 // ---------------- drawing ----------------
-static void msMine(int16_t px, int16_t py) {
-  int16_t cx = px + 7, cy = py + 7;
-  gfx.hline(cx - 6, cy, 13, C::BLACK);
-  gfx.vline(cx, cy - 6, 13, C::BLACK);
-  gfx.line(cx - 4, cy - 4, cx + 4, cy + 4, C::BLACK);
-  gfx.line(cx - 4, cy + 4, cx + 4, cy - 4, C::BLACK);
-  gfx.disc(cx, cy, 4, C::BLACK);
-  gfx.fill(cx - 2, cy - 2, 2, 2, C::WHITE);
-}
+/* Cells in a cool blue-grey: closed ones raised with a bevel, open ones
+   flat and light with a fine grid. Numbers in their own bold 7 x 9
+   digits and the classic colours, mines and flags as small sprites.  */
+#define MS_FACE  rgb(153, 170, 204)    // a closed cell ...
+#define MS_HI    rgb(204, 212, 255)    // ... its lit edges ...
+#define MS_SH    rgb(102, 127, 153)    // ... and its shaded ones
+#define MS_OPENC GREY4                 // an open cell
+#define MS_GRID  rgb(153, 170, 204)
 
-static void msFlag(int16_t px, int16_t py) {
-  gfx.vline(px + 8, py + 3, 8, C::BLACK);
-  gfx.fill(px + 5, py + 10, 7, 2, C::BLACK);
-  gfx.triangle(px + 8, py + 2, px + 8, py + 8, px + 3, py + 5, C::RED);
-}
+static const char *const MS_DIGIT[8][9] = {
+  { "...##..", "..###..", ".####..", "...##..", "...##..", "...##..", "...##..", ".######", ".######" },
+  { ".#####.", "##...##", ".....##", "....##.", "...##..", "..##...", ".##....", "#######", "#######" },
+  { "######.", "....##.", "...##..", "..####.", ".....##", ".....##", "##...##", "##...##", ".#####." },
+  { "...###.", "..####.", ".##.##.", "##..##.", "##..##.", "#######", "#######", "....##.", "....##." },
+  { "#######", "##.....", "##.....", "######.", ".....##", ".....##", "##...##", "##...##", ".#####." },
+  { "..####.", ".##....", "##.....", "######.", "##...##", "##...##", "##...##", "##...##", ".#####." },
+  { "#######", "#######", ".....##", "....##.", "...##..", "..##...", "..##...", "..##...", "..##..." },
+  { ".#####.", "##...##", "##...##", ".#####.", "##...##", "##...##", "##...##", "##...##", ".#####." } };
+static const col MS_NUM[9] = { 0, rgb(0, 0, 255), rgb(0, 127, 0), rgb(255, 0, 0), rgb(0, 0, 127),
+                               rgb(153, 0, 0), rgb(0, 127, 153), C::BLACK, GREY2 };
 
-static void msCell(uint8_t x, uint8_t y, bool showAll) {
-  static const col NUM[9] = { 0, rgb(0, 0, 255), rgb(0, 128, 0), rgb(255, 0, 0), rgb(0, 0, 128),
-                              rgb(128, 0, 0), rgb(0, 128, 128), C::BLACK, GREY2 };
+static const char *const MS_MINE_SPR[11] = {
+  ".....k.....", "..k..k..k..", "...kkkkk...", "..kwwkkkk..", "..kwkkkkk..", "kkkkkkkkkkk",
+  "..kkkkkkk..", "..kkkkkkk..", "...kkkkk...", "..k..k..k..", ".....k....." };
+static const char *const MS_FLAG_SPR[10] = {
+  "....rrk....", "..rrrrk....", ".rRRrrk....", "rrrrrrk....", "..rrrrk....", "....rrk....",
+  "......k....", "......k....", "....kkkk...", "..kkkkkkkk." };
+static const col MS_SPR_PAL[4] = { C::BLACK, C::WHITE, rgb(230, 30, 30), rgb(255, 150, 150) };
+
+static void msMine(int16_t px, int16_t py) { gfx.sprite(px + 2, py + 2, MS_MINE_SPR, 11, "kwrR", MS_SPR_PAL, 1); }
+static void msFlag(int16_t px, int16_t py) { gfx.sprite(px + 2, py + 3, MS_FLAG_SPR, 10, "kwrR", MS_SPR_PAL, 1); }
+
+static void msCell(uint8_t x, uint8_t y, bool showMine) {
   int16_t px = MS_X0 + x * MS_C, py = MS_Y0 + y * MS_C;
   uint8_t c = ms[y][x];
   bool open = c & MS_OPEN;
-  if (open || (showAll && (c & MS_MINE) && !(c & MS_FLAG))) {
-    gfx.fill(px, py, MS_C, MS_C, (c & MS_MINE) && open ? C::RED : GREY4);   // the mine that went off: red
-    gfx.hline(px, py, MS_C, GREY3);
-    gfx.vline(px, py, MS_C, GREY3);
+  if (open || (showMine && (c & MS_MINE) && !(c & MS_FLAG))) {
+    bool blew = (c & MS_MINE) && open;                      // the mine that went off: red
+    gfx.fill(px, py, MS_C, MS_C, blew ? C::RED : MS_OPENC);
+    gfx.hline(px, py, MS_C, blew ? C::DKRED : MS_GRID);
+    gfx.vline(px, py, MS_C, blew ? C::DKRED : MS_GRID);
     if (c & MS_MINE) msMine(px, py);
     else if (c & 0x0F) {
-      char b[2] = { (char)('0' + (c & 0x0F)), 0 };
-      gfx.text(px + 2, py + 1, b, NUM[c & 0x0F], F_TEXT);
+      uint8_t n = c & 0x0F;
+      gfx.sprite(px + 4, py + 3, MS_DIGIT[n - 1], 9, "#", &MS_NUM[n], 1);
     }
     return;
   }
-  gfx.fill(px, py, MS_C, MS_C, GREY3);                      // closed: raised
+  gfx.fill(px, py, MS_C, MS_C, MS_FACE);                    // closed: raised
   gfx.hline(px, py, MS_C - 1, C::WHITE);
-  gfx.hline(px, py + 1, MS_C - 2, GREY4);
   gfx.vline(px, py, MS_C - 1, C::WHITE);
-  gfx.vline(px + 1, py, MS_C - 2, GREY4);
-  gfx.hline(px + 1, py + MS_C - 1, MS_C - 1, GREY2);
-  gfx.hline(px + 2, py + MS_C - 2, MS_C - 2, C::GREY);
-  gfx.vline(px + MS_C - 1, py + 1, MS_C - 1, GREY2);
-  gfx.vline(px + MS_C - 2, py + 2, MS_C - 2, C::GREY);
+  gfx.hline(px + 1, py + 1, MS_C - 3, MS_HI);
+  gfx.vline(px + 1, py + 1, MS_C - 3, MS_HI);
+  gfx.hline(px + 1, py + MS_C - 1, MS_C - 1, rgb(51, 85, 102));
+  gfx.vline(px + MS_C - 1, py + 1, MS_C - 1, rgb(51, 85, 102));
+  gfx.hline(px + 2, py + MS_C - 2, MS_C - 3, MS_SH);
+  gfx.vline(px + MS_C - 2, py + 2, MS_C - 3, MS_SH);
   if (c & MS_FLAG) {
     msFlag(px, py);
-    if (showAll && !(c & MS_MINE)) {                        // a flag on a free cell: crossed out
+    if (showMine && !(c & MS_MINE)) {                       // a flag on a free cell: crossed out
       gfx.line(px + 2, py + 2, px + 12, py + 12, C::DKRED);
       gfx.line(px + 12, py + 2, px + 2, py + 12, C::DKRED);
+      gfx.line(px + 3, py + 2, px + 12, py + 11, C::DKRED);
+      gfx.line(px + 11, py + 2, px + 2, py + 11, C::DKRED);
     }
   }
 }
@@ -157,17 +174,24 @@ static void msLed(int16_t x, int16_t y, int16_t v) {
   if (v > 999) v = 999;
   snprintf(b, sizeof(b), "%03d", v);
   gfx.fill(x, y, 52, 30, C::BLACK);
-  gfx.frame(x, y, 52, 30, GREY2);
+  gfx.hline(x - 1, y - 1, 53, MS_SH);                      // sunk into the panel
+  gfx.vline(x - 1, y - 1, 31, MS_SH);
+  gfx.hline(x, y + 30, 52, C::WHITE);
+  gfx.vline(x + 52, y, 31, C::WHITE);
   gfx.text(x + 4, y + 4, "888", rgb(64, 0, 0), F_BOLD);    // the unlit segments
   gfx.text(x + 4, y + 4, b, C::RED, F_BOLD);
 }
 
 // the face: 0 playing, 1 waiting for the second tap, 2 boom, 3 won
 static void msFace(int16_t cx, int16_t cy, uint8_t mood) {
-  gfx.fill(cx - 16, cy - 16, 33, 33, GREY3);
-  gfx.frame(cx - 16, cy - 16, 33, 33, C::WHITE);
+  gfx.fill(cx - 16, cy - 16, 33, 33, MS_FACE);              // a raised button
+  gfx.hline(cx - 16, cy - 16, 33, C::WHITE); gfx.vline(cx - 16, cy - 16, 33, C::WHITE);
+  gfx.hline(cx - 16, cy + 16, 33, rgb(51, 85, 102)); gfx.vline(cx + 16, cy - 16, 33, rgb(51, 85, 102));
+  gfx.disc(cx + 1, cy + 1, 12, MS_SH);
   gfx.disc(cx, cy, 12, C::YELLOW);
+  gfx.disc(cx - 2, cy - 2, 9, rgb(255, 255, 102));
   gfx.circle(cx, cy, 12, C::BLACK);
+  gfx.pixel(cx - 6, cy - 8, C::WHITE); gfx.pixel(cx - 7, cy - 7, C::WHITE);
   if (mood == 2) {                                          // X eyes, sad mouth
     for (int8_t s = -1; s <= 1; s += 2) {
       gfx.line(cx + s * 5 - 2, cy - 6, cx + s * 5 + 2, cy - 2, C::BLACK);
@@ -203,21 +227,33 @@ static void msGlide(int16_t &v, int16_t target, uint32_t dt) {
   v += s;
 }
 
-static void msDraw(uint8_t cx, uint8_t cy, bool showAll, int16_t left, uint32_t secs, uint8_t mood,
+// at the end the mines show one after the other: the k-th (row by row) this many ms after the end
+static uint16_t msRevealAt(uint8_t k) { return (uint16_t)(150 + k * 30); }
+
+/* reveal: -1 while playing, else ms since the game ended (wrong flags
+   are crossed out at once, the mines appear one by one)              */
+static void msDraw(uint8_t cx, uint8_t cy, int32_t reveal, int16_t left, uint32_t secs, uint8_t mood,
                    uint8_t diff, uint16_t score, const char *msg, uint32_t dt) {
   statusBar("MINESWEEPER", score, curHigh, C::BLUE);
   gfx.gradient(0, TOP_H, SCR_W, SCR_H - TOP_H, rgb(0, 42, 102), C::NAVY);
-  // counter, face, timer
-  gfx.fill(MS_X0, 30, MS_W * MS_C, 38, GREY3);
+  // counter, face, timer on a raised panel
+  gfx.fill(MS_X0, 30, MS_W * MS_C, 38, MS_FACE);
   gfx.hline(MS_X0, 30, MS_W * MS_C, C::WHITE);
-  gfx.hline(MS_X0, 67, MS_W * MS_C, GREY2);
+  gfx.hline(MS_X0, 31, MS_W * MS_C - 1, MS_HI);
+  gfx.hline(MS_X0, 67, MS_W * MS_C, rgb(51, 85, 102));
+  gfx.hline(MS_X0 + 1, 66, MS_W * MS_C - 1, MS_SH);
   msLed(MS_X0 + 6, 34, left);
   msFace(SCR_W / 2, 49, mood);
   msLed(MS_X0 + MS_W * MS_C - 58, 34, (int16_t)secs);
-  // the field
-  gfx.frame(MS_X0 - 2, MS_Y0 - 2, MS_W * MS_C + 4, MS_H * MS_C + 4, GREY2, 2);
+  // the field, sunk into a frame
+  gfx.frame(MS_X0 - 2, MS_Y0 - 2, MS_W * MS_C + 4, MS_H * MS_C + 4, rgb(51, 85, 102), 2);
+  uint8_t k = 0;
   for (uint8_t y = 0; y < MS_H; y++)
-    for (uint8_t x = 0; x < MS_W; x++) msCell(x, y, showAll);
+    for (uint8_t x = 0; x < MS_W; x++) {
+      bool show = reveal >= 0;
+      if (show && (ms[y][x] & MS_MINE)) show = reveal >= msRevealAt(k++);
+      msCell(x, y, show);
+    }
   if (cx < MS_W) {
     msGlide(msCurX, MS_X0 + cx * MS_C, dt);
     msGlide(msCurY, MS_Y0 + cy * MS_C, dt);
@@ -229,8 +265,12 @@ static void msDraw(uint8_t cx, uint8_t cy, bool showAll, int16_t left, uint32_t 
   char b[48];
   snprintf(b, sizeof(b), "%s - %u mines", DIFF[diff], 20 + diff * 8);
   gfx.text(8, 202, b, C::LTGREY, F_SMALL);
-  gfx.text(8, 216, "OK open   OK OK flag", C::GREY, F_SMALL);
-  gfx.right(SCR_W - 8, 216, "OK on a number: open around", C::GREY, F_SMALL);
+  gfx.text(8, 216, "OK open   OK OK flag", GREY3, F_SMALL);
+  gfx.right(SCR_W - 8, 216, "OK on a number: open around", GREY3, F_SMALL);
+  fxUpdate();
+  fxDraw();
+  fxShakeApply(MS_Y0 - 2, MS_Y0 + MS_H * MS_C + 2);
+  fxFlashApply(MS_X0 - 2, MS_Y0 - 2, MS_W * MS_C + 4, MS_H * MS_C + 4);
   if (msg) {
     int16_t w = Gfx::width(msg, F_BOLD) + 28;
     int16_t x = (SCR_W - w) / 2, y = MS_Y0 + MS_H * MS_C / 2 - 21;
@@ -253,6 +293,7 @@ static void msGame(uint8_t diff) {
     bool     placed = false;
     uint32_t t0 = 0, tapAt = 0, last = gameMillis();
     bool     tapWait = false;                     // one tap seen, maybe a second comes
+    fxReset();
     btnClear();
 
     while (poll()) {
@@ -285,13 +326,35 @@ static void msGame(uint8_t diff) {
       uint32_t secs = placed ? (now - t0) / 1000 : 0;
       uint16_t score = (uint16_t)((secs < 990 ? 1000 - secs : 10) * (diff + 1));   // faster = more points
       if (boom || (placed && msWon())) {
-        if (boom) score = 0;
-        else sfx(1400, 250);
+        if (boom) {                               // the mine that went off explodes
+          score = 0;
+          for (uint8_t y = 0; y < MS_H; y++)
+            for (uint8_t x = 0; x < MS_W; x++)
+              if ((ms[y][x] & MS_MINE) && (ms[y][x] & MS_OPEN)) fxExplode((int16_t)(MS_X0 + x * MS_C + 7), (int16_t)(MS_Y0 + y * MS_C + 7), 2);
+          fxShake(5, 450); fxFlash(C::RED, 300, 100);
+        } else {                                  // fireworks over the cleared field
+          sfx(1400, 250);
+          static const col FW[4] = { C::YELLOW, C::CYAN, C::PINK, C::LIME };
+          for (uint8_t k = 0; k < 4; k++)
+            fxBurst((int16_t)(MS_X0 + 40 + k * 75), (int16_t)(MS_Y0 + 20 + (k & 1) * 70), 10, C::WHITE, FW[k], 140, 900, 20, 2);
+        }
         uint32_t e0 = gameMillis(), l2 = e0;
+        uint8_t popped = 0;
         while (gameMillis() - e0 < 1800) {        // the whole field for a moment
           if (!poll()) return;
           uint32_t t = gameMillis();
-          msDraw(255, 0, true, (int16_t)mines - flags, secs, boom ? 2 : 3, diff, score,
+          uint8_t k = 0;
+          for (uint8_t y = 0; y < MS_H; y++)       // each hidden mine pops up when its turn comes
+            for (uint8_t x = 0; x < MS_W; x++) {
+              if (!(ms[y][x] & MS_MINE)) continue;
+              if (k >= popped && t - e0 >= msRevealAt(k)) {
+                popped = (uint8_t)(k + 1);
+                if (boom && !(ms[y][x] & (MS_OPEN | MS_FLAG)))
+                  fxBurst((int16_t)(MS_X0 + x * MS_C + 7), (int16_t)(MS_Y0 + y * MS_C + 7), 4, C::ORANGE, C::DKRED, 70, 300, 0, 2);
+              }
+              k++;
+            }
+          msDraw(255, 0, (int32_t)(t - e0), (int16_t)mines - flags, secs, boom ? 2 : 3, diff, score,
                  t - e0 > 400 ? (boom ? "BOOM!" : "CLEARED!") : NULL, t - l2);
           l2 = t;
           gfx.send();
@@ -299,7 +362,7 @@ static void msGame(uint8_t diff) {
         again = gameOver(score);
         break;
       }
-      msDraw(cx, cy, false, (int16_t)mines - flags, secs, tapWait ? 1 : 0, diff, placed ? score : (uint16_t)(1000 * (diff + 1)), NULL, dt);
+      msDraw(cx, cy, -1, (int16_t)mines - flags, secs, tapWait ? 1 : 0, diff, placed ? score : (uint16_t)(1000 * (diff + 1)), NULL, dt);
       gfx.send();
     }
   }

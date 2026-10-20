@@ -171,6 +171,7 @@ void racerRun() {
     uint16_t score = 0;
     rcrStart();
     int32_t  carx = (rcrMid(RCR_CARY) - RCR_CW / 2) * RCR_Q;
+    AxisStep steer;                                              // tilting: steer as far as tilted
     uint32_t scroll = 0, next = gameMillis(), flash = 0;      // scroll: the ground, 1/16 px
     bool     crashed = false;
     btnClear();
@@ -179,8 +180,9 @@ void racerRun() {
       uint32_t now = gameMillis();
       for (uint8_t k = 0; k < 3 && !crashed && (int32_t)(now - next) >= 0; k++) {   // at most 45 ms per frame
         next += RCR_TICK;
-        if (btnHeld(B_LEFT)  && carx > 4 * RCR_Q)                    carx -= RCR_STEP;
-        if (btnHeld(B_RIGHT) && carx < (SCR_W - RCR_CW - 4) * RCR_Q) carx += RCR_STEP;
+        carx += steer(keyAxis(B_LEFT, B_RIGHT), RCR_STEP);
+        if (carx < 4 * RCR_Q) carx = 4 * RCR_Q;
+        if (carx > (SCR_W - RCR_CW - 4) * RCR_Q) carx = (SCR_W - RCR_CW - 4) * RCR_Q;
         if (rcrAdvance()) { sfx(1000, 60); flash = now + 1200; }
         scroll += (uint32_t)rcr.spd * RCR_MOVE * 3 / 2;          // the ground passes quicker than the cars
         score = rcr.dist / 40 > 65535 ? 65535 : (uint16_t)(rcr.dist / 40);

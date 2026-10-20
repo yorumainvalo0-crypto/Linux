@@ -350,6 +350,7 @@ void doomRun() {
     again = false;
     int32_t px = 2 * 256 + 128, py = 2 * 256 + 128;
     int16_t ang = 0;
+    AxisStep turn;                                                // tilting: turn as far as tilted
     uint8_t hp = 3;
     uint16_t score = 0, walk = 0;
     uint32_t next = gameMillis(), hurtUntil = 0, flashUntil = 0;
@@ -361,11 +362,10 @@ void doomRun() {
       if ((int32_t)(now - next) > 120) next = now - 120;          // a long frame: no huge jump
       while (!over && (int32_t)(now - next) >= 0) {               // fixed steps, as many as time passed
         next += DOOM_TICK;
-        if (btnHeld(B_LEFT))  ang = (ang - 9) & 1023;
-        if (btnHeld(B_RIGHT)) ang = (ang + 9) & 1023;
-        int8_t fwd = btnHeld(B_UP) ? 1 : (btnHeld(B_DOWN) ? -1 : 0);
-        if (fwd) {                                                // 2.5 cells per second
-          int32_t nx = px + fwd * (DOOM_C(ang) >> 10), ny = py + fwd * (DOOM_S(ang) >> 10);
+        ang = (ang + turn(keyAxis(B_LEFT, B_RIGHT), 9)) & 1023;
+        int16_t fwd = keyAxis(B_DOWN, B_UP);
+        if (fwd) {                                                // up to 2.5 cells per second
+          int32_t nx = px + (DOOM_C(ang) >> 10) * fwd / 256, ny = py + (DOOM_S(ang) >> 10) * fwd / 256;
           if (!doomBlocked(nx, py)) px = nx;
           if (!doomBlocked(px, ny)) py = ny;
           walk++;
