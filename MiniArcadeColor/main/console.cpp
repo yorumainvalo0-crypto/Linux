@@ -123,7 +123,7 @@ void menu() {
         curHigh = real ? loadHigh(sel) : 0;
         pauseOk = real;
         tiltGame = real;
-        tiltLevel();                             // as it is held now = level
+        tiltGameStart();                         // level: as held now, or the saved position
         GAMES[sel].run();
         tiltGame = pauseOk = false;
       } while (wantRestart);

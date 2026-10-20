@@ -239,16 +239,20 @@ int main(int argc, char **argv) {
     press(2500, RT, 400); press(3300, RT, 600);
     simEnd = 4500;
   } else if (scenario == "tilt") {
-    // settings -> tilt control on: sensor found, axes learned; then Snake steered by tilting
+    // settings -> tilt control on: sensor found, axes learned; level saved;
+    // then Snake: the pause menu offers a new level, tilting steers
     simGyro = true; simNvsU16["snd"] = 255;                      // GPIO7 is the gyroscope's here
     press(M, UP); press(M + 400, OK, 80);
     for (int i = 0; i < 7; i++) press(M + 800 + 250 * i, DN);
     press(M + 2900, RT);
     accScript = { { M + 5000, 8000, 0 }, { M + 6000, 0, 0 }, { M + 7500, 0, -8000 }, { M + 8500, 0, 0 },
-                  { M + 13000, 0, -8000 } };                     // the last one: tilt up in the game
-    press(M + 10500, OK, 900);                                   // leave the settings
-    press(M + 11800, DN); press(M + 12200, OK, 80);
-    simEnd = M + 14000;
+                  { M + 20000, 0, -8000 } };                     // the last one: tilt up in the game
+    press(M + 9800, DN); press(M + 10200, OK, 80);               // "tilt level": save it
+    press(M + 15200, OK, 900);                                   // leave the settings
+    press(M + 16500, DN); press(M + 16900, OK, 80);              // Snake
+    press(M + 18000, OK, 900);                                   // pause ...
+    press(M + 19500, OK, 80);                                    // ... continue
+    simEnd = M + 21000;
     setenv("GRAB", "TILT SETUP", 1);
   } else { printf("unknown scenario %s\n", scenario.c_str()); return 2; }
   printf("== %s\n", scenario.c_str());
@@ -273,6 +277,8 @@ int main(int argc, char **argv) {
     check("sensor found on GPIO20 / GPIO7", gyroReady && gyroSda == 20 && gyroScl == 7);
     check("right = x, away = -y", tiltAx[0] == 0x00 && tiltAx[1] == 0x81);
     check("tilt control switched on", cfgTilt);
+    check("level saved in the settings", seen("LEVEL SAVED") && cfgTiltFix);
+    check("pause menu offers a new level", seen("tilt: level here"));
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
   }
   if (scenario == "ladder5") {
