@@ -15,9 +15,16 @@
 enum { B_UP, B_DOWN, B_LEFT, B_RIGHT, B_OK, B_COUNT };
 static uint8_t BTN_PIN[B_COUNT] = { 255, 255, 255, 255, 255 };   // learned; 255 = none
 static uint8_t BTN_ACT[B_COUNT] = { 0, 0, 0, 0, 0 };             // 0 = to GND, 1 = to 3V3
-static uint16_t BTN_MV[B_COUNT];         // ladder key: its voltage + 1 (0 = plain key)
 static uint16_t BTN_TOL[B_COUNT];        // ladder key: how far the voltage may be off
 static const char *BTN_NAME[B_COUNT] = { "UP", "DOWN", "LEFT", "RIGHT", "OK" };
+static uint16_t BTN_MV[B_COUNT];         // ladder key: its voltage + 1 (0 = plain key)
+
+// how OK is pressed on this console, for the hints on screen
+static const char *okKeys() {
+  if (BTN_PIN[B_OK] != 255) return "OK";
+  bool ud = BTN_PIN[B_UP] != BTN_PIN[B_DOWN] || !BTN_MV[B_UP];
+  return ud ? "UP+DOWN" : "LEFT+RIGHT";
+}
 
 #define CHORD_MS     70    // second key of an OK pair within this time
 #define HOLD_BACK_MS 700   // hold OK this long to leave a game
@@ -78,6 +85,8 @@ static int16_t pinMv(uint8_t pin) {
    voltage. Read at most once per millisecond, and a new key counts only
    when two readings in a row agree - a finger sliding from one key to
    the next must not flash a third.                                     */
+static void sndPause(bool pause);        // with the sound, below
+
 struct LadderPin { uint8_t pin; int8_t key, prev; uint32_t at; };
 static LadderPin ladders[3] = { { 255, -1, -1, 0 }, { 255, -1, -1, 0 }, { 255, -1, -1, 0 } };
 static int8_t ladderKey(uint8_t pin) {
@@ -87,7 +96,9 @@ static int8_t ladderKey(uint8_t pin) {
   if (!l) return -1;
   uint32_t now = millis();
   if (l->at == now) return l->key;
+  sndPause(true);                        // the buzzer's current shifts the levels
   int16_t mv = pinMv(pin);
+  sndPause(false);
   int8_t best = -1;
   int16_t bestD = 32767;
   for (uint8_t b = 0; b < B_COUNT; b++) {
@@ -222,14 +233,23 @@ void applyDisplay() {
 static uint8_t  sndPin = 255;          // 255 = no buzzer
 static uint32_t sndUntil = 0;
 static bool     sndOn = false;
+static uint16_t sndFreq = 0;
 
 void sfx(uint16_t freq, uint16_t ms) {
   if (sndPin == 255 || !freq || cfgMute) return;
   tone(sndPin, freq);
+  sndFreq = freq;
   sndOn = true;
   sndUntil = millis() + ms;
 }
 void sfxUpdate() { if (sndOn && millis() >= sndUntil) { noTone(sndPin); sndOn = false; } }
+
+// a few hundred microseconds of silence while a ladder key is measured
+static void sndPause(bool pause) {
+  if (!sndOn) return;
+  if (pause) { noTone(sndPin); delayMicroseconds(300); }
+  else tone(sndPin, sndFreq);
+}
 
 static uint8_t curGame = 0;            // index of the running game
 static uint16_t curHigh = 0;           // its high score
@@ -501,7 +521,9 @@ uint8_t chooseMode(const char *title, const char *const *opts, uint8_t n, col ac
       if (on) gfx.rframe(40, y, SCR_W - 80, 28, 6, C::WHITE);
       gfx.center(y + 5, opts[k], on ? C::WHITE : C::LTGREY);
     }
-    gfx.center(SCR_H - 16, "UP/DOWN choose   UP+DOWN = OK   hold = back", C::GREY, F_SMALL);
+    char hint[48];
+    snprintf(hint, sizeof(hint), "UP/DOWN choose   %s = select   hold = back", okKeys());
+    gfx.center(SCR_H - 16, hint, C::GREY, F_SMALL);
     gfx.send();
   }
   return 255;

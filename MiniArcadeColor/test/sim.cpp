@@ -38,6 +38,8 @@ static uint8_t ladder = 0;                       // which of them is pressed (0 
 static const int LADDER_EXT[8] = { 3100, 0, 300, 550 };  // 10k pull-up, keys via 0 / 1k / 2k
 // no pull-up resistor, the pin's own ~45k: keys via 10k / 11k / 12k / 13.3k to GND, 5 = UP+DOWN
 static const int LADDER_INT[8] = { 3100, 600, 649, 696, 750, 345 };
+// five keys: the four arrows and an own OK key (14.6k)
+static const int LADDER_5[8] = { 3100, 600, 649, 696, 750, 800 };
 static const int *LADDER_MV = LADDER_EXT;
 static int16_t simAcc[3] = { 0, 0, 16384 };      // the gyroscope's accelerometer, lying flat
 struct AccEv { uint32_t t; int16_t x, y; };
@@ -53,12 +55,13 @@ int simGpioLevel(int p) {
   return pinMode_[p] == 3 ? 0 : 1;
 }
 void simCpuMhz(int) {}
-void simTone(int f) { if (f) toneCount++; }
+static bool toneOn = false;
+void simTone(int f) { if (f) toneCount++; toneOn = f != 0; }
 void simFrameSent(const uint8_t *, size_t) {}                   // the OLED's I2C (unused here)
 int simAdcRaw(int ch) {
   bool down = pinMode_[ch] == 3;
   if (ch == BAT) return 3900 / 2 * (down ? 62 : 100) / 100 * 4095 / 2500;
-  if (ch == LADDER) { int mv = LADDER_MV[ladder] + rand() % 17 - 8;   // the ADC is a little noisy
+  if (ch == LADDER) { int mv = LADDER_MV[ladder] + rand() % 17 - 8 + (toneOn && ladder ? 40 : 0);   // noisy, and the buzzer pulls
     if (mv < 0) mv = 0; return mv * 4095 / 2500 > 4095 ? 4095 : mv * 4095 / 2500; }
   if (pinPress[ch] || pinMode_[ch] == 2) return 4095;
   if (down) return 5;
@@ -216,6 +219,13 @@ int main(int argc, char **argv) {
     press(10500, 2 << 4, 120);                                   // DOWN: Snake -> Tetris
     script.push_back({ 11500, 1 << 4 }); script.push_back({ 11520, 5 << 4 }); script.push_back({ 11700, 0 });
     simEnd = 13500;
+  } else if (scenario == "ladder5") {
+    // five keys on one pin, then the sound setup asks: OK while it beeps
+    simNvsU16.erase("pset"); simNvsU16.erase("sset"); LADDER = 2; LADDER_MV = LADDER_5;
+    press(2500, 1 << 4, 400); press(3300, 2 << 4, 400); press(4100, 3 << 4, 400); press(4900, 4 << 4, 400);
+    press(5700, 5 << 4, 400);
+    press(10500, 5 << 4, 200);                                   // OK: yes, I hear it
+    simEnd = 12500;
   } else if (scenario == "plain2") {
     // two keys on GPIO6, which has no ADC: the wizard says so
     simNvsU16.erase("pset");
@@ -258,6 +268,12 @@ int main(int argc, char **argv) {
     check("tilt control switched on", cfgTilt);
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
   }
+  if (scenario == "ladder5") {
+    printf("   OK key %u/%u, buzzer %u\n", BTN_PIN[4], BTN_MV[4], simNvsU16["snd"]);
+    check("own OK key learned on the ladder", BTN_PIN[4] == 2 && BTN_MV[4] > 780);
+    check("sound setup shows the own OK key", seen("OK = yes"));
+    check("OK while beeping picked the buzzer", simNvsU16.count("snd") && simNvsU16["snd"] != 255 && simNvsU16["sset"] == 1);
+  }
   if (scenario == "plain2")    check("hint: no ladder on a pin without ADC", seen("cannot measure volts: ladder on GPIO0..3") && BTN_PIN[0] == 6);
   if (scenario == "ladder4") {
     printf("   keys: %u/%u %u/%u %u/%u %u/%u OK %u/%u\n", BTN_PIN[0], BTN_MV[0], BTN_PIN[1], BTN_MV[1],
@@ -275,7 +291,7 @@ int main(int argc, char **argv) {
     check("RIGHT on its own pin", BTN_PIN[3] == 6 && !BTN_MV[3]);
     check("LEFT+RIGHT opened a game", seen("SNAKE"));
   }
-  check("sounds played", scenario == "wizard" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
+  check("sounds played", scenario == "wizard" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }
