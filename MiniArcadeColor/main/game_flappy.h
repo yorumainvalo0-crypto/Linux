@@ -42,7 +42,7 @@ void flappyRun() {
     again = false;
     int32_t y = 110 * 256, vy = 0;                              // 1/256 px, per ms
     FlPipe pipes[3];
-    for (uint8_t i = 0; i < 3; i++) pipes[i] = { (int16_t)(SCR_W + 40 + i * 130), (int16_t)random(70, 140), 76, false };
+    for (uint8_t i = 0; i < 3; i++) pipes[i] = { (int16_t)(SCR_W + 40 + i * 130), (int16_t)random(70, 140), 84, false };
     uint16_t score = 0;
     bool started = false, dead = false;
     uint32_t last = gameMillis();
@@ -56,12 +56,12 @@ void flappyRun() {
       bool flap = false;
       for (uint8_t k = 0; k < 4; k++) if (btn(k)) flap = true;
       if (btnTap(B_OK)) flap = true;
-      if (flap && !dead) { vy = -82; started = true; sfx(1000, 20); }
-      int16_t speed = (int16_t)(26 + score / 3);                 // px per second / 2.4
-      if (speed > 46) speed = 46;
+      if (flap && !dead) { vy = -66; started = true; sfx(1000, 20); }
+      int16_t speed = (int16_t)(22 + score / 4);                 // 1/256 px per ms: 85 px/s at the start
+      if (speed > 38) speed = 38;
       if (started && !dead) {
-        vy += (int32_t)dt * 33 / 100;                           // gravity
-        if (vy > 140) vy = 140;
+        vy += (int32_t)dt * 22 / 100;                           // gravity
+        if (vy > 110) vy = 110;
         y += vy * (int32_t)dt;
         scroll += (int32_t)dt * speed;
         int16_t dx = (int16_t)(scroll / 256);
@@ -72,8 +72,8 @@ void flappyRun() {
           if (p.x < -FL_PIPE_W - 8) {                           // back to the right
             int16_t far = 0;
             for (uint8_t k = 0; k < 3; k++) if (pipes[k].x > far) far = pipes[k].x;
-            int16_t h = (int16_t)(76 - score / 2);
-            if (h < 54) h = 54;
+            int16_t h = (int16_t)(84 - score / 2);
+            if (h < 60) h = 60;
             p = { (int16_t)(far + 130), (int16_t)random(TOP_H + 30, FL_GROUND - h - 30), h, false };
           }
           if (!p.passed && p.x + FL_PIPE_W < FL_BX) { p.passed = true; score++; sfx(1500, 40); }

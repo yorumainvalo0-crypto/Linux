@@ -27,8 +27,8 @@ void pongRun() {
       if (dt > 40) dt = 40;
       last = now;
       // the player's paddle
-      if (btnHeld(B_UP))   py -= (int32_t)dt * 256 * 26 / 100;
-      if (btnHeld(B_DOWN)) py += (int32_t)dt * 256 * 26 / 100;
+      if (btnHeld(B_UP))   py -= (int32_t)dt * 256 * 22 / 100;     // 220 px/s
+      if (btnHeld(B_DOWN)) py += (int32_t)dt * 256 * 22 / 100;
       int32_t lo = (PG_Y0 + PG_PH / 2) * 256, hi = (PG_Y1 - PG_PH / 2) * 256;
       if (py < lo) py = lo;
       if (py > hi) py = hi;
@@ -36,8 +36,8 @@ void pongRun() {
         bx = SCR_W / 2 * 256; by = (PG_Y0 + PG_Y1) / 2 * 256;
         if (now >= serveAt) {
           serving = false;
-          vx = (toCpu ? 1 : -1) * 75;                           // 1/256 px per ms: about 290 px/s
-          vy = (int32_t)random(-40, 40);
+          vx = (toCpu ? 1 : -1) * 40;                           // 1/256 px per ms: about 155 px/s
+          vy = (int32_t)random(-20, 21);
         }
       } else {
         bx += vx * (int32_t)dt;
@@ -48,17 +48,17 @@ void pongRun() {
         // paddles
         int32_t bxp = bx / 256, byp = by / 256;
         if (vx < 0 && bxp - PG_BALL / 2 <= 14 + PG_PW && bxp > 10 && abs(byp - py / 256) <= PG_PH / 2 + 3) {
-          vx = -vx * 106 / 100;
-          vy = (byp - py / 256) * 4;
+          vx = -vx * 104 / 100;
+          vy = (byp - py / 256) * 2;
           sfx(900, 15);
         }
         if (vx > 0 && bxp + PG_BALL / 2 >= SCR_W - 14 - PG_PW && bxp < SCR_W - 10 && abs(byp - cy / 256) <= PG_PH / 2 + 3) {
-          vx = -vx * 106 / 100;
-          vy = (byp - cy / 256) * 4;
+          vx = -vx * 104 / 100;
+          vy = (byp - cy / 256) * 2;
           sfx(700, 15);
         }
-        if (vx > 190) vx = 190;
-        if (vx < -190) vx = -190;
+        if (vx > 95) vx = 95;                                   // at most about 370 px/s
+        if (vx < -95) vx = -95;
         // goals
         if (bxp < -10 || bxp > SCR_W + 10) {
           if (bxp < 0) { cpu++; toCpu = false; sfx(200, 250); } else { me++; toCpu = true; sfx(1500, 200); }
@@ -70,7 +70,7 @@ void pongRun() {
       }
       // the CPU follows the ball, a little slow and late
       int32_t target = (vx > 0 && !serving) ? by : (PG_Y0 + PG_Y1) / 2 * 256;
-      int32_t step = (int32_t)dt * 256 * (16 + me * 2) / 100;
+      int32_t step = (int32_t)dt * 256 * (12 + me * 2) / 100;
       if (cy < target - 512) cy += step;
       else if (cy > target + 512) cy -= step;
       if (cy < lo) cy = lo;

@@ -52,7 +52,7 @@ void snakeRun() {
     snPlace(fx, fy);
     bool star = false;
     uint32_t starUntil = 0, nextStar = gameMillis() + 8000;
-    uint16_t score = 0, step = 140;
+    uint16_t score = 0, step = 180;                             // ms per field
     bool started = false, dead = false;
     uint32_t next = gameMillis();
     btnClear();
@@ -81,7 +81,7 @@ void snakeRun() {
         if (grow && snLen < SN_MAX) snLen++;
         for (uint16_t i = snLen - 1; i > 0; i--) { snX[i] = snX[i - 1]; snY[i] = snY[i - 1]; }
         snX[0] = (uint8_t)nx; snY[0] = (uint8_t)ny;
-        if (grow) { score++; sfx(1200, 30); snPlace(fx, fy); if (step > 60) step -= 3; }
+        if (grow) { score++; sfx(1200, 30); snPlace(fx, fy); if (step > 85) step -= 3; }
         if (gold) { score += 5; star = false; sfx(1800, 80); nextStar = now + 10000; }
       }
       if (!star && now >= nextStar && started) { do snPlace(sx, sy); while (sx == fx && sy == fy); star = true; starUntil = now + 6000; }
