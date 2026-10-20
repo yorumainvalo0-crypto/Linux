@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include <map>
 #include <set>
 #include <string>
@@ -449,6 +450,151 @@ static void chessLogic() {
   check("checkmate: no move, in check", chMoves(p, m) == 0 && chInCheck(p, false));
   chFromFen(p, "8/8/4k3/8/8/2B5/4K3/8 w - -");
   check("king and bishop against king is a draw", chTooLittle(p));
+
+  // the generator for takes only: exactly the takes, en passant and promotions of the full list
+  bool same = true;
+  srand(7);
+  for (int g = 0; g < 40; g++) {
+    chStart(p);
+    for (int k = 0; k < 120; k++) {
+      int n = chMoves(p, m);
+      if (!n) break;
+      ChMove t[220];
+      int nt = chMoves(p, t, true), want = 0;
+      for (int i = 0; i < n; i++) {
+        bool tk = p.b[m[i].to] || m[i].promo || (m[i].to == p.ep && abs(p.b[m[i].from]) == CH_P);
+        if (!tk) continue;
+        want++;
+        bool found = false;
+        for (int j = 0; j < nt; j++) found = found || (t[j].from == m[i].from && t[j].to == m[i].to && t[j].promo == m[i].promo);
+        same = same && found;
+      }
+      same = same && nt == want;
+      chPlay(p, m[rand() % n]);
+    }
+  }
+  check("takes-only moves match the full list", same);
+
+  // the CPU
+  che = (ChEngine *)malloc(sizeof(ChEngine));
+  che->ui = false;
+  auto best = [&](const char *fen, uint8_t level) { ChPos q; chFromFen(q, fen); ChMove b = { 0, 0, 0 }; chBest(q, level, b); return b; };
+  auto legal = [&](const ChPos &q, const ChMove &b) {
+    ChMove l[220]; int n = chMoves(q, l);
+    for (int i = 0; i < n; i++) if (l[i].from == b.from && l[i].to == b.to && l[i].promo == b.promo) return true;
+    return false;
+  };
+  bool mate = true;
+  for (uint8_t lv = 0; lv < 3; lv++) {
+    ChMove b = best("6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - -", lv);
+    if (b.from != 59 || b.to != 3) { mate = false; printf("      level %u played %d-%d\n", lv, b.from, b.to); }
+  }
+  check("CPU finds the mate in one (Rd8#) at every level", mate);
+  ChMove b = best("rnb1kbnr/pppp1ppp/8/4p3/7q/5N2/PPPPPPPP/RNBQKB1R w KQkq -", 1);
+  check("CPU (normal) takes the hanging queen (Nxh4)", b.from == 45 && b.to == 39);
+  b = best("7k/8/8/8/8/8/6q1/7K w - -", 2);
+  check("CPU plays the only move (Kxg2)", b.from == 63 && b.to == 54);
+  b = best("k7/8/1QK5/8/8/8/8/8 w - -", 2);              // mate in one, next to stalemates
+  chFromFen(p, "k7/8/1QK5/8/8/8/8/8 w - -");
+  { ChPos q = p; chPlay(q, b); check("CPU mates instead of stalemating", legal(p, b) && !chMoves(q, m) && chInCheck(q, false)); }
+  // random positions, few moves among them: always a legal move, within the node budget
+  bool allLegal = true, inBudget = true;
+  int few = 0;
+  srand(11);
+  for (int g = 0; g < 12; g++) {
+    chStart(p);
+    for (int k = 0; k < 90; k++) {
+      int n = chMoves(p, m);
+      if (!n || p.half >= 100) break;
+      if (k % 15 == 14 || n <= 3) {
+        uint8_t lv = (uint8_t)(k % 3);
+        ChMove c = { 0, 0, 0 };
+        bool ok = chBest(p, lv, c);
+        if (n <= 3) few++;
+        if (!ok || !legal(p, c)) { allLegal = false; printf("      no legal move at game %d ply %d\n", g, k); }
+        if (che->nodes > CH_CAP[lv] + 4000) { inBudget = false; printf("      %u nodes at level %u\n", (unsigned)che->nodes, lv); }
+      }
+      chPlay(p, m[rand() % n]);
+    }
+  }
+  printf("      %d positions with three moves or fewer\n", few);
+  check("CPU always returns a legal move", allLegal && few > 0);
+  check("CPU keeps to its node budget", inBudget);
+  // how fast on this machine, and how deep
+  static const char *const SPEED[2] = { "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -",
+                                        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -" };
+  for (uint8_t lv = 0; lv < 3; lv++)
+    for (int f = 0; f < 2; f++) {
+      chFromFen(p, SPEED[f]);
+      ChMove c;
+      clock_t c0 = clock();
+      chBest(p, lv, c);
+      double ms = (double)(clock() - c0) * 1000.0 / CLOCKS_PER_SEC;
+      printf("      level %u %s: depth %u, %6u nodes, %.1f ms here (%.0f nodes/s)\n", lv, f ? "middle game" : "start      ",
+             che->depth, (unsigned)che->nodes, ms, ms > 0 ? che->nodes / ms * 1000 : 0.0);
+    }
+  // a few games: normal against easy (easy's random moves too), normal should win them
+  int won = 0, lost = 0;
+  srand(3);
+  for (int g = 0; g < 4; g++) {
+    chStart(p);
+    bool normalWhite = g % 2 == 0;
+    int r = 0;
+    for (int k = 0; k < 300; k++) {
+      int n = chMoves(p, m);
+      if (!n) { r = chInCheck(p, p.white) ? (p.white ? -1 : 1) : 0; break; }
+      if (p.half >= 100 || chTooLittle(p)) break;
+      bool normal = (p.white != 0) == normalWhite;
+      ChMove c;
+      chBest(p, normal ? 1 : 0, c);
+      if (!normal && rand() % 4 == 0) c = m[rand() % n];
+      chPlay(p, c);
+    }
+    int me = normalWhite ? r : -r;
+    if (me > 0) won++;
+    if (me < 0) lost++;
+  }
+  printf("      normal against easy: %d won, %d lost, %d drawn\n", won, lost, 4 - won - lost);
+  check("normal beats easy", won >= 3 && !lost);
+  free(che); che = NULL;
+}
+
+// Chess against the CPU: the bot plays random moves through the keys (takes preferred)
+static int chBotMax = 1000, chBotDone = 0, chCpuMoves = 0;
+static uint32_t chCpuFrom = 0, chCpuMaxMs = 0, chCpuMaxNodes = 0, chCpuDepths = 0, chCpuOver = 0;
+static uint16_t chBotPly = 0xFFFF;
+static ChMove chBotMv;
+static void chBotGo(uint32_t t, int sq) {                       // cursor to the square, then OK
+  int r = sq / 8, c = sq % 8;
+  if (chFlipped()) { r = 7 - r; c = 7 - c; }
+  if (ch->cr != r) pzPress(t, ch->cr < r ? 2 : 1, 110);
+  else if (ch->cc != c) pzPress(t, ch->cc < c ? 8 : 4, 110);
+  else pzPress(t, PZ_OK, 220);
+}
+static void chessCpuBot(uint32_t t) {
+  if (!ch || !che) return;
+  if (chCpuGo() && !chEnd) { if (!chCpuFrom) chCpuFrom = t; return; }
+  if (chCpuFrom) {                                              // the CPU has moved
+    chCpuMoves++;
+    uint32_t d = t - chCpuFrom;
+    if (d > chCpuMaxMs) chCpuMaxMs = d;
+    if (che->nodes > chCpuMaxNodes) chCpuMaxNodes = che->nodes;
+    if (che->nodes > CH_CAP[ch->level] + 4000 || d > CH_MS[ch->level] + 600u) chCpuOver++;
+    chCpuDepths += che->depth;
+    chCpuFrom = 0;
+  }
+  if (pzBusy(t)) return;
+  if (chEnd) { pzPress(t, PZ_OK, 1500); return; }               // a new game
+  if (ch->plies != chBotPly) {                                  // a new turn: pick a move
+    if (chBotPly != 0xFFFF) chBotDone++;
+    chBotPly = ch->plies;
+    if (chBotDone >= chBotMax) return;
+    int caps[220], nc = 0;
+    for (int i = 0; i < ch->nMoves; i++) if (ch->pos.b[ch->moves[i].to]) caps[nc++] = i;
+    chBotMv = nc && rand() % 2 ? ch->moves[caps[rand() % nc]] : ch->moves[rand() % ch->nMoves];
+  }
+  if (chBotDone >= chBotMax) return;
+  chBotGo(t, ch->sel == chBotMv.from ? chBotMv.to : chBotMv.from);
 }
 
 static uint8_t colsInFrame() {                                  // how many colours one frame shows
@@ -1155,9 +1301,29 @@ int main(int argc, char **argv) {
     setenv("GRAB", "HOLE 6/9", 1);
   } else if (scenario == "chess") {
     uint32_t t = openGameNamed("Chess", M); simEnd = t + 20000;
-    press(t + 300, DN); press(t + 600, OK, 80);                  // board stays
-    pzStart = t + 1400; pzBot = chessBot; captureMs = { t + 5000 };
+    press(t + 300, UP); press(t + 600, OK, 80);                  // 2 players (the last)
+    press(t + 1000, DN); press(t + 1300, OK, 80);                // board stays
+    pzStart = t + 2000; pzBot = chessBot; captureMs = { t + 5600 };
     setenv("GRAB", "WINS", 1);
+  } else if (scenario == "chesscpu") {
+    // the bot plays black against the CPU on hard: the board turns, the CPU opens
+    uint32_t t = openGameNamed("Chess", M); simEnd = t + 150000;
+    press(t + 300, DN); press(t + 600, DN); press(t + 900, OK, 80);   // 1P hard
+    press(t + 1300, DN); press(t + 1600, OK, 80);                // black
+    pzStart = t + 2200; pzBot = chessCpuBot; captureMs = { t + 9000 };
+    setenv("GRAB", "thinking...", 1);
+  } else if (scenario == "chesssave") {
+    // three moves against easy, leave, come back: the game goes on where it was
+    uint32_t t = openGameNamed("Chess", M); simEnd = t + 26000;
+    press(t + 300, OK, 80);                                      // 1P easy
+    press(t + 700, OK, 80);                                      // white
+    chBotMax = 3;
+    pzStart = t + 1200; pzBot = chessCpuBot;
+    press(t + 16000, OK, 900);                                   // hold: pause menu ...
+    press(t + 17500, OK, 900);                                   // ... hold again: quit
+    press(t + 20000, OK, 80);                                    // Chess again
+    press(t + 21000, OK, 80);                                    // continue saved game
+    captureMs = { t + 20600, t + 23000 };
   } else if (scenario == "chesslogic") {
     printf("== %s\n", scenario.c_str());
     chessLogic();
@@ -1276,6 +1442,21 @@ int main(int argc, char **argv) {
   if (scenario == "chess") {
     check("chess drawn for two players", seen("CHESS") && seen("2 players") && seen("WHITE") && seen("BLACK"));
     check("fool's mate: black wins", chBotStep == 8 && seen("WINS") && seen("BLACK"));
+    check("levels offered, the finished game not kept", seen("1P hard") && simNvsBlob["chsave"].size() == 1);
+  }
+  if (scenario == "chesscpu") {
+    printf("      CPU moves %d (most %u nodes, %.1f plies deep on average), bot moves %d, slowest answer %u ms (simulated)\n",
+           chCpuMoves, (unsigned)chCpuMaxNodes, chCpuMoves ? (double)chCpuDepths / chCpuMoves : 0.0, chBotDone, (unsigned)chCpuMaxMs);
+    check("chess against the CPU: hard, player black", seen("vs CPU hard") && seen("YOUR SIDE") && seen("thinking...") && seen("your go"));
+    check("the CPU answered many times, within time and node budget", chCpuMoves >= 15 && chCpuOver == 0);
+    check("the CPU searched deeper than one ply", chCpuMoves && chCpuDepths >= 3u * (uint32_t)chCpuMoves);
+  }
+  if (scenario == "chesssave") {
+    const std::string &sv = simNvsBlob["chsave"];
+    bool same = ch && sv.size() == CH_SAVED && !memcmp(sv.data() + offsetof(ChGame, pos), &ch->pos, sizeof(ChPos));
+    printf("      saved %u bytes, plies %u\n", (unsigned)sv.size(), ch ? ch->plies : 0);
+    check("left after three moves: offered to continue", chBotDone == 3 && seen("continue saved game") && seen("PAUSE"));
+    check("the game goes on where it was left", same && ch->plies == 6 && ch->human == 1 && ch->level == 0 && ch->lastTo >= 0);
   }
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
   if (scenario == "tilt") {
@@ -1322,7 +1503,7 @@ int main(int argc, char **argv) {
     check("RIGHT on its own pin", BTN_PIN[3] == 6 && !BTN_MV[3]);
     check("LEFT+RIGHT opened a game", seen("SNAKE"));
   }
-  check("sounds played", scenario == "wizard" || scenario == "chess" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
+  check("sounds played", scenario == "wizard" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }
