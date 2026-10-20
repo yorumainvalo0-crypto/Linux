@@ -10,7 +10,10 @@ Tetris, Pong, Doom, Mine, Tunnel 3D, Flappy, Invaders, Dino, Breakout,
 Rocks, Racer, Frogger, 4 wins, Tic Tac Toe, 2048, Minesweeper, Pac-Man,
 Shooter, Jump & Run, Sokoban, Battleship, Sudoku, Lights Out, Match 3,
 Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
-the CPU or two players on one console (no online multiplayer yet).
+the CPU or two players on one console (no online multiplayer yet). Plus
+Chess for two players on one console, with all rules (castling, en passant,
+promotion, check, mate, stalemate, 50 moves); the board can turn round for
+black.
 
 ## Boards
 
