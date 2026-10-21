@@ -156,7 +156,8 @@ Two keys at once on one ladder (e.g. UP + RIGHT to jump in Palace): with a
 every key and every pair of keys has its own level, at least 36 mV apart
 (four keys: 15k, 11k, 7.5k, 5.6k, at least 62 mV). The wizard then asks for
 two arrows together once - that measures the supply - and works out the
-level of every pair from the single keys. Pairs that would lie too close to
+level of every pair from the single keys. `docs/tasten-leiter-4.png` shows four keys
+(10k, 2.2k, 4.7k, 6.8k) with every level. Pairs that would lie too close to
 another level (e.g. keys on the pin's own pull-up) are simply not used.
 Free on the C3 with the wiring above: GPIO1..4, 6, 7 and 20; ladder keys and
 the battery need one of GPIO1..4 (ADC). The plans use: ladder keys GPIO4,
