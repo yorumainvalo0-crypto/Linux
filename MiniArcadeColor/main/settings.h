@@ -92,7 +92,7 @@ void settingsRun() {
 #endif
   static const uint8_t MINS[5] = { 0, 1, 5, 15, 30 };
   static const uint8_t SPEEDS[3] = { 20, 27, 40 };
-  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_SPEED, L_FPS, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_TLEVEL, L_TSENS, L_KEYS, L_BUZZER, L_BAT, L_WLAN, L_VERSION, L_BACK, L_N };
+  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_SPEED, L_FPS, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_TLEVEL, L_TSENS, L_KEYS, L_BUZZER, L_BAT, L_SD, L_WLAN, L_VERSION, L_BACK, L_N };
   uint8_t sel = 0, top = 0;
   const uint8_t ROWS = 7;
   btnClear();
@@ -142,6 +142,7 @@ void settingsRun() {
       if      (sel == L_KEYS)    learnKeys();
       else if (sel == L_BUZZER)  soundSetup();
       else if (sel == L_BAT)     batterySetup();
+      else if (sel == L_SD)      sdSetup();
       else if (sel == L_WLAN)    wlanRun();
       else if (sel == L_VERSION) versionRun(false);
       else if (sel == L_TILT)    { if (tiltSetup()) { cfgTilt = true; tiltSave(); } tiltStart(); }
@@ -174,6 +175,8 @@ void settingsRun() {
     snprintf(line[L_KEYS], 36, "set up keys...");
     snprintf(line[L_BUZZER], 36, "set up sound...");
     snprintf(line[L_BAT], 36, "set up battery...");
+    if (sel >= L_BAT && sel <= L_WLAN) sdLine(line[L_SD], 36);      // only when in view: it asks the card
+    else snprintf(line[L_SD], 36, "sd card...");
     snprintf(line[L_WLAN], 36, "wlan and update...");
     snprintf(line[L_VERSION], 36, "firmware version...");
     snprintf(line[L_BACK], 36, "back to the games");
