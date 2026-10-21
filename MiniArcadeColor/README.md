@@ -123,6 +123,9 @@ With SDO wired the console finds the display's pins by itself at the start
 too; the result is saved. Without SDO the table above is used.
 Touch and SD card stay unconnected for now.
 
+Settings -> "screen" sets how the picture sits: normal, turned round,
+mirrored top/bottom or mirrored left/right (LEFT/RIGHT or OK steps through).
+
 Speed: only the parts of the picture that changed go to the display (blocks
 of 32 x 1 pixels), so most games run at the 60 fps limit. Games that redraw
 the whole screen (Doom, Tunnel 3D, Racer) depend on the SPI clock: about
@@ -156,7 +159,8 @@ Two keys at once on one ladder (e.g. UP + RIGHT to jump in Palace): with a
 every key and every pair of keys has its own level, at least 36 mV apart
 (four keys: 15k, 11k, 7.5k, 5.6k, at least 62 mV). The wizard then asks for
 two arrows together once - that measures the supply - and works out the
-level of every pair from the single keys. Pairs that would lie too close to
+level of every pair from the single keys. `docs/tasten-leiter-4.png` shows four keys
+(10k, 2.2k, 4.7k, 6.8k) with every level. Pairs that would lie too close to
 another level (e.g. keys on the pin's own pull-up) are simply not used.
 Free on the C3 with the wiring above: GPIO1..4, 6, 7 and 20; ladder keys and
 the battery need one of GPIO1..4 (ADC). The plans use: ladder keys GPIO4,

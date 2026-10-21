@@ -172,7 +172,7 @@ static void palRecFrame(uint32_t ms, const uint8_t *px) {
 static int mine3dCols = 0, mine3dDug = 0, mine3dPut = 0;
 void Gfx::begin() {}
 void Gfx::setBacklight(uint8_t) {}
-void Gfx::setOrientation(bool, bool, bool) {}
+void Gfx::setOrientation(uint8_t, bool, bool) {}
 void Gfx::sleep(bool) {}
 void Gfx::setSpeed(uint8_t) {}
 void Gfx::send() {

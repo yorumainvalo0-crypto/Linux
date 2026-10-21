@@ -78,6 +78,12 @@ static void screenSpeed(uint8_t mhz) {
   btnClear();
 }
 
+// the four ways the picture can sit: normal, turned round, mirrored
+static void screenTurn(bool fwd) {
+  uint8_t o = (uint8_t)((dispOrient() + (fwd ? 1 : 3)) & 3);
+  cfgDisp = (uint8_t)((cfgDisp & ~9) | (o & 1) | (o & 2 ? 8 : 0));
+}
+
 void settingsRun() {
 #if CONFIG_IDF_TARGET_ESP32S3
   static const uint8_t CLOCKS[3] = { 80, 160, 240 };
@@ -123,7 +129,7 @@ void settingsRun() {
         else if (SPEEDS[i] > cfgSpi) screenSpeed(SPEEDS[i]);
       }
       else if (sel == L_FPS)    { cfgFps = !cfgFps; applyDisplay(); }
-      else if (sel == L_FLIP)   { cfgDisp ^= 1; applyDisplay(); }
+      else if (sel == L_FLIP)   { screenTurn(right); applyDisplay(); }
       else if (sel == L_SWAP)   { cfgDisp ^= 2; applyDisplay(); }
       else if (sel == L_INVERT) { cfgDisp ^= 4; applyDisplay(); }
       else if (sel == L_TILT)   tiltToggle();
@@ -143,7 +149,8 @@ void settingsRun() {
       else if (sel == L_BACK)    return;
       else if (sel == L_SOUND)   { cfgMute = !cfgMute; saveCfg(); }
       else if (sel == L_FPS)     { cfgFps = !cfgFps; saveCfg(); applyDisplay(); }
-      else if (sel >= L_FLIP && sel <= L_INVERT) { cfgDisp ^= (uint8_t)(1 << (sel - L_FLIP)); saveCfg(); applyDisplay(); }
+      else if (sel == L_FLIP)    { screenTurn(true); saveCfg(); applyDisplay(); }
+      else if (sel >= L_SWAP && sel <= L_INVERT) { cfgDisp ^= (uint8_t)(1 << (sel - L_FLIP)); saveCfg(); applyDisplay(); }
       btnClear();
     }
 
@@ -156,7 +163,8 @@ void settingsRun() {
     snprintf(line[L_SOUND], 36, "sound        %s", cfgMute ? "off" : "on");
     snprintf(line[L_SPEED], 36, "screen speed %u MHz", cfgSpi);
     snprintf(line[L_FPS], 36, "show fps     %s", cfgFps ? "on" : "off");
-    snprintf(line[L_FLIP], 36, "screen       %s", cfgDisp & 1 ? "turned" : "normal");
+    static const char *const ORIENT[4] = { "normal", "turned round", "mirror up/down", "mirror left/right" };
+    snprintf(line[L_FLIP], 36, "screen       %s", ORIENT[dispOrient()]);
     snprintf(line[L_SWAP], 36, "red/blue     %s", cfgDisp & 2 ? "swapped" : "normal");
     snprintf(line[L_INVERT], 36, "colours      %s", cfgDisp & 4 ? "inverted" : "normal");
     snprintf(line[L_TILT], 36, "tilt control %s", !cfgTilt ? "off" : gyroReady ? "on" : "on (no sensor)");

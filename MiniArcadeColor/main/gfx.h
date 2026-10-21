@@ -45,7 +45,8 @@ public:
   void     setSpeed(uint8_t mhz);         // SPI clock for the pictures (tft_spi.cpp)
   void   (*overlay)() = nullptr;          // drawn over every frame just before it goes out
   void     setBacklight(uint8_t pct);     // only with a backlight pin
-  void     setOrientation(bool flip, bool bgr, bool invert);   // panel mounted the other way, colours swapped
+  // 0 normal, 1 turned round, 2 mirrored top/bottom, 3 mirrored left/right; colours swapped, inverted
+  void     setOrientation(uint8_t orient, bool bgr, bool invert);
   void     sleep(bool off);
 
   uint8_t *buffer() { return fb; }

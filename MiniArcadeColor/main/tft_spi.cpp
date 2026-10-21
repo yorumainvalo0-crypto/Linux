@@ -312,12 +312,15 @@ void Gfx::begin() {
   send();
 }
 
-void Gfx::setOrientation(bool flip, bool bgr, bool invert) {
+/* MADCTL in landscape (MV set): MX turns the picture upside down, MY
+   left to right; both together turn it round.                         */
+void Gfx::setOrientation(uint8_t orient, bool bgr, bool invert) {
+  static const uint8_t FLIP[4] = { 0x00, 0xC0, 0x40, 0x80 };      // MY|MX, MX, MY
 #if CONFIG_ARCADE_TFT_ST7789
-  madctl = (uint8_t)((flip ? 0xA0 : 0x60) | (bgr ? 0x08 : 0));
+  madctl = (uint8_t)((0x60 ^ FLIP[orient & 3]) | (bgr ? 0x08 : 0));
   cmd(invert ? 0x20 : 0x21);
 #else
-  madctl = (uint8_t)((flip ? 0xE8 : 0x28) & (bgr ? 0xFF : 0xF7));
+  madctl = (uint8_t)((0x28 ^ FLIP[orient & 3]) & (bgr ? 0xFF : 0xF7));
   cmd(invert ? 0x21 : 0x20);
 #endif
   cmd(0x36, &madctl, 1);
