@@ -123,6 +123,9 @@ With SDO wired the console finds the display's pins by itself at the start
 too; the result is saved. Without SDO the table above is used.
 Touch and SD card stay unconnected for now.
 
+Settings -> "screen" sets how the picture sits: normal, turned round,
+mirrored top/bottom or mirrored left/right (LEFT/RIGHT or OK steps through).
+
 Speed: only the parts of the picture that changed go to the display (blocks
 of 32 x 1 pixels), so most games run at the 60 fps limit. Games that redraw
 the whole screen (Doom, Tunnel 3D, Racer) depend on the SPI clock: about

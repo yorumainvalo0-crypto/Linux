@@ -263,7 +263,8 @@ static uint8_t  cfgBright = 100;      // backlight in %, only with a backlight p
 static uint8_t  cfgClock  = 160;      // cpu clock in MHz
 static uint8_t  cfgSleep  = 5;        // minutes without a key press, 0 = never
 static bool     cfgMute   = false;
-static uint8_t  cfgDisp   = 0;        // 1 = upside down, 2 = red/blue swapped, 4 = inverted
+static uint8_t  cfgDisp   = 0;        // 1 = turned round, 2 = red/blue swapped, 4 = inverted, 8 = mirrored
+static uint8_t dispOrient() { return (uint8_t)((cfgDisp & 1) | (cfgDisp & 8 ? 2 : 0)); }   // see Gfx::setOrientation
 static uint8_t  cfgSpi    = CONFIG_ARCADE_TFT_MHZ;   // panel clock for the pictures
 static bool     cfgFps    = false;    // frames per second in the corner
 static uint32_t lastInput = 0;        // for the sleep timer
@@ -298,7 +299,7 @@ static void fpsOverlay() {
 }
 
 void applyDisplay() {
-  gfx.setOrientation(cfgDisp & 1, !(cfgDisp & 2), cfgDisp & 4);
+  gfx.setOrientation(dispOrient(), !(cfgDisp & 2), cfgDisp & 4);
   gfx.setBacklight(cfgBright);
   gfx.overlay = cfgFps ? fpsOverlay : nullptr;
 }
