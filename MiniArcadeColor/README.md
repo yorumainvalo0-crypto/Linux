@@ -11,10 +11,11 @@ Rocks, Racer, Frogger, 4 wins, Tic Tac Toe, 2048, Minesweeper, Pac-Man,
 Shooter, Jump & Run, Sokoban, Battleship, Sudoku, Lights Out, Match 3,
 Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
 the CPU or two players on one console (and online, see below). Plus
-Mine 3D, a block world in first person, Palace, a platformer, Skat against
-two CPU players (all below), and Chess with all rules (castling, en passant,
-promotion, check, mate, stalemate, 50 moves), against the CPU, for two
-players on one console or online (the board can turn round for black):
+Mine 3D, a block world in first person, Palace, a platformer, Block Puzzle,
+Fruit Pot, Skat against two CPU players (all below), and Chess with all
+rules (castling, en passant, promotion, check, mate, stalemate, 50 moves),
+against the CPU, for two players on one console or online (the board can
+turn round for black):
 
 - **vs CPU easy / normal / hard**: you pick white or black, the board faces
   you. The CPU searches with alpha-beta (material, piece-square tables, takes
@@ -102,6 +103,51 @@ new game, or any level before it. The score counts the levels played.
     DOWN at an edge      climb down and hang; DOWN again lets go
     OK                   draw the sword (it comes out by itself near a guard)
     with the sword       LEFT/RIGHT step, OK strike, UP parry, DOWN put away
+
+## Block Puzzle
+
+An 8 x 8 board and a tray of three pieces (singles, lines of 2 to 5,
+squares, rectangles, L, T, S/Z and corners). Put them on the board; every
+full row and column clears - several at once score a combo (10 x lines²),
+clears move after move a streak (x2 ... x5). A new set of three comes when
+the tray is empty; each new piece fits somewhere on the board as it is (if
+anything can). Over when no piece left in the tray fits.
+
+    LEFT/RIGHT (UP/DOWN) choose a piece in the tray, OK takes it
+    arrows               move it over the board: a see-through ghost, red
+                         where it does not fit; the lines it would clear
+                         are framed white
+    OK                   put it down
+    RIGHT at the edge    back to the tray
+
+- **classic**: endless, the high score of the library.
+- **adventure**: 16 levels with a goal and a move limit - collect every gem
+  (a gem goes when its row or column clears), clear every stone and ice
+  block (ice cracks at the first clear and goes at the second) or reach a
+  score. The level reached is kept; "continue: level N" or any level before.
+- **time 2:00**: as many points as you can; every cleared line adds 3 s,
+  a combo 2 s more. Its best is kept apart.
+- **puzzles**: a set board and a set list of pieces - use them all and
+  clear the board. The console has no clock, so the puzzles are numbered
+  (#1 to #999, the same on every console): the next unsolved one is
+  offered, LEFT/RIGHT (UP/DOWN by ten) pick any other.
+
+## Fruit Pot
+
+Drop fruits into a pot. Two equal fruits that touch become the next bigger
+one at their middle: cherry, strawberry, grape, lemon, orange, apple,
+peach, pineapple, coconut, melon - two melons vanish with a bang (100
+points). Only the five smallest come from the dropper; the next one waits
+on the left, the whole chain is on the right. Over when a fruit stays above
+the red line for two seconds.
+
+    LEFT/RIGHT held      move the dropper (or tilt the console)
+    OK or DOWN           drop
+
+The physics runs in whole numbers in fixed 10 ms steps (Verlet, six passes
+of circle against circle and wall per step, the push limited per pass and
+contact damping), so a stack settles still and nothing tunnels or flies
+apart; up to 40 fruits.
 
 ## Boards
 

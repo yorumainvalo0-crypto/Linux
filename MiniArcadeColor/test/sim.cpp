@@ -333,7 +333,328 @@ static void minesBot(uint32_t t) {
   else pzPress(t, PZ_OK, 600);                                  // one tap, then wait out the double tap time
 }
 
+// Block Puzzle: how good the board is after a move (more is better), for the bots
+static int bkEval(const BkState &k, const BkState &was) {
+  int v = (was.gems - k.gems) * 1000 + (was.blocks - k.blocks) * 700 + k.lines * 120 + (int)(k.score - was.score) * (k.mode == BKM_ADV ? 3 : 1);
+  for (int i = 0; i < 64; i++) if (was.kind[i] == BK_ICE && k.kind[i] == BK_CRACK) v += 300;
+  int edges = 0, holes = 0;
+  for (int i = 0; i < 64; i++) {
+    bool e = !(k.b >> i & 1);
+    int r = i / 8, c = i % 8, nb = 0;
+    if (c < 7 && e != !(k.b >> (i + 1) & 1)) edges++;
+    if (r < 7 && e != !(k.b >> (i + 8) & 1)) edges++;
+    if (!e) continue;
+    if (c > 0 && !(k.b >> (i - 1) & 1)) nb++;
+    if (c < 7 && !(k.b >> (i + 1) & 1)) nb++;
+    if (r > 0 && !(k.b >> (i - 8) & 1)) nb++;
+    if (r < 7 && !(k.b >> (i + 8) & 1)) nb++;
+    if (!nb) holes++;
+  }
+  v -= edges * 6 + holes * 40;
+  for (int j = 0; j < 8; j++) {                                  // lines with a goal in them: fill them
+    const uint64_t LS[2] = { 0xFFull << (j * 8), 0x0101010101010101ull << j };
+    for (uint64_t L : LS) {
+      bool goal = false;
+      for (int i = 0; i < 64; i++) if ((L >> i & 1) && (k.b >> i & 1) && k.kind[i] != BK_PLAIN) goal = true;
+      if (goal) { int f = __builtin_popcountll(k.b & L); v += f * f * 4; }
+    }
+  }
+  return v;
+}
+// the best piece and place (or a random one now and then: rnd in %); false = none fits
+static bool bkBest(uint8_t &slot, int8_t &br, int8_t &bc, int rnd = 0) {
+  BkState was = *bk;
+  int best = -1000000;
+  bool any = false, random_ = rnd && rand() % 100 < rnd;
+  for (uint8_t s = 0; s < 3; s++) {
+    if (was.tray[s] == 255) continue;
+    for (int8_t r = 0; r < 8; r++)
+      for (int8_t c = 0; c < 8; c++) {
+        if (!bkFits(was.b, was.tray[s], r, c)) continue;
+        int v;
+        if (random_) v = rand() % 1000;
+        else { *bk = was; bkPlace(was.tray[s], r, c); v = bkEval(*bk, was); }
+        if (v > best) { best = v; slot = s; br = r; bc = c; any = true; }
+      }
+  }
+  *bk = was;
+  return any;
+}
+// plays one round of a mode without the screen; true = goal reached
+static bool bkSimRound(uint8_t mode, uint8_t lv, int maxMoves, int rnd = 0) {
+  bkStart(mode, lv, 1);
+  for (int m = 0; m < maxMoves; m++) {
+    if (bkWon()) return true;
+    if (mode == BKM_ADV && bk->moves >= BK_LEVELS[lv].moves) return false;
+    uint8_t s = 0; int8_t r = 0, c = 0;
+    if (!bkBest(s, r, c, rnd)) return false;
+    bkPlace(bk->tray[s], r, c);
+    bk->tray[s] = 255;
+    if (bkTrayEmpty()) bkDeal();
+  }
+  return bkWon();
+}
+
+// Block Puzzle on the screen: the best move (now and then a random one), through the keys
+static int8_t  bkBotR = 0, bkBotC = 0;
+static int     bkBotRnd = 40, bkBotPlaced = 0, bkBotPlan = -1;
+static uint8_t bkBotSlot = 0;
+static uint8_t bkBotUsed[BK_SEQ];
+static void blocksBot(uint32_t t) {
+  if (pzBusy(t) || !bk) return;
+  if (bk->st == 0) {
+    if (bkBotPlan != bk->moves || bk->tray[bkBotSlot] == 255) {
+      bkBotPlan = -1;
+      if (bk->mode == BKM_DAILY) {                               // puzzles: every piece to where it was cut out
+        if (!bk->moves) memset(bkBotUsed, 0, sizeof(bkBotUsed));
+        for (uint8_t s = 0; s < 3 && bkBotPlan < 0; s++)
+          for (uint8_t j = 0; j < bk->seqN && bkBotPlan < 0; j++)
+            if (bk->tray[s] != 255 && !bkBotUsed[j] && bk->seq[j] == bk->tray[s] && bkFits(bk->b, bk->seq[j], bk->pos[j] / 8, bk->pos[j] % 8)) {
+              bkBotUsed[j] = 1; bkBotSlot = s; bkBotR = bk->pos[j] / 8; bkBotC = bk->pos[j] % 8; bkBotPlan = bk->moves;
+            }
+        if (bkBotPlan < 0) { pzPress(t, PZ_OK, 400); return; }   // over: OK goes on
+      } else {
+        if (!bkBest(bkBotSlot, bkBotR, bkBotC, bkBotRnd)) { pzPress(t, PZ_OK, 400); return; }
+        bkBotPlan = bk->moves;
+      }
+    }
+    if (bk->sel != bkBotSlot) pzPress(t, RT, 110);
+    else pzPress(t, PZ_OK, 140);
+    return;
+  }
+  if (bk->cr < bkBotR) pzPress(t, DN, 90);
+  else if (bk->cr > bkBotR) pzPress(t, UP, 90);
+  else if (bk->cc < bkBotC) pzPress(t, RT, 90);
+  else if (bk->cc > bkBotC) pzPress(t, LT, 90);
+  else { pzPress(t, PZ_OK, 160); bkBotPlaced++; }
+}
+
+static void blocksLogic() {
+  bk = (BkState *)calloc(1, sizeof(BkState));
+  // fitting
+  bool ok = bkFits(0, 7, 0, 3) && !bkFits(0, 7, 0, 4) && !bkFits(0, 8, 4, 0) && bkFits(0, 8, 3, 0) && !bkFits(0, 0, -1, 0);
+  ok = ok && !bkFits(1ull << 9, 9, 0, 0) && bkFits(1ull << 9, 9, 0, 2) && bkFits(1ull << 9, 13, 0, 0);   // the corner leaves (1,1) out
+  check("blocks: pieces fit only on the board and on free cells", ok);
+  ok = true;
+  for (uint8_t s = 0; s < BK_NSHAPE; s++) {
+    const BkShape &p = BK_SHAPES[s];
+    bool rows = true, lastCol = false;
+    for (int r = 0; r < p.h; r++) if (!p.r[r] || p.r[r] >> p.w) rows = false;
+    for (int r = 0; r < p.h; r++) if (p.r[r] >> (p.w - 1) & 1) lastCol = true;
+    if (!rows || !lastCol || bkCells(s) > 9 || !p.wt || p.c > 7) ok = false;
+  }
+  check("blocks: every shape fills its own box", ok);
+  // a row and a column at once, then a streak
+  memset(bk, 0, sizeof(*bk));
+  bk->b = (0xFFull | 0x8080808080808080ull) & ~(1ull << 7);
+  uint32_t p = bkPlace(0, 0, 7);
+  printf("      row + column: %u lines, %u points, board %s\n", bk->lines, (unsigned)p, bk->b ? "not empty" : "empty");
+  check("blocks: a row and a column clear together (combo x2 = 41)", bk->lines == 2 && p == 41 && !bk->b);
+  bk->b = 0xFFull << 8 & ~(1ull << 8);
+  p = bkPlace(0, 1, 0);
+  check("blocks: a clear right after one doubles (streak 2 = 21)", bk->lines == 1 && p == 21 && bk->streak == 2 && !bk->b);
+  p = bkPlace(9, 4, 4);
+  check("blocks: a piece without a clear ends the streak", p == 4 && !bk->streak && bk->b == (0x0303ull << 36));
+  bk->b = 0xFFull << 16 & ~(1ull << 23);
+  bk->kind[17] = BK_ICE; bk->kind[18] = BK_GEM; bk->kind[19] = BK_STONE; bk->gems = 1; bk->blocks = 2;
+  bkPlace(0, 2, 7);
+  bool crack = bk->b == 1ull << 17 && bk->kind[17] == BK_CRACK && !bk->gems && bk->blocks == 1;
+  bk->b |= 0xFFull << 16 & ~(1ull << 23);
+  bkPlace(0, 2, 7);
+  check("blocks: gem collected, stone gone, ice cracks first and goes at the second clear", crack && !bk->b && !bk->blocks);
+  // stuck
+  memset(bk, 0, sizeof(*bk));
+  bk->b = ~0ull;
+  for (int i = 0; i < 64; i += 9) bk->b &= ~(1ull << i);        // only single holes on the diagonal
+  bk->tray[0] = 10; bk->tray[1] = 7; bk->tray[2] = 8;
+  bool st = bkStuck();
+  bk->tray[2] = 0;
+  check("blocks: over when no piece of the tray fits, not while one does", st && !bkStuck());
+  // fair dealing
+  ok = true;
+  srand(7);
+  for (int k = 0; k < 400; k++) {
+    memset(bk, 0, sizeof(*bk));
+    int dens = 30 + rand() % 50;
+    for (int i = 0; i < 64; i++) if (rand() % 100 < dens) bk->b |= 1ull << i;
+    if (bk->b == ~0ull) continue;
+    bkDeal();
+    for (int s = 0; s < 3; s++) if (!bkFitsAny(bk->b, bk->tray[s])) ok = false;
+  }
+  check("blocks: every dealt piece fits somewhere when anything can", ok);
+  // puzzles: the same every time, all solvable, never empty
+  ok = true;
+  int pieces = 0;
+  for (uint16_t n = 1; n <= 300 && ok; n++) {
+    memset(bk, 0, sizeof(*bk)); bk->mode = BKM_DAILY;
+    bkMakePuzzle(n);
+    BkState a = *bk;
+    memset(bk, 0, sizeof(*bk)); bk->mode = BKM_DAILY;
+    bkMakePuzzle(n);
+    if (memcmp(&a, bk, sizeof(a)) || !bk->b || bk->seqN < 2) ok = false;
+    pieces += bk->seqN;
+    for (uint8_t j = 0; j < bk->seqN && ok; j++) {
+      if (!bkFits(bk->b, bk->seq[j], bk->pos[j] / 8, bk->pos[j] % 8)) ok = false;
+      else bkPlace(bk->seq[j], bk->pos[j] / 8, bk->pos[j] % 8);
+    }
+    if (bk->b) ok = false;
+    if (!ok) printf("      puzzle %u fails\n", n);
+  }
+  printf("      puzzles: %.1f pieces on average\n", pieces / 300.0);
+  check("blocks: 300 puzzles the same each time, each one clears with its pieces", ok);
+  // classic: a greedy bot plays until no piece fits
+  randomSeed(3);
+  int score = 0;
+  for (int k = 0; k < 3; k++) { bkSimRound(BKM_CLASSIC, 0, 3000, 25); score += (int)bk->score; }
+  printf("      classic, greedy bot: %d points on average\n", score / 3);
+  check("blocks: the classic bot gets somewhere and the game ends", score / 3 > 300 && bkStuck());
+  // every adventure level: the greedy bot wins it within its moves
+  ok = true;
+  for (uint8_t lv = 0; lv < BK_NLEVEL; lv++) {
+    int wins = 0, left = 0;
+    for (int seed = 1; seed <= 12; seed++) {
+      randomSeed((unsigned long)(seed * 77 + lv));
+      if (bkSimRound(BKM_ADV, lv, 200)) wins++;
+      left += BK_LEVELS[lv].goal == BKG_GEMS ? bk->gems : BK_LEVELS[lv].goal == BKG_BLOCKS ? bk->blocks : (int)bk->score;
+    }
+    printf("      level %2u (%s, %2u moves): won %2d of 12 (%s %.1f)\n", lv + 1,
+           BK_LEVELS[lv].goal == BKG_GEMS ? "gems  " : BK_LEVELS[lv].goal == BKG_BLOCKS ? "blocks" : "score ", BK_LEVELS[lv].moves, wins,
+           BK_LEVELS[lv].goal == BKG_SCORE ? "points" : "left", left / 12.0);
+    if (wins < 3) ok = false;
+  }
+  check("blocks: every adventure level is won by a greedy bot (3+ of 12 tries)", ok && BK_NLEVEL >= 12);
+  // a picture: a piece over the board that would clear a row and a column
+  memset(bk, 0, sizeof(*bk));
+  randomSeed(11);
+  bk->b = 0x3Full << 40 | 0x8080000080808080ull | 0x0000001C1C000000ull | 0x0Full << 56 | 0x7;
+  for (int i = 0; i < 64; i++) bk->tint[i] = (uint8_t)((i * 3 + i / 8) % 8);
+  bk->tray[0] = 9; bk->tray[1] = 21; bk->tray[2] = 33; bk->sel = 0; bk->st = 1; bk->cr = 4; bk->cc = 6;
+  bk->score = 1260; bk->cleared = 14; bk->streak = 2;
+  gfx.clear();
+  bkDraw(0);
+  statusBar("BLOCKS", 1260, 3410, rgb(102, 85, 204));
+  frames = 1; writeFrame(gfx.buffer());
+  free(bk); bk = NULL;
+}
+
+// Fruit Pot: drops at random places
+static uint16_t frBotMerges = 0;
+static int16_t  frBotX = -1;
+static void fruitBot(uint32_t t) {
+  if (fr && fr->merges > frBotMerges) frBotMerges = fr->merges;
+  if (pzBusy(t) || !fr) return;
+  if (frBotX < 0) frBotX = (int16_t)(FR_L + 10 + rand() % (FR_R - FR_L - 20));
+  int16_t x = (int16_t)(frDropX >> 8);
+  if (x < frBotX - 5) pzPress(t, RT, 60);
+  else if (x > frBotX + 5) pzPress(t, LT, 60);
+  else { pzPress(t, DN, 520); frBotX = -1; }
+}
+
+static bool frInside(int32_t tol) {                              // every fruit in the pot (tol 1/256 px)
+  for (uint8_t i = 0; i < fr->n; i++) {
+    const Fruit &a = fr->f[i];
+    if (a.x < (FR_L << 8) + a.rad - tol || a.x > (FR_R << 8) - a.rad + tol || a.y > (FR_FLOOR << 8) - a.rad + tol) return false;
+  }
+  return true;
+}
+static int32_t frMaxSpeed() {
+  int32_t m = 0;
+  for (uint8_t i = 0; i < fr->n; i++) {
+    int32_t vx = abs(fr->f[i].x - fr->f[i].ox), vy = abs(fr->f[i].y - fr->f[i].oy);
+    m = std::max(m, std::max(vx, vy));
+  }
+  return m;
+}
+static int32_t frMaxOverlap() {
+  int32_t m = 0;
+  for (uint8_t i = 0; i < fr->n; i++)
+    for (uint8_t j = i + 1; j < fr->n; j++) {
+      const Fruit &a = fr->f[i], &b = fr->f[j];
+      double d = sqrt((double)(a.x - b.x) * (a.x - b.x) + (double)(a.y - b.y) * (a.y - b.y));
+      m = std::max(m, (int32_t)(a.rad + b.rad - d));
+    }
+  return m;
+}
+
+static void fruitLogic() {
+  fr = (FrState *)calloc(1, sizeof(FrState));
+  // two cherries side by side on the floor become a strawberry between them
+  frAdd(0, 150 << 8, (FR_FLOOR - 7) << 8);
+  frAdd(0, 164 << 8, (FR_FLOOR - 7) << 8);
+  frStep();
+  check("fruit: two cherries touching merge into a strawberry at their middle",
+        fr->n == 1 && fr->f[0].kind == 1 && abs((fr->f[0].x >> 8) - 157) <= 1 && fr->score == FR_PTS[1] && fr->merges == 1);
+  for (int i = 0; i < 300; i++) frStep();
+  check("fruit: the strawberry grows to its size and lands on the floor",
+        fr->f[0].rad == FR_RAD[1] << 8 && (fr->f[0].y >> 8) == FR_FLOOR - FR_RAD[1]);
+  // two melons vanish
+  memset(fr, 0, sizeof(FrState));
+  frAdd(9, 120 << 8, (FR_FLOOR - 40) << 8); frAdd(9, 200 << 8, (FR_FLOOR - 40) << 8);
+  frStep();
+  check("fruit: two melons touching vanish for 100 points", fr->n == 0 && fr->score == 100);
+  // a stack settles and stays still
+  memset(fr, 0, sizeof(FrState));
+  fr->noMerge = true;
+  srand(5);
+  bool inside = true;
+  for (int i = 0; i < 22; i++) frAdd((uint8_t)(rand() % 8), (FR_L + 40 + rand() % (FR_R - FR_L - 80)) << 8, (60 - i * 40) << 8);
+  int settle = -1;
+  for (int s = 0; s < 3000; s++) {
+    frStep();
+    if (!frInside(256)) inside = false;
+    if (settle < 0 && s > 200 && frMaxSpeed() == 0) settle = s;
+  }
+  Fruit snap[FR_MAX];
+  memcpy(snap, fr->f, sizeof(snap));
+  int32_t moved = 0, ke = 0;
+  for (int s = 0; s < 300; s++) {
+    frStep();
+    for (uint8_t i = 0; i < fr->n; i++) {
+      int32_t vx = fr->f[i].x - fr->f[i].ox, vy = fr->f[i].y - fr->f[i].oy;
+      ke += (vx * vx + vy * vy) * (FR_RAD[fr->f[i].kind] * FR_RAD[fr->f[i].kind]) / 256;
+    }
+  }
+  for (uint8_t i = 0; i < fr->n; i++) moved = std::max(moved, std::max(abs(fr->f[i].x - snap[i].x), abs(fr->f[i].y - snap[i].y)));
+  printf("      22 fruits: at rest after %d steps, kinetic energy over 3 s %d, moved %.2f px, overlap %.2f px\n",
+         settle, ke, moved / 256.0, frMaxOverlap() / 256.0);
+  check("fruit: a stack of 22 settles (kinetic energy ~0) and stays still", settle > 0 && settle < 1500 && ke < 1000 && moved < 64);
+  check("fruit: settled fruits barely overlap", frMaxOverlap() < 512);
+  check("fruit: nothing leaves the pot", inside);
+  // 40 fruits thrown in on top of each other: no explosion, all in, then calm
+  memset(fr, 0, sizeof(FrState));
+  fr->noMerge = true;
+  srand(9);
+  for (int i = 0; i < 45; i++) frAdd((uint8_t)(rand() % 5), (FR_L + 10 + rand() % (FR_R - FR_L - 20)) << 8, (110 + rand() % 110) << 8);
+  int32_t fast = 0;
+  inside = true;
+  for (int s = 0; s < 2000; s++) {
+    frStep();
+    if (!frInside(256)) inside = false;
+    if (s > 2) fast = std::max(fast, frMaxSpeed());
+  }
+  printf("      40 fruits overlapping: fastest %.2f px/step, at the end %.2f px/step, overlap %.2f px\n", fast / 256.0, frMaxSpeed() / 256.0, frMaxOverlap() / 256.0);
+  check("fruit: no more than 40 fruits", fr->n == FR_MAX && !frAdd(0, 160 << 8, 100 << 8));
+  check("fruit: 40 overlapping fruits do not blow up, stay in and calm down", inside && fast <= 4 * 256 && frMaxSpeed() < 64 && frMaxOverlap() < 768);
+  clock_t c0 = clock();
+  for (int s = 0; s < 2000; s++) frStep();
+  // a picture: one of every kind in the pot, settled
+  memset(fr, 0, sizeof(FrState));
+  fr->noMerge = true;
+  static const uint8_t SHOW[][2] = { {9,110},{8,200},{7,150},{6,222},{5,100},{4,160},{3,205},{2,130},{1,180},{0,95},{4,215},{2,150},{1,120},{0,170} };
+  for (int i = 0; i < 14; i++) frAdd(SHOW[i][0], SHOW[i][1] << 8, (200 - i * 30) << 8);
+  for (int s = 0; s < 1500; s++) frStep();
+  fr->top = 9; fr->score = 2468; frDropX = 150 << 8;
+  gfx.clear();
+  frDraw(frDropX, 2, 4, 0);
+  statusBar("FRUIT POT", 2468, 5120, rgb(255, 85, 85));
+  frames = 1; writeFrame(gfx.buffer());
+  printf("      host: %.1f us per step with 40 fruits\n", (double)(clock() - c0) * 1e6 / CLOCKS_PER_SEC / 2000);
+  free(fr); fr = NULL;
+}
+
 static bool pzLogic() {
+  if (scenario == "blockslogic") { blocksLogic(); return true; }
+  if (scenario == "fruitlogic") { fruitLogic(); return true; }
   if (scenario == "g2logic") {
     struct Case { uint8_t in[4]; uint8_t out[4]; uint32_t gain; };
     static const Case CS[] = {                                  // one row, moved left (exponents)
@@ -2619,6 +2940,26 @@ int main(int argc, char **argv) {
     uint32_t t = openGameNamed("Match 3", M); simEnd = t + 150000;
     pzStart = t + 900; pzBot = match3Bot; captureMs = { t + 6000 };
     setenv("GRAB", "END", 1);
+  } else if (scenario == "blocks") {                            // classic, a bot until no piece fits
+    uint32_t t = openGameNamed("Block Puzzle", M); simEnd = t + 150000;
+    press(t + 300, OK, 80);
+    pzStart = t + 1000; pzBot = blocksBot; captureMs = { t + 30000 };
+    setenv("GRAB", "NO SPACE", 1);
+  } else if (scenario == "blocksadv") {                         // adventure: level select, level 13 played to its goal
+    simNvsU16["BLKlv"] = 12;
+    uint32_t t = openGameNamed("Block Puzzle", M); simEnd = t + 200000;
+    press(t + 300, DN); press(t + 600, OK, 80); press(t + 1100, OK, 80);
+    pzStart = t + 1800; pzBot = blocksBot; bkBotRnd = 0; captureMs = { t + 9000 };
+    setenv("GRAB", "LEVEL 13 DONE", 1);
+  } else if (scenario == "blockspz") {                          // puzzle 1: every piece back where it belongs
+    uint32_t t = openGameNamed("Block Puzzle", M); simEnd = t + 120000;
+    press(t + 300, UP); press(t + 600, OK, 80); press(t + 1100, OK, 80);
+    pzStart = t + 1800; pzBot = blocksBot; captureMs = { t + 2000 };
+    setenv("GRAB", "CLEARED!", 1);
+  } else if (scenario == "fruit") {                             // a bot drops fruits until the pot is full
+    uint32_t t = openGameNamed("Fruit Pot", M); simEnd = t + 200000;
+    pzStart = t + 600; pzBot = fruitBot; captureMs = { t + 40000, t + 90000 };
+    setenv("GRAB", "POT FULL!", 1);
   } else if (pzLogic()) {
     printf("== %s\n", scenario.c_str());
     printf("%s\n", failures ? "### FAILURES ###" : "   all checks passed");
@@ -2839,6 +3180,27 @@ int main(int argc, char **argv) {
     check("lights out ran", seen("LIGHTS OUT") && seen("MOVES"));
     check("levels solved", seen("DONE!") && seen("4"));
     check("the move limit ends it", seen("LIMIT") && over() && simNvsU16["hLGT"] > 0);
+  }
+  if (scenario == "blocks") {
+    printf("   best stored %u, pieces placed %d\n", simNvsU16["hBLK"], bkBotPlaced);
+    check("block puzzle: modes, board and tray shown", seen("BLOCK PUZZLE") && seen("classic") && seen("BLOCKS") && seen("lines 0"));
+    check("block puzzle: lines cleared, combos and points", (seen("COMBO x2") || seen("STREAK x2")) && bkBotPlaced > 20);
+    check("block puzzle: no space ends it, score kept", seen("NO SPACE") && over() && simNvsU16["hBLK"] > 0);
+  }
+  if (scenario == "blocksadv") {
+    printf("   adventure reached %u\n", simNvsU16["BLKlv"]);
+    check("block puzzle: level select with the level reached", seen("continue: level 13") && seen("level 1"));
+    check("block puzzle: level 13 won, progress saved", seen("LEVEL 13 DONE") && simNvsU16["BLKlv"] == 13);
+  }
+  if (scenario == "blockspz") {
+    check("block puzzle: puzzle picker", seen("PUZZLES") && seen("#1") && seen("the next one"));
+    check("block puzzle: puzzle 1 cleared with its pieces, the next one offered", seen("CLEARED!") && simNvsU16["BLKdy"] >= 2);
+  }
+  if (scenario == "fruit") {
+    printf("   best stored %u, merges %u\n", simNvsU16["hFRT"], frBotMerges);
+    check("fruit pot: pot, next fruit and the chain shown", seen("FRUIT POT") && seen("NEXT") && seen("BIGGEST"));
+    check("fruit pot: fruits merged", frBotMerges >= 5);
+    check("fruit pot: a full pot ends it, score kept", seen("POT FULL!") && over() && simNvsU16["hFRT"] > 0);
   }
   if (scenario == "match3") {
     printf("   best stored %u\n", simNvsU16["hM3X"]);
