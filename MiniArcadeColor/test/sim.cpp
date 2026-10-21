@@ -156,6 +156,13 @@ bool tftPinUsed(uint8_t p) {
 
 // the gyroscope: a sensor on GPIO20 (SDA) / GPIO7 (SCL) in the "tilt" scenario
 static bool    simGyro = false;
+// an SD card with its CS on GPIO20 in the "sdcard" scenario
+static bool simSd = false, simSdIn = false;
+bool sdMount(int8_t cs) { simSdIn = simSd && cs == 20; return simSdIn; }
+void sdUnmount() { simSdIn = false; }
+bool sdReady() { return simSdIn; }
+uint32_t sdSizeMB() { return simSdIn ? 7580 : 0; }
+uint32_t sdFreeMB() { return simSdIn ? 7000 : 0; }
 bool gyroOpen(int8_t sda, int8_t scl) { return simGyro && sda == 20 && scl == 7; }
 void gyroClose() {}
 bool gyroAccel(int16_t a[3]) { if (!simGyro) return false; memcpy(a, simAcc, sizeof(simAcc)); return true; }
@@ -2564,6 +2571,13 @@ int main(int argc, char **argv) {
     press(M + 19500, OK, 80);                                    // ... continue
     simEnd = M + 21000;
     setenv("GRAB", "TILT SETUP", 1);
+  } else if (scenario == "sdcard") {
+    // a card on GPIO20 is found at the first start; the settings show it
+    simSd = true;
+    press(M, UP); press(M + 400, OK, 80);                        // settings
+    for (int i = 0; i < 16; i++) press(M + 800 + 200 * i, DN);   // down to "sd card"
+    simEnd = M + 5000;
+    setenv("GRAB", "sd card      7.4 GB, 92% free", 1);
   } else if (scenario == "fps") {
     // settings -> show fps on, then Snake shows its frame rate
     press(M, UP); press(M + 400, OK, 80);
@@ -2966,6 +2980,11 @@ int main(int argc, char **argv) {
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
     printf("   stepless: up %d, left-right %d\n", keyAxis(B_DOWN, B_UP), keyAxis(B_LEFT, B_RIGHT));
     check("stepless tilt: nearly full up, nothing sideways", keyAxis(B_DOWN, B_UP) > 200 && keyAxis(B_LEFT, B_RIGHT) == 0);
+  }
+  if (scenario == "sdcard") {
+    printf("   sdcs %u, card %d\n", simNvsU16["sdcs"], simSdIn);
+    check("card found on GPIO20 at the first start, kept", simNvsU16["sdcs"] == 21 && simSdIn);
+    check("settings show the card", seen("sd card      7.4 GB, 92% free"));
   }
   if (scenario == "fps") {
     int fps = 0;

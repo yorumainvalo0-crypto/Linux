@@ -24,6 +24,7 @@
 #include "core.h"
 #include "wizard.h"
 #include "tilt.h"
+#include "sd.h"
 #include "wlan.h"
 #include "settings.h"
 #include "fx.h"
@@ -359,6 +360,7 @@ void setup() {
   batDetect();
   applyPinModes();
   tiltStart();
+  sdBoot();
   gfx.setSpeed(cfgSpi);
   fwUnconfirmed = fwPending();
   versionRun(true);

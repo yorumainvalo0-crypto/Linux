@@ -123,6 +123,13 @@ With SDO wired the console finds the display's pins by itself at the start
 too; the result is saved. Without SDO the table above is used.
 Touch and SD card stay unconnected for now.
 
+SD card (the slot on the display module): SD_SCK, SD_MOSI and SD_MISO go to
+the same pins as the display's SCK, SDI and SDO, SD_CS to any free pin (a
+10k pull-up from SD_CS to 3V3 keeps the card quiet otherwise). The console
+looks for the card's CS pin once at the first start; Settings -> "sd card"
+shows its size and free space, OK there searches again (e.g. after wiring
+it later). The card is mounted as FAT at /sd and never formatted.
+
 Settings -> "screen" sets how the picture sits: normal, turned round,
 mirrored top/bottom or mirrored left/right (LEFT/RIGHT or OK steps through).
 
