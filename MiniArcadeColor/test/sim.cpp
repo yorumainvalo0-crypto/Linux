@@ -51,11 +51,12 @@ static const int *LADDER_MV = LADDER_EXT;
 // 1..5 = one key, 6.. = two together (UP+RIGHT, DOWN+LEFT, UP+OK, LEFT+OK)
 static bool LADDER_R = false;
 static const uint8_t LADDER_R_SET[10] = { 0, 1, 2, 4, 8, 16, 1 | 8, 2 | 4, 1 | 16, 4 | 16 };
+static int ladderDrift = 0;                        // mV the supply moves the levels (ladderpair)
 static int ladderRmv(uint8_t idx) {
   static const double R[5] = { 15000, 10000, 6800, 5100, 2700 };
   double g = 0;
   for (int k = 0; k < 5; k++) if (LADDER_R_SET[idx] >> k & 1) g += 1 / R[k];
-  return g ? (int)(3240 / (1 + 10000 * g)) : 3240;
+  return g ? (int)((3240 + ladderDrift) / (1 + 10000 * g)) : 3240;
 }
 static int16_t simAcc[3] = { 0, 0, 16384 };      // the gyroscope's accelerometer, lying flat
 struct AccEv { uint32_t t; int16_t x, y; };
@@ -2994,6 +2995,22 @@ int main(int argc, char **argv) {
       if (m != LADDER_R_SET[idx]) { printf("   set %u read as %u\n", LADDER_R_SET[idx], m); all = false; }
     }
     check("one key and two keys together read right", all);
+    // the supply sags by 2 % while UP is held, then RIGHT is pressed: both still read right
+    bool held = true;
+    ladder = 1;
+    for (int k = 0; k < 400 && held; k++) {
+      ladderDrift = -k / 6;                                      // down to -66 mV, slowly
+      clockUs += 2000;
+      if (!(ladderMask(2) & 1) && k > 4) held = false;
+    }
+    ladder = 4;
+    uint8_t m = 0;
+    for (int k = 0; k < 6; k++) { clockUs += 2000; m = ladderMask(2); }
+    printf("   supply -66 mV: UP held %d, RIGHT read as %u\n", held, m);
+    check("keys stay readable when the supply sags", held && m == 8);
+    ladder = 0;
+    for (int k = 0; k < 6; k++) { clockUs += 2000; m = ladderMask(2); }
+    check("letting go still reads as nothing", m == 0);
   }
   if (scenario == "plain2")    check("hint: no ladder on a pin without ADC", seen("cannot measure volts: ladder on GPIO0..3") && BTN_PIN[0] == 6);
   if (scenario == "ladder4") {

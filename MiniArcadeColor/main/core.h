@@ -119,8 +119,12 @@ static int16_t pinMv(uint8_t pin) {
    from one key to the next must not flash a third.                     */
 static void sndPause(bool pause);        // with the sound, below
 
-struct LadderPin { uint8_t pin, keys, prev; uint32_t at; };
-static LadderPin ladders[3] = { { 255, 0, 0, 0 }, { 255, 0, 0, 0 }, { 255, 0, 0, 0 } };
+/* The levels follow the supply: when it sags a little (WLAN, display,
+   buzzer) every level drops with it. Each pin keeps a scale (1/4096)
+   learned from the keys it reads, and a key held down stays down while
+   the voltage stays clearly below "nothing pressed".                  */
+struct LadderPin { uint8_t pin, keys, prev; uint32_t at; int16_t scale; };
+static LadderPin ladders[3] = { { 255, 0, 0, 0, 4096 }, { 255, 0, 0, 0, 4096 }, { 255, 0, 0, 0, 4096 } };
 static uint8_t ladderMask(uint8_t pin) {
   LadderPin *l = NULL;
   for (uint8_t i = 0; i < 3 && !l; i++) if (ladders[i].pin == pin) l = &ladders[i];
@@ -132,13 +136,20 @@ static uint8_t ladderMask(uint8_t pin) {
   int16_t mv = pinMv(pin);
   sndPause(false);
   uint8_t best = 0;
-  int16_t bestD = 32767;
+  int16_t bestD = 32767, bestLv = 0, top = 0;
   for (uint8_t k = 0; k < ladN; k++) {
     const LadLevel &v = ladLv[k];
     if (v.pin != pin || !v.mask) continue;
-    int16_t dv = (int16_t)abs(mv - v.mv);
-    if (dv <= v.tol && dv < bestD) { bestD = dv; best = v.mask; }
+    int16_t lv = (int16_t)((int32_t)v.mv * l->scale >> 12);
+    if (lv + v.tol > top) top = (int16_t)(lv + v.tol);
+    int16_t dv = (int16_t)abs(mv - lv);
+    if (dv <= v.tol && dv < bestD) { bestD = dv; best = v.mask; bestLv = v.mv; }
   }
+  if (best && bestLv > 100) {                          // follow the supply, slowly and within 7 %
+    int32_t sc = l->scale + ((int32_t)mv * 4096 / bestLv - l->scale) / 16;
+    l->scale = (int16_t)(sc < 3810 ? 3810 : sc > 4380 ? 4380 : sc);
+  }
+  if (!best && l->keys && mv < top + 120) best = l->keys;   // drifted a little: still held
   if (best == l->prev) l->keys = best;
   l->prev = best;
   l->at = now;
