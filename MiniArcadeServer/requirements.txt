@@ -1,0 +1,6 @@
+aiohttp>=3.9
+aiohttp-socks>=0.9
+numpy>=1.26
+# yt-dlp with its YouTube helpers; deno is the JavaScript runtime yt-dlp needs for YouTube
+yt-dlp[default]
+deno

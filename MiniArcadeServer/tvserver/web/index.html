@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MiniArcade TV</title>
+<style>
+:root{--bg:#111318;--card:#1c1f27;--fg:#eee;--dim:#9aa0aa;--acc:#3ba7ff;--red:#ff5a5a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 system-ui,sans-serif}
+header{position:sticky;top:0;z-index:2;background:#0b0c10;padding:10px 14px;display:flex;gap:10px;align-items:center}
+header b{flex:1;font-size:18px}main{padding:12px 14px;max-width:760px;margin:auto}
+section{background:var(--card);border-radius:12px;padding:12px;margin:0 0 14px}
+h2{font-size:16px;margin:0 0 8px;color:var(--dim);font-weight:600}
+input,select,button{font:inherit;border-radius:8px;border:1px solid #333;padding:9px 10px;background:#0d0f14;color:var(--fg)}
+input{width:100%}button{background:var(--acc);border:0;color:#fff;cursor:pointer}button.g{background:#333}
+button.r{background:var(--red)}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>input{flex:1;min-width:0}
+.tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px}.tabs button{background:#2a2e38;white-space:nowrap}
+.tabs button.on{background:var(--acc)}
+.it{display:flex;gap:10px;padding:8px 0;border-top:1px solid #262a33;align-items:center}
+.it img{width:120px;height:68px;object-fit:cover;border-radius:6px;flex:none;background:#000}
+.it div{flex:1;min-width:0}.it .t{font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.m{color:var(--dim);font-size:14px}#msg{min-height:1.3em;color:#ffd166}
+.pad{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}.pad button{padding:14px 4px}
+.hide{display:none}
+</style></head><body>
+<header><b>MiniArcade TV</b><select id="target" title="Ziel-Konsole"></select>
+<button class="g hide" id="out" onclick="logout()">Abmelden</button></header>
+<main>
+<section id="login" class="hide"><h2>Anmelden</h2>
+<div class="row"><input id="pw" type="password" placeholder="Passwort" autocomplete="current-password">
+<button onclick="login()">Anmelden</button></div></section>
+
+<div id="app" class="hide">
+<p id="warn" class="hide" style="background:#5a1d1d;border-radius:10px;padding:10px"></p>
+<p id="msg"></p>
+<section><h2>Fernbedienung <span class="m" id="now"></span></h2>
+<div class="pad">
+<button onclick="ctl('seek',-10)">&#8722;10 s</button><button onclick="ctl('toggle')">&#9199; Pause</button>
+<button onclick="ctl('seek',10)">+10 s</button><button class="r" onclick="ctl('stop')">&#9632; Stop</button>
+<button class="g" onclick="ctl('mode',0,0)">Fl&uuml;ssig</button><button class="g" onclick="ctl('mode',0,1)">Scharf</button>
+<button class="g" onclick="ctl('seek',-60)">&#8722;1 min</button><button class="g" onclick="ctl('seek',60)">+1 min</button>
+</div>
+<p class="m">Fl&uuml;ssig = 160&times;120 mit mehr Bildern pro Sekunde, Scharf = 320&times;240 mit weniger.</p>
+</section>
+
+<section><h2>YouTube</h2>
+<div class="row"><input id="q" placeholder="Suchen oder YouTube-Link einf&uuml;gen" enterkeyhint="search">
+<button onclick="search()">Suchen</button></div>
+<div class="tabs" id="cats" style="margin-top:8px"></div>
+<div id="list"><p class="m">Lade &hellip;</p></div></section>
+
+<section><h2>Konsolen</h2><div id="cons"></div>
+<p class="m">Neue Konsole: auf der Konsole <b>TV</b> &ouml;ffnen, die Server-Adresse und diese PIN eingeben:
+<b id="spin"></b> (Umgebungsvariable CONSOLE_PIN). Entfernte Konsolen m&uuml;ssen neu gekoppelt werden.</p>
+<p class="row" style="margin-top:10px"><button class="g" onclick="testPic()">Testbild auf der Konsole</button></p>
+</section>
+</div>
+</main>
+<script>
+var B='{{BASE}}',$=function(i){return document.getElementById(i)},cons=[],tab=0;
+function msg(t){$('msg').textContent=t||''}
+function api(p,body){var o=body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{};
+ return fetch(B+p,o).then(function(r){if(r.status==401){show(false);throw new Error('Bitte anmelden')}
+ if(!r.ok)return r.text().then(function(t){throw new Error(t||r.statusText)});return r.json()})}
+function show(on){$('login').classList.toggle('hide',on);$('app').classList.toggle('hide',!on);$('out').classList.toggle('hide',!on)}
+function login(){fetch(B+'/api/web/login',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({password:$('pw').value})}).then(function(r){if(!r.ok)return r.text().then(function(t){alert(t)});start()})}
+function logout(){api('/api/web/logout',{}).then(function(){show(false)})}
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function dur(s){if(!s)return'';var m=Math.floor(s/60);return m>=60?Math.floor(m/60)+':'+('0'+m%60).slice(-2)+':'+('0'+s%60).slice(-2):m+':'+('0'+s%60).slice(-2)}
+function items(l){if(!l.length){$('list').innerHTML='<p class="m">Nichts gefunden.</p>';return}
+ $('list').innerHTML=l.map(function(i){return '<div class="it"><img loading="lazy" src="https://i.ytimg.com/vi/'+i.id+'/mqdefault.jpg" alt="">'+
+ '<div><div class="t">'+esc(i.t)+'</div><div class="m">'+esc(i.c)+' &middot; '+dur(i.d)+'</div>'+
+ '<button onclick="play(\''+i.id+'\')">Auf Konsole abspielen</button></div></div>'}).join('')}
+function feed(c){tab=c;Array.prototype.forEach.call($('cats').children,function(b,k){b.classList.toggle('on',k==c)});
+ $('list').innerHTML='<p class="m">Lade &hellip;</p>';api('/api/web/feed?c='+c).then(function(d){items(d.items)}).catch(function(e){$('list').textContent=e.message})}
+function search(){var q=$('q').value.trim();if(!q)return;$('list').innerHTML='<p class="m">Suche &hellip;</p>';
+ api('/api/web/search?q='+encodeURIComponent(q)).then(function(d){items(d.items)}).catch(function(e){$('list').textContent=e.message})}
+function target(){return $('target').value}
+function play(id){if(!target())return msg('Erst eine Konsole koppeln (auf der Konsole)');api('/api/web/play',{console:target(),id:id}).then(function(){msg('Gestartet - auf der Konsole muss TV offen sein');poll()}).catch(function(e){msg(e.message)})}
+function testPic(){if(!target())return msg('Erst eine Konsole koppeln');api('/api/web/play',{console:target(),test:1}).then(function(){msg('Testbild gestartet');poll()}).catch(function(e){msg(e.message)})}
+function ctl(a,d,m){if(!target())return;api('/api/web/ctl',{console:target(),a:a,d:d||0,m:m||0}).then(state).catch(function(e){msg(e.message)})}
+var ST=['bereit','spielt','Pause','zu Ende','Fehler'];
+function state(s){$('now').textContent=s?(ST[s.s]+(s.t?' - '+s.t:'')+(s.s==1||s.s==2?' '+dur(Math.floor(s.pos/1000))+(s.d?' / '+dur(s.d):''):'')+(s.fps?' - '+s.fps+' fps':'')+(s.msg?' ('+s.msg+')':'')):''}
+function poll(){if(target())api('/api/web/state?console='+target()).then(state).catch(function(){})}
+function consoles(){return api('/api/web/consoles').then(function(d){cons=d.consoles;var sel=target();
+ $('target').innerHTML=cons.map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+' ('+c.code+')</option>'}).join('');
+ if(sel)$('target').value=sel;
+ $('cons').innerHTML=cons.length?cons.map(function(c){return '<div class="it"><div><div class="t">'+esc(c.name)+' <span class="m">'+c.code+'</span></div>'+
+ '<div class="m">'+(c.online?'TV ist offen':'nicht verbunden')+'</div></div><button class="r" onclick="removeC(\''+c.id+'\')">Entfernen</button></div>'}).join(''):'<p class="m">Noch keine Konsole gekoppelt.</p>';poll()})}
+function removeC(id){if(confirm('Konsole entfernen? Sie muss danach neu gekoppelt werden.'))api('/api/web/remove',{console:id}).then(consoles)}
+function start(){api('/api/web/me').then(function(d){show(true);$('spin').textContent=d.pin;var w=d.blocked;$('warn').textContent=w;$('warn').classList.toggle('hide',!w);
+ $('cats').innerHTML=d.cats.map(function(n,k){return '<button onclick="feed('+k+')">'+esc(n)+'</button>'}).join('');
+ consoles();feed(0)}).catch(function(){show(false)})}
+$('q').onkeydown=function(e){if(e.key=='Enter')search()};$('pw').onkeydown=function(e){if(e.key=='Enter')login()};
+$('target').onchange=poll;setInterval(poll,3000);start();
+</script></body></html>

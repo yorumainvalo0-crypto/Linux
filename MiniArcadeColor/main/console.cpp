@@ -106,6 +106,7 @@ static const char *const IC_SETTINGS[12] = {
   "ssss....ssss", ".sss....sss.", "..sss..sss..", ".ssssssssss.", "..s.ssss.s..", ".....ss....." };
 
 #include "multiplayer.h"           // online play: uses the games above and the icons
+#include "tv.h"                    // YouTube through the own server
 
 static const Game GAMES[] = {
   { "Snake",       "SNK", snakeRun,       IC_SNAKE,       C::GREEN,         NULL },
@@ -148,6 +149,7 @@ static const Game GAMES[] = {
   // more games come here (before the entries with a tag)
   { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
   { "Online",      "ONL", onlineRun,      IC_ONLINE,      MP_ACCENT,        "nearby" },
+  { "TV",          "TVY", tvRun,          IC_TV,          TV_ACCENT,        "YouTube" },
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };
 static const uint8_t GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
@@ -253,8 +255,9 @@ int appStats(char *out, int max) {
 }
 
 int appSettings(char *out, int max) {
-  return snprintf(out, max, "{\"name\":\"%s\",\"bright\":%u,\"sleep\":%u,\"sound\":%u,\"clock\":%u,\"buzzer\":%u}",
-                  linkName(), cfgBright, cfgSleep, cfgMute ? 0 : 1, cfgClock, sndPin != 255 ? 1 : 0);
+  tvLoad();
+  return snprintf(out, max, "{\"name\":\"%s\",\"bright\":%u,\"sleep\":%u,\"sound\":%u,\"clock\":%u,\"buzzer\":%u,\"tv\":\"%s\"}",
+                  linkName(), cfgBright, cfgSleep, cfgMute ? 0 : 1, cfgClock, sndPin != 255 ? 1 : 0, tvUrl);
 }
 
 const char *appSet(const char *key, const char *val) {
@@ -273,6 +276,13 @@ const char *appSet(const char *key, const char *val) {
   } else if (!strcmp(key, "clock")) {
     if (v != 80 && v != 160 && v != 240) return "clock 80, 160 (or 240 on the S3) MHz";
     cfgClock = (uint8_t)v;
+  } else if (!strcmp(key, "tv")) {
+    return tvSetUrl(val);                        // saved by tv.h (a new server forgets the pairing)
+  } else if (!strcmp(key, "tvpin")) {            // for the next pairing only, never saved
+    size_t n = 0;
+    for (const char *p = val; *p && n < sizeof(tvPinRam) - 1; p++) if (*p >= '0' && *p <= '9') tvPinRam[n++] = *p;
+    tvPinRam[n] = 0;
+    return n >= 4 ? NULL : "the PIN has 4 or more digits";
   } else if (!strcmp(key, "name")) {
     char n[LK_NAME + 1];
     uint8_t k = 0;

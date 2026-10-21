@@ -129,6 +129,7 @@ void simDelayMs(uint32_t ms) {
 #include "Arduino.h"
 #include "net.h"                   // pretend network, before the console finds main/net.h
 #include "link.h"
+#include "tvnet.h"                 // pretend MiniArcade server for the TV
 #include "../main/console.cpp"
 
 // ---------------- the panel ----------------
@@ -168,6 +169,15 @@ void gyroClose() {}
 bool gyroAccel(int16_t a[3]) { if (!simGyro) return false; memcpy(a, simAcc, sizeof(simAcc)); return true; }
 
 static uint8_t lastFrame[SCR_W * SCR_H];
+// the TV: how many sent screens showed a golden picture (the text strip left out)
+static std::vector<uint32_t> tvGoldTop;
+static long tvGoldSeen = 0, tvSends = 0;
+static void tvCheckScreen(const uint8_t *fb) {
+  uint32_t h = 2166136261u;
+  for (int i = 0; i < SCR_W * (SCR_H - TV_STRIP); i++) { h ^= fb[i]; h *= 16777619u; }
+  tvSends++;
+  for (uint32_t g : tvGoldTop) if (g == h) { tvGoldSeen++; break; }
+}
 // PALREC=<file> ./colorsim palace: every second frame, gzipped, for a video:
 // 8 bytes (ms, level, phase, the runner's state, 0) and the 320 x 240 colour indices
 static FILE *palRec = NULL;
@@ -190,6 +200,7 @@ void Gfx::send() {
   if (grabNext) { grabNext = 0; captureAt.insert(frames + 3); }
   if (palRec && !(frames & 1)) palRecFrame((uint32_t)(clockUs / 1000), fb);
   if (captureAt.count(frames)) writeFrame(fb);
+  if (scenario == "tvui" && tvP.have) tvCheckScreen(fb);
   if (vox && (scenario == "mine3d" || scenario == "mine3dfree")) {                            // colours in a picture of the game
     bool u[256] = { false }; int n = 0;
     for (int i = 0; i < SCR_W * SCR_H; i++) if (!u[fb[i]]) { u[fb[i]] = true; n++; }
@@ -2677,6 +2688,133 @@ static void skatBot(uint32_t t) {
   }
 }
 
+// ---------------- TV ----------------
+static uint32_t tvUiT = 0, tvListT = 0, tvPlayT = 0;
+static uint8_t tvUiPhase = 0, tvPinStep = 0;
+static std::vector<std::string> tvTypeQ = { "t", "v", ".de", "done" };    // the address: https://tv.de
+// presses the arrows towards a key of the TV keyboard, then OK
+static void tvTypeKey(uint32_t t) {
+  const std::string &k = tvTypeQ.front();
+  int ty = 4, tx = -1;
+  for (int r = 0; r < 4 && tx < 0; r++) if (k.size() == 1 && strchr(TV_KB_ROWS[r], k[0])) { ty = r; tx = (int)(strchr(TV_KB_ROWS[r], k[0]) - TV_KB_ROWS[r]); }
+  if (tx < 0) {
+    const char *const *last = tvKbUrl ? TV_KB_URL : TV_KB_TXT;
+    for (int i = 0; i < (tvKbUrl ? 6 : 3); i++) if (k == last[i]) tx = i;
+  }
+  if (tvKbY != ty) botPress(t, tvKbY < ty ? 2 : 1, 50);
+  else if (tvKbX != tx) botPress(t, tvKbX < tx ? 8 : 4, 50);
+  else { botPress(t, 3, 70); tvTypeQ.erase(tvTypeQ.begin()); }
+}
+static void tvUiBot(uint32_t t) {
+  if (botBusy(t)) return;
+  if (tvWhere == TVW_KEYS && !tvTypeQ.empty()) { tvTypeKey(t); return; }
+  if (tvWhere == TVW_PIN || (tvWhere == TVW_SAY && tvPinStep < 2)) {
+    // a wrong PIN first (000000), then 120000: UP, RIGHT, UP, UP, OK
+    static const uint8_t PIN_KEYS[] = { 3, 3, 1, 8, 1, 1, 3 };
+    if (tvPinStep == 5) captureMs.push_back(t + 250);             // the PIN typed, before OK
+    if (tvPinStep < sizeof(PIN_KEYS)) botPress(t, PIN_KEYS[tvPinStep++], PIN_KEYS[tvPinStep - 1] == 3 ? 70 : 50);
+    botFree = t + 300;
+    return;
+  }
+  if (tvWhere == TVW_LIST && tvUiPhase == 0) {                  // the start page: the second video
+    if (!tvListT) { tvListT = t; captureMs.push_back(t + 1500); }
+    if (t == tvListT + 2000) botPress(t, 2, 50);
+    if (t == tvListT + 2500) { botPress(t, 3, 70); tvUiPhase = 1; }
+    return;
+  }
+  if (tvWhere == TVW_MENU && tvUiPhase == 1) { botPress(t, 3, 70); tvUiPhase = 2; return; }
+  if (tvWhere == TVW_PLAYER && tvUiPhase == 2) {
+    if (!tvPlayT) { tvPlayT = t; simTvBreakAt = t + 11200; captureMs.push_back(t + 4200); }
+    uint32_t s = t - tvPlayT;
+    if (s == 2700) botPress(t, 8, 50);                           // +10 s
+    if (s == 5200 || s == 7200) botPress(t, 3, 70);              // pause, play
+    if (s == 9200) botPress(t, 1, 50);                           // sharp
+    if (s == 15700) { botPress(t, 3, 900); tvUiPhase = 3; }      // hold OK: back to the list
+    return;
+  }
+  if (tvWhere == TVW_LIST && tvUiPhase == 3) {                  // to the search tab, a search typed
+    static uint32_t t0 = 0;
+    if (!t0) t0 = t;
+    if (t == t0 + 1000 || t == t0 + 1200 || t == t0 + 1400) botPress(t, 8, 50);
+    if (t == t0 + 1800) { botPress(t, 3, 70); tvTypeQ = { "c", "a", "t", "done" }; }
+    if (t > t0 + 1800 && tvTypeQ.empty() && tvN) { tvUiPhase = 4; botFree = t + 2000; }
+    return;
+  }
+  if (tvWhere == TVW_LIST && tvUiPhase == 4) { botPress(t, 3, 900); tvUiPhase = 5; }   // hold OK: to the menu
+}
+static bool tvMemRead(void *ctx, uint8_t *dst, uint32_t n) {
+  std::pair<const uint8_t *, uint32_t> &m = *(std::pair<const uint8_t *, uint32_t> *)ctx;
+  if (n > m.second) return false;
+  memcpy(dst, m.first, n);
+  m.first += n; m.second -= n;
+  return true;
+}
+static uint32_t tvFnv(const uint8_t *p, size_t n) { uint32_t h = 2166136261u; while (n--) { h ^= *p++; h *= 16777619u; } return h; }
+
+// the golden frames through the C decoder, one after the other; returns the screens' hashes
+static bool tvDecodeAll(std::vector<std::string> &got) {
+  std::vector<std::string> all = simTvFluent;
+  all.insert(all.end(), simTvSharp.begin(), simTvSharp.end());
+  uint8_t *fb = gfx.buffer();
+  memset(fb, 0, SCR_W * SCR_H);
+  for (size_t i = 0; i < all.size(); i++) {
+    std::pair<const uint8_t *, uint32_t> m((const uint8_t *)all[i].data() + 1, (uint32_t)all[i].size() - 1);
+    TvFrame fr;
+    if (!tvDecode(fb, m.second, tvMemRead, &m, fr)) return false;
+    char b[128];
+    snprintf(b, sizeof(b), "%u %lu %u %u %08x", fr.seq, (unsigned long)fr.ts, fr.flags, fr.skipped, tvFnv(fb, SCR_W * SCR_H));
+    got.push_back(b);
+    tvGoldTop.push_back(tvFnv(fb, SCR_W * (SCR_H - TV_STRIP)));
+  }
+  return true;
+}
+
+// the golden stream through the C decoder: the same screens as the server's Python decoder
+static void tvDecodeTest() {
+  check("golden.bin of the server's tests found", simTvLoadGolden());
+  FILE *f = fopen("../../MiniArcadeServer/tests/golden.txt", "r");
+  std::vector<std::string> want, got;
+  char line[128];
+  while (f && fgets(line, sizeof(line), f)) if (line[0] != '#') { line[strcspn(line, "\n")] = 0; want.push_back(line); }
+  if (f) fclose(f);
+  bool ok = tvDecodeAll(got);
+  for (size_t i = 0; i < want.size() && i < got.size(); i++)
+    if (want[i] != got[i]) printf("      frame %zu: want '%s' got '%s'\n", i, want[i].c_str(), got[i].c_str());
+  check("every golden frame decodes to the server's screen", ok && !want.empty() && got == want);
+  // skipped tiles keep what was there
+  uint8_t *fb = gfx.buffer();
+  memset(fb, 0x5A, SCR_W * SCR_H);
+  std::pair<const uint8_t *, uint32_t> m((const uint8_t *)simTvFluent[1].data() + 1, (uint32_t)simTvFluent[1].size() - 1);
+  TvFrame fr;
+  tvDecode(fb, m.second, tvMemRead, &m, fr);
+  long kept = 0;
+  for (int i = 0; i < SCR_W * SCR_H; i++) kept += fb[i] == 0x5A;
+  printf("      frame 1: %u tiles skipped, %ld pixels kept\n", fr.skipped, kept);
+  check("skipped tiles keep the old pixels (16 x 16 each)", fr.skipped > 200 && kept == (long)fr.skipped * 256);
+  // broken frames are refused
+  std::string cut = simTvFluent[0].substr(1, simTvFluent[0].size() - 2), bad = simTvFluent[0].substr(1, 7) + "\xFF";
+  std::pair<const uint8_t *, uint32_t> m1((const uint8_t *)cut.data(), (uint32_t)cut.size()), m2((const uint8_t *)bad.data(), (uint32_t)bad.size());
+  check("a cut frame and an unknown tile kind are refused", !tvDecode(fb, m1.second, tvMemRead, &m1, fr) && !tvDecode(fb, m2.second, tvMemRead, &m2, fr));
+  // the clock: waits for the first frame, shows in time, drops late ones, starts anew far behind
+  TvClock k = { false, 0, 0 };
+  bool c1 = tvDue(k, 1000, 5000) == TV_WAIT && tvDue(k, 1000 + TV_PREBUF_MS, 5000) == TV_SHOW;
+  bool c2 = tvDue(k, 1000 + TV_PREBUF_MS + 30, 5040) == TV_WAIT && tvDue(k, 1000 + TV_PREBUF_MS + 50, 5040) == TV_SHOW;
+  bool c3 = tvDue(k, 1000 + TV_PREBUF_MS + 80 + TV_LATE_MS + 1, 5080) == TV_DROP;
+  bool c4 = tvDue(k, 1000 + TV_PREBUF_MS + 5000, 5120) == TV_SHOW && tvDue(k, 1000 + TV_PREBUF_MS + 5040, 5160) == TV_SHOW;
+  check("clock: first frame after the buffer, in time, late ones dropped, far behind starts anew", c1 && c2 && c3 && c4);
+  // a console slower than the video (a frame takes 55 ms, they come every 40): frames are dropped, no slow motion
+  TvClock c = { false, 0, 0 };
+  uint32_t now = 0, shown = 0, dropped = 0, lastTs = 0;
+  for (uint32_t ts = 0; ts < 10000; ts += 40) {
+    uint8_t d;
+    while ((d = tvDue(c, now, ts)) == TV_WAIT) now += 5;
+    if (d == TV_SHOW) { shown++; now += 55; lastTs = ts; } else { dropped++; now += 2; }
+  }
+  long behind = (long)(now - c.t0) - (long)(lastTs - c.ts0);
+  printf("      slow console: %u shown, %u dropped, %ld ms behind at the end\n", shown, dropped, behind);
+  check("slow console: real time kept by dropping frames", dropped > 50 && shown > 120 && behind < 120);
+}
+
 int main(int argc, char **argv) {
   scenario = argc > 1 ? argv[1] : "menu";
   srand(1);
@@ -2964,6 +3102,22 @@ int main(int argc, char **argv) {
     printf("== %s\n", scenario.c_str());
     printf("%s\n", failures ? "### FAILURES ###" : "   all checks passed");
     return failures ? 1 : 0;
+  } else if (scenario == "tvdecode") {                          // the TV's decoder and clock, no screen
+    printf("== %s\n", scenario.c_str());
+    tvDecodeTest();
+    return failures ? 1 : 0;
+  } else if (scenario == "tvui") {
+    // the TV from scratch: no server address (the phone page sets it), pairing,
+    // the list with thumbnails, a video played: +10 s, pause, play, sharp, a lost
+    // connection, back to the list, back to the menu
+    uint32_t t = openGameNamed("TV", M); simEnd = t + 34000;
+    simNvsU16["fps"] = 1;                                        // the frame rate shown over the video
+    simBot = tvUiBot; botFrom = t;
+    tvUiT = t;
+    simTvLoadGolden();
+    std::vector<std::string> g;
+    tvDecodeAll(g);
+    (void)t;
   } else if (scenario == "boardlogic") {                        // the rules alone, no screen
     printf("== %s\n", scenario.c_str());
     boardLogic();
@@ -3282,6 +3436,37 @@ int main(int argc, char **argv) {
     check("the game goes on where it was left", same && ch->plies == 6 && ch->human == 1 && ch->level == 0 && ch->lastTo >= 0);
   }
   bool mpOver = seen("YOU WIN") || seen("YOU LOST") || seen("DRAW");
+  if (scenario == "tvui") {
+    bool acts = true;
+    for (const char *a : { "act a=seek&d=10", "act a=pause", "act a=play", "act a=mode&m=1" }) {
+      bool f = false;
+      for (auto &l : simTvLog) f = f || l == a;
+      if (!f) { printf("      missing: %s\n", a); acts = false; }
+    }
+    auto asked = [](const char *p) { for (auto &l : simTvLog) if (l.find(p) != std::string::npos) return true; return false; };
+    printf("      %zu requests, %ld screens sent while playing, %ld golden, shown %u, late %u (reported %u times)\n",
+           simTvLog.size(), tvSends, tvGoldSeen, simTvShown, simTvLate, simTvReports);
+    char setLine[40];
+    tvSettingsLine(setLine, sizeof(setLine));
+    printf("      settings: '%s'\n", setLine);
+    check("address typed on the console, connection tested", !strcmp(tvUrl, "https://tv.de") && asked("/api/ping"));
+    check("pairing with the server PIN on the console, a wrong one first", seen("SERVER PIN") && seen("wrong PIN") &&
+          simTvWrongPins == 1 && !strcmp(tvTok, "TOKEN-1234567890-abcdefghijklmnop") &&
+          simNvsBlob.count("tok") && simNvsBlob["tok"].compare(0, 5, "TOKEN") == 0 && !strcmp(setLine, "tv server    tv.de paired"));
+    check("a search typed on the console, remembered", asked("/api/search?q=cat") && !strcmp(tvRecent[0], "cat") &&
+          simNvsBlob.count("srch") && simNvsBlob["srch"].compare(0, 3, "cat") == 0);
+    check("start page: categories and a list with thumbnails", seen("< Beliebt >") && asked("/api/feed?c=0") && asked("/api/thumb/pop00000003"));
+    check("the second video played", asked("/api/tv/play?id=pop00000001"));
+    check("frames shown, and they are the golden pictures", tvGoldSeen > 60 && simTvShown > 60);
+    std::string paused;
+    for (const std::string &x : seenTexts) if (x.compare(0, 6, "PAUSED") == 0) paused = x;
+    printf("      seen: '%s'\n", paused.c_str());
+    check("keys sent: +10 s, pause, play, sharp", acts && paused.compare(0, 11, "PAUSED  0:1") == 0 && paused.find("/ 3:32") != std::string::npos);
+    check("sharp pictures after UP", simTvMode == 1);
+    check("after the lost connection it went on", simTvBroken == 1 && tvP.shownAll > 100);
+    check("fps shown over the video", tvP.have);
+    check("back: the video stopped, the list, then the menu", asked("/api/tv/ctl?a=stop") && tvUiPhase == 5 && pollHook == NULL);
+  }
   if (scenario == "online") {
     printf("      name %s, games ANNA saw %d, challenges from ANNA %d\n", simName, simBotGames, mpInvited);
     check("lobby shown, ANNA found", seen("ONLINE") && seen("ANNA") && seen("free"));
