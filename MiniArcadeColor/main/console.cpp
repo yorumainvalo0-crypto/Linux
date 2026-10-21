@@ -44,11 +44,13 @@
 #include "game_pacman.h"
 #include "game_bomber.h"
 #include "game_2048.h"
+#include "game_blocks.h"
 #include "game_mines.h"
 #include "game_sokoban.h"
 #include "game_sudoku.h"
 #include "game_lightsout.h"
 #include "game_match3.h"
+#include "game_fruit.h"
 #include "game_dino.h"
 #include "game_racer.h"
 #include "game_frogger.h"
@@ -122,6 +124,7 @@ static const Game GAMES[] = {
   { "4 wins",      "C4W", connect4Run,    IC_CONNECT4,    C::BLUE,          NULL },
   { "Tic Tac Toe", "TTT", tictactoeRun,   IC_TICTACTOE,   C::PINK,          NULL },
   { "2048",        "2K4", g2048Run,       IC_2048,        C::ORANGE,        NULL },
+  { "Block Puzzle", "BLK", blocksRun,     IC_BLOCKS,      rgb(102,85,204),  NULL },
   { "Minesweeper", "MSW", minesRun,       IC_MINES,       C::BLUE,          NULL },
   { "Pac-Man",     "PAC", pacmanRun,      IC_PACMAN,      C::YELLOW,        NULL },
   { "Shooter",     "SHT", shooterRun,     IC_SHOOTER,     C::CYAN,          NULL },
@@ -131,6 +134,7 @@ static const Game GAMES[] = {
   { "Sudoku",      "SUD", sudokuRun,      IC_SUDOKU,      C::CYAN,          NULL },
   { "Lights Out",  "LGT", lightsOutRun,   IC_LIGHTS,      C::YELLOW,        NULL },
   { "Match 3",     "M3X", match3Run,      IC_MATCH3,      C::PINK,          NULL },
+  { "Fruit Pot",   "FRT", fruitRun,       IC_FRUIT,       rgb(255,85,85),   NULL },
   { "Checkers",    "CHK", checkersRun,    IC_CHECKERS,    C::BROWN,         NULL },
   { "Mau-Mau",     "MAU", maumauRun,      IC_MAUMAU,      C::RED,           NULL },
   { "Skat",        "SKT", skatRun,        IC_SKAT,        C::DKGRN,         NULL },
