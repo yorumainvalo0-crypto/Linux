@@ -150,6 +150,14 @@ about 50 mV steps) - that works, but a 10k pull-up to 3V3 with keys via 0,
 2.2k, 4.7k, 10k and 22k is sturdier. OK is two opposite keys on different
 pins, an own OK key, or - on a ladder - two keys pressed together, learned
 in the last step of the wizard.
+
+Two keys at once on one ladder (e.g. UP + RIGHT to jump in Palace): with a
+10k pull-up to 3V3 and the keys via **15k, 10k, 6.8k, 5.1k and 2.7k** to GND
+every key and every pair of keys has its own level, at least 36 mV apart
+(four keys: 15k, 11k, 7.5k, 5.6k, at least 62 mV). The wizard then asks for
+two arrows together once - that measures the supply - and works out the
+level of every pair from the single keys. Pairs that would lie too close to
+another level (e.g. keys on the pin's own pull-up) are simply not used.
 Free on the C3 with the wiring above: GPIO1..4, 6, 7 and 20; ladder keys and
 the battery need one of GPIO1..4 (ADC). The plans use: ladder keys GPIO4,
 RIGHT GPIO3, battery GPIO1, buzzer GPIO20, gyroscope GPIO6/7, GPIO2 free.

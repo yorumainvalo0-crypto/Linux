@@ -47,6 +47,16 @@ static const int LADDER_INT[8] = { 3100, 600, 649, 696, 750, 345 };
 // five keys: the four arrows and an own OK key (14.6k)
 static const int LADDER_5[8] = { 3100, 600, 649, 696, 750, 800 };
 static const int *LADDER_MV = LADDER_EXT;
+// five keys through 15k / 10k / 6.8k / 5.1k / 2.7k to GND, 10k pull-up to a 3.24 V supply;
+// 1..5 = one key, 6.. = two together (UP+RIGHT, DOWN+LEFT, UP+OK, LEFT+OK)
+static bool LADDER_R = false;
+static const uint8_t LADDER_R_SET[10] = { 0, 1, 2, 4, 8, 16, 1 | 8, 2 | 4, 1 | 16, 4 | 16 };
+static int ladderRmv(uint8_t idx) {
+  static const double R[5] = { 15000, 10000, 6800, 5100, 2700 };
+  double g = 0;
+  for (int k = 0; k < 5; k++) if (LADDER_R_SET[idx] >> k & 1) g += 1 / R[k];
+  return g ? (int)(3240 / (1 + 10000 * g)) : 3240;
+}
 static int16_t simAcc[3] = { 0, 0, 16384 };      // the gyroscope's accelerometer, lying flat
 struct AccEv { uint32_t t; int16_t x, y; };
 static std::vector<AccEv> accScript;
@@ -67,7 +77,7 @@ void simFrameSent(const uint8_t *, size_t) {}                   // the OLED's I2
 int simAdcRaw(int ch) {
   bool down = pinMode_[ch] == 3;
   if (ch == BAT) return 3900 / 2 * (down ? 62 : 100) / 100 * 4095 / 2500;
-  if (ch == LADDER) { int mv = LADDER_MV[ladder] + rand() % 17 - 8 + (toneOn && ladder ? 40 : 0);   // noisy, and the buzzer pulls
+  if (ch == LADDER) { int mv = (LADDER_R ? ladderRmv(ladder) : LADDER_MV[ladder]) + rand() % 17 - 8 + (toneOn && ladder ? 40 : 0);   // noisy, and the buzzer pulls
     if (mv < 0) mv = 0; return mv * 4095 / 2500 > 4095 ? 4095 : mv * 4095 / 2500; }
   if (pinPress[ch] || pinMode_[ch] == 2) return 4095;
   if (down) return 5;
@@ -2524,6 +2534,14 @@ int main(int argc, char **argv) {
     press(5700, 5 << 4, 400);
     press(10500, 5 << 4, 200);                                   // OK: yes, I hear it
     simEnd = 12500;
+  } else if (scenario == "ladderpair") {
+    // five keys on one pin, then UP+RIGHT together tell the supply; later pairs are read as two keys
+    simNvsU16.erase("pset"); LADDER = 2; LADDER_R = true;
+    press(2500, 1 << 4, 400); press(3300, 2 << 4, 400); press(4100, 3 << 4, 400); press(4900, 4 << 4, 400);
+    press(5700, 5 << 4, 400);
+    press(6700, 6 << 4, 700);                                    // UP + RIGHT: the supply
+    script.push_back({ 13000, 7 << 4 });                         // DOWN + LEFT held to the end
+    simEnd = 14000;
   } else if (scenario == "plain2") {
     // two keys on GPIO6, which has no ADC: the wizard says so
     simNvsU16.erase("pset");
@@ -2963,6 +2981,19 @@ int main(int argc, char **argv) {
     check("own OK key learned on the ladder", BTN_PIN[4] == 2 && BTN_MV[4] > 780);
     check("sound setup shows the own OK key", seen("OK = yes"));
     check("OK while beeping picked the buzzer", simNvsU16.count("snd") && simNvsU16["snd"] != 255 && simNvsU16["sset"] == 1);
+  }
+  if (scenario == "ladderpair") {
+    printf("   supply %u mV, keys %u %u %u %u %u mV\n", ladVs, BTN_MV[0], BTN_MV[1], BTN_MV[2], BTN_MV[3], BTN_MV[4]);
+    check("five keys learned on one pin", BTN_MV[0] && BTN_MV[1] && BTN_MV[2] && BTN_MV[3] && BTN_MV[4] && BTN_PIN[4] == 2);
+    check("supply measured from two keys together (3.24 V)", abs((int)ladVs - 3240) < 60 && simNvsU16["lvs"] == ladVs);
+    bool all = true;
+    for (uint8_t idx = 1; idx < 10; idx++) {                     // every set read back as its keys
+      ladder = idx;
+      uint8_t m = 0;
+      for (int k = 0; k < 6 && m != LADDER_R_SET[idx]; k++) { clockUs += 2000; m = ladderMask(2); }
+      if (m != LADDER_R_SET[idx]) { printf("   set %u read as %u\n", LADDER_R_SET[idx], m); all = false; }
+    }
+    check("one key and two keys together read right", all);
   }
   if (scenario == "plain2")    check("hint: no ladder on a pin without ADC", seen("cannot measure volts: ladder on GPIO0..3") && BTN_PIN[0] == 6);
   if (scenario == "ladder4") {
