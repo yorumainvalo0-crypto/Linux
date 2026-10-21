@@ -50,7 +50,7 @@ yt-dlp aktualisiert sich selbst: bei jedem Containerstart und danach alle
 | `THUMB_CACHE_MB` | 50 | Platz für Vorschaubilder im Volume. |
 | `YTDLP_UPDATE_HOURS` | 24 | yt-dlp-Update; `0` = nie (auch nicht beim Start). |
 | `CATEGORIES` | `Beliebt=;Musik=musik;…` | Kategorien der Startseite: `Name=Suchbegriff;…`. Ein leerer Begriff („Beliebt“) mischt die meistgesehenen der Woche aus allen anderen. |
-| `TRUST_PROXY` | 1 | Die Client-Adresse aus `X-Forwarded-For` nehmen (für die Sperren pro Adresse). |
+| `TRUSTED_PROXIES` | leer | IPs/Netze des Reverse-Proxys, mit Komma (z. B. `10.0.0.5` oder `192.168.10.0/24`). Nur bei Anfragen **von dort** gelten `X-Forwarded-For` / `X-Real-IP` als Client-Adresse (PIN-Sperre, Begrenzungen). Leer = die Adresse der Verbindung zählt (dann teilen sich alle Clients die Adresse des Proxys). |
 | `TZ` | – | Zeitzone, z. B. `Europe/Berlin` (für „Pause bis …“). |
 | `YT_PROXY` | leer | Aller YouTube-Verkehr über diesen Proxy: `socks5://user:pass@host:1080` oder `http://user:pass@host:3128`. Siehe „IP sauber halten“. |
 | `YT_SOURCE_ADDRESS` | leer | … oder von dieser zusätzlichen IP (IPv4/IPv6) des Servers aus. |
@@ -124,6 +124,32 @@ Vorschaubilder, Cookie-Schlüssel, ggf. die erzeugte PIN) liegen im Docker-Volum
 
 ## Hinter dem Reverse-Proxy
 
+**Proxy auf einer anderen Maschine** (TLS endet dort): in `.env`
+`BIND_IP` auf die Adresse dieses Servers setzen, die der Proxy erreicht
+(z. B. die private IP, sonst `0.0.0.0`), und `TRUSTED_PROXIES` auf die
+Adresse des Proxys, wie sie hier ankommt:
+
+```sh
+BIND_IP=10.0.0.2          # dieser Server im privaten Netz (oder 0.0.0.0)
+HOST_PORT=8080
+TRUSTED_PROXIES=10.0.0.5  # der Proxy
+```
+
+Der Port darf **nur vom Proxy** erreichbar sein (sonst könnte jemand den
+Proxy umgehen und falsche `X-Forwarded-For` schicken – die werden dann zwar
+ignoriert, aber unverschlüsselt sollte niemand anderes rankommen). Achtung:
+Docker-Portfreigaben umgehen `ufw`; deshalb die Regel in die Kette
+`DOCKER-USER` (oder in die Hetzner-Cloud-Firewall bzw. nur das private Netz):
+
+```sh
+iptables -I DOCKER-USER -p tcp --dport 8080 ! -s 10.0.0.5 -j DROP
+```
+
+Der Proxy muss die Client-Adresse mitschicken: nginx
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` und
+`proxy_set_header X-Real-IP $remote_addr;`, Traefik und Caddy setzen
+`X-Forwarded-For` von selbst.
+
 Der Proxy muss den Videostrom **ungepuffert** weitergeben (der Server sendet
 dafür auch `X-Accel-Buffering: no`) und Anfragen bis ca. 30 s offen lassen.
 
@@ -135,11 +161,12 @@ server {
     server_name tv.example.de;
     # ssl_certificate / ssl_certificate_key: das vorhandene Wildcard-Zertifikat
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://127.0.0.1:8080;     # Proxy auf anderer Maschine: http://10.0.0.2:8080
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_buffering off;
         proxy_read_timeout 60s;

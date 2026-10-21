@@ -214,3 +214,29 @@ async def test_stream_real_time(cli, monkeypatch):
             assert ts - first_ts <= (loop.time() - t0) * 1000 + 300 + 100     # not ahead of real time
             have, frames, keys = seq, frames + 1, keys + (flags & 1)
     assert 45 <= frames <= 2.5 * 25 + 10 and keys == 1
+
+
+class _Req:
+    def __init__(self, remote, headers):
+        self.remote, self.headers = remote, headers
+
+
+@pytest.mark.parametrize('trusted', ['', '127.0.0.1', '10.0.0.0/8,127.0.0.0/8'])
+async def test_client_address_behind_proxy(aiohttp_client, tmp_path, trusted):
+    """X-Forwarded-For counts only from TRUSTED_PROXIES: then a wrong-PIN lock hits
+    the one client, otherwise everybody behind the same connection address."""
+    cfg = tvapp.Config({'ADMIN_PASSWORD': 'pw', 'DATA_DIR': str(tmp_path), 'YTDLP_UPDATE_HOURS': '0',
+                        'CONSOLE_PIN': '13572468', 'TRUSTED_PROXIES': trusted})
+    app = tvapp.make_app(cfg, yt=youtube.YouTube(60, FAKE))
+    cli = await aiohttp_client(app)
+    a = {'X-Forwarded-For': '203.0.113.7'}
+    for k in range(5):
+        r = await cli.post('/api/pair', params={'code': 'AAA%d' % k, 'pin': '0'}, headers=a)
+        assert r.status == 403
+    b = {'X-Forwarded-For': '198.51.100.9, 10.1.2.3'}               # a client, then a hop (trusted if 10/8 is)
+    r = await cli.post('/api/pair', params={'code': 'BBBB', 'pin': '13572468'}, headers=b)
+    assert r.status == (429 if not trusted else 200)
+    srv = app['srv']
+    if trusted:
+        assert srv.ip(_Req('127.0.0.1', b)) == ('198.51.100.9' if '10.0.0.0/8' in trusted else '10.1.2.3')
+    assert srv.ip(_Req('192.0.2.1', a)) == '192.0.2.1'                # not a proxy: its header is ignored

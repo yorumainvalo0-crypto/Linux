@@ -3,6 +3,7 @@ page (password, then a signed cookie) and the stream."""
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -39,7 +40,11 @@ class Config:
         self.cache_s = int(float(e.get('CACHE_MINUTES', '10')) * 60)
         self.thumb_mb = float(e.get('THUMB_CACHE_MB', '50'))
         self.update_h = float(e.get('YTDLP_UPDATE_HOURS', '24'))
-        self.trust_proxy = e.get('TRUST_PROXY', '1') == '1'
+        # the reverse proxies whose X-Forwarded-For / X-Real-IP count (IPs or networks)
+        self.trusted = []
+        for part in e.get('TRUSTED_PROXIES', '').replace(';', ',').split(','):
+            if part.strip():
+                self.trusted.append(ipaddress.ip_network(part.strip(), strict=False))
         self.ffmpeg = e.get('FFMPEG', 'ffmpeg')
         self.yt_proxy = e.get('YT_PROXY', '')
         self.yt_source = e.get('YT_SOURCE_ADDRESS', '')
@@ -116,15 +121,26 @@ class Server:
             log.warning('CONSOLE_PIN not set - the consoles pair with this PIN: %s', self.pin)
 
     # ---------------- helpers ----------------
+    def trusted(self, addr):
+        try:
+            a = ipaddress.ip_address(addr or '')
+        except ValueError:
+            return False
+        return any(a in n for n in self.cfg.trusted)
+
     def ip(self, req):
-        if self.cfg.trust_proxy:
-            xf = req.headers.get('X-Forwarded-For')
-            if xf:
-                return xf.split(',')[-1].strip()
-            xr = req.headers.get('X-Real-IP')
-            if xr:
-                return xr.strip()
-        return req.remote or '?'
+        """The client's address: the socket's peer, or - only when that peer is one of
+        TRUSTED_PROXIES - the first address in X-Forwarded-For (read from the right)
+        that is not a trusted proxy itself, else X-Real-IP."""
+        peer = req.remote or '?'
+        if not self.trusted(peer):
+            return peer
+        xf = [x.strip() for x in req.headers.get('X-Forwarded-For', '').split(',') if x.strip()]
+        for x in reversed(xf):
+            if not self.trusted(x):
+                return x
+        xr = req.headers.get('X-Real-IP', '').strip()
+        return xr or peer
 
     def console(self, req):
         tok = req.headers.get('X-Token') or ''
@@ -501,7 +517,8 @@ class Server:
             raise web.HTTPUnauthorized(text='falsches Passwort')
         r = self.j({'ok': 1})
         r.set_cookie('mas', self.cookie(), max_age=30 * 86400, httponly=True, samesite='Strict',
-                     secure=req.secure or req.headers.get('X-Forwarded-Proto') == 'https', path=self.cfg.base or '/')
+                     secure=req.secure or (self.trusted(req.remote) and req.headers.get('X-Forwarded-Proto') == 'https'),
+                     path=self.cfg.base or '/')
         return r
 
     async def logout(self, req):
