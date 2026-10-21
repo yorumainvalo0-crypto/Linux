@@ -253,6 +253,45 @@ Mau-Mau and Bomberman with either console, Chess only between two colour
 consoles (an OLED console is marked "OLED" in the list). Real-time games run
 in lockstep on both consoles; only the keys go over the radio.
 
+## TV
+
+"TV" in the game list plays YouTube through your own **MiniArcade server**
+(`../MiniArcadeServer`, Docker; German setup guide there). The server does
+the heavy part - yt-dlp, ffmpeg, the colours of this console - and sends the
+picture as 8 x 8 tiles (unchanged / one colour / two colours and a mask / four
+colours / raw) that go straight into the frame buffer; only the changed
+blocks go to the panel. No sound. No YouTube account, ever. Everything works
+on the console alone; the server's phone page is an extra.
+
+First start (the console needs the WLAN):
+
+    address      a keyboard for URLs, "https://" already there, keys .de .com .net
+    test         the console asks the server (/api/ping) before anything else
+    PIN          the server's CONSOLE_PIN: UP/DOWN digit, LEFT/RIGHT place,
+                 '-' ends a shorter PIN, OK pairs; the console keeps its own
+                 token (NVS "tv"), never the PIN
+
+The lists: the server's categories ("Beliebt", Musik, ...), Search (a keyboard
+on the console, the last 4 searches kept), Favourites, History, Setup
+(address, unpair, free memory). LEFT/RIGHT tab, UP/DOWN row, OK = play /
+favourite, hold OK = back. A video started on the server's phone page plays
+when TV is open.
+
+    playing      OK pause/go on, LEFT/RIGHT -10/+10 s, UP sharp (320 x 240,
+                 fewer frames), DOWN fluent (160 x 120 doubled, ~25 fps),
+                 hold OK = back to the list
+    show fps     (Settings) frames per second and kB/s at the bottom
+
+Settings has a line "tv server" (host, paired or not; OK = new address); the
+console's own phone page (Settings) has the address and a one-time PIN field
+too. Real time: every frame carries its video time; a frame that is late is
+painted but not sent to the panel, never slow motion; the console reports
+shown and dropped frames with every request and the server lowers or raises
+frame rate and quality. Memory on the C3: one TLS connection (dynamic mbedTLS
+buffers, records up to 16 kB), an 8 kB stream buffer (16 kB on the S3), a
+7 kB task stack; the heap is logged on the USB console (`tv: ... heap free`)
+and shown under Setup.
+
 ## Updates
 
 Its own channel: the release `color-latest` in this repository. A new

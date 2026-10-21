@@ -1,7 +1,7 @@
 // Pages for a phone in the same WLAN as the console - see net.h
 //
 //   /stats     high scores, play times, awards        (GET /api/stats)
-//   /settings  name, brightness, sleep, sound, clock, hotspot password, AI key
+//   /settings  name, brightness, sleep, sound, clock, hotspot password, AI key, TV server (colour)
 //                                                     (GET /api/settings, POST /api/set)
 //   /screen    live picture of the display            (GET /api/screen)
 //   /pad       the screen plus big keys to play with  (POST /api/key)
@@ -182,6 +182,13 @@ static const char P_SETTINGS[] =
   "<button onclick=\"set('aikey','');setTimeout(hs,800)\">forget the key</button>"
   "<p class=m>The key stays on the console: it is never shown again and not part of a backup. "
   "Only free models are used, so it costs nothing. Questions are typed on the console (library: AI Chat) and need a WLAN with internet.</p>"
+  "<div id=tvs style=display:none><h1>TV</h1><label>TV server, e.g. https://tv.example.de"            // colour console only
+  "<input id=tv maxlength=99 autocomplete=off autocapitalize=off spellcheck=false></label>"
+  "<button onclick=\"set('tv',$('tv').value)\">save the address</button>"
+  "<label>Server PIN (used once for pairing, not stored)<input id=tp inputmode=numeric maxlength=10 autocomplete=off></label>"
+  "<button onclick=\"set('tvpin',$('tp').value);$('tp').value=''\">pair with this PIN</button>"
+  "<p class=m>Your MiniArcade server for YouTube on the console (library: TV). Both can be typed on the console too. "
+  "A new address means pairing again.</p></div>"
   "<p id=msg class=m></p><script>"
   "function hs(){fetch('/api/hotspot').then(function(r){return r.json()}).then(function(h){$('hp').value=h.pw;"
   "$('ai').textContent=h.ai?'A key is stored.':'No key stored yet.'})}hs();"
@@ -189,7 +196,7 @@ static const char P_SETTINGS[] =
   ".then(function(r){return r.text()}).then(function(t){$('msg').textContent=t})}"
   "fetch('/api/settings').then(function(r){return r.json()}).then(function(s){$('nm').value=s.name;"
   "$('br').value=s.bright;$('bv').textContent=s.bright;$('sl').value=s.sleep;$('so').checked=!!s.sound;"
-  "$('so').disabled=!s.buzzer;$('ck').value=s.clock}).catch(function(){$('msg').textContent='the console did not answer'});"
+  "$('so').disabled=!s.buzzer;$('ck').value=s.clock;if('tv'in s){$('tvs').style.display='';$('tv').value=s.tv}}).catch(function(){$('msg').textContent='the console did not answer'});"
   "$('nm').onchange=function(){set('name',this.value)};$('br').oninput=function(){$('bv').textContent=this.value};"
   "$('br').onchange=function(){set('bright',this.value)};$('sl').onchange=function(){set('sleep',this.value)};"
   "$('so').onchange=function(){set('sound',this.checked?1:0)};$('ck').onchange=function(){set('clock',this.value)}"

@@ -1,0 +1,8 @@
+# seq ts flags skipped-tiles fnv1a-of-the-screen (see make_golden.py)
+0 0 1 0 65b97d01
+1 40 0 280 8654ff81
+2 80 0 280 9e59218d
+3 120 0 276 65b97d01
+4 0 3 0 f68d6a21
+5 40 2 1179 9c91c98a
+6 80 2 1179 f68d6a21

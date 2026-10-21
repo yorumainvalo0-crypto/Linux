@@ -29,6 +29,15 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 CONFIG_HTTPD_MAX_URI_LEN=512
 CONFIG_LWIP_IPV6=n
+# TV (tv.h, tvnet.cpp): one TLS connection next to the WLAN and the 75 kB picture.
+# Record buffers only while a record is on its way, the certificates freed after
+# the handshake. The incoming records stay up to 16 kB (any reverse proxy).
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
+# a wider TCP window, so the video is not held back by the round trip
+CONFIG_LWIP_TCP_WND_DEFAULT=11520
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=12
 
 # --- colour display ---
 # the SPI driver runs from IRAM, so a frame can go out while flash is busy

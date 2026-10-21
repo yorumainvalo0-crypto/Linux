@@ -14,6 +14,7 @@ on:
     paths:
       - "MiniArcadeColor/**"
       - "MiniArcade/main/**"            # net, link, phone and fonts are shared
+      - "MiniArcadeServer/tests/golden.*"   # the TV decoder test reads the server's frames
       - ".github/workflows/miniarcade-color.yml"
   workflow_dispatch:
     inputs:

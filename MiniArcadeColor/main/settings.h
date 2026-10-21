@@ -84,6 +84,9 @@ static void screenTurn(bool fwd) {
   cfgDisp = (uint8_t)((cfgDisp & ~9) | (o & 1) | (o & 2 ? 8 : 0));
 }
 
+void tvSettingsLine(char *out, size_t n);      // tv.h
+void tvSettingsOk();
+
 void settingsRun() {
 #if CONFIG_IDF_TARGET_ESP32S3
   static const uint8_t CLOCKS[3] = { 80, 160, 240 };
@@ -92,7 +95,7 @@ void settingsRun() {
 #endif
   static const uint8_t MINS[5] = { 0, 1, 5, 15, 30 };
   static const uint8_t SPEEDS[3] = { 20, 27, 40 };
-  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_SPEED, L_FPS, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_TLEVEL, L_TSENS, L_KEYS, L_BUZZER, L_BAT, L_SD, L_WLAN, L_VERSION, L_BACK, L_N };
+  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_SPEED, L_FPS, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_TLEVEL, L_TSENS, L_KEYS, L_BUZZER, L_BAT, L_SD, L_WLAN, L_TV, L_VERSION, L_BACK, L_N };
   uint8_t sel = 0, top = 0;
   const uint8_t ROWS = 7;
   btnClear();
@@ -144,6 +147,7 @@ void settingsRun() {
       else if (sel == L_BAT)     batterySetup();
       else if (sel == L_SD)      sdSetup();
       else if (sel == L_WLAN)    wlanRun();
+      else if (sel == L_TV)      tvSettingsOk();
       else if (sel == L_VERSION) versionRun(false);
       else if (sel == L_TILT)    { if (tiltSetup()) { cfgTilt = true; tiltSave(); } tiltStart(); }
       else if (sel == L_TLEVEL)  tiltLevelScreen();
@@ -178,6 +182,7 @@ void settingsRun() {
     if (sel >= L_BAT && sel <= L_WLAN) sdLine(line[L_SD], 36);      // only when in view: it asks the card
     else snprintf(line[L_SD], 36, "sd card...");
     snprintf(line[L_WLAN], 36, "wlan and update...");
+    tvSettingsLine(line[L_TV], 36);
     snprintf(line[L_VERSION], 36, "firmware version...");
     snprintf(line[L_BACK], 36, "back to the games");
 

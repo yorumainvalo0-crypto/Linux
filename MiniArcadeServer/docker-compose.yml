@@ -1,0 +1,21 @@
+# docker compose up -d   (settings in .env, see .env.example and README.md)
+services:
+  miniarcade:
+    build: .
+    image: miniarcade-server
+    container_name: miniarcade-server
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # only on this machine by default: the reverse proxy forwards to it
+      - "${BIND_IP:-127.0.0.1}:${HOST_PORT:-8080}:${PORT:-8080}"
+    volumes:
+      - miniarcade-data:/data
+    mem_limit: 1g
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  miniarcade-data:
