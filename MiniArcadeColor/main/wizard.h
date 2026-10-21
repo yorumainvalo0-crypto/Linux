@@ -122,6 +122,54 @@ static void wizScreen(const char *msg, uint8_t step, int8_t seen, uint8_t act, i
   gfx.send();
 }
 
+/* Two arrows of one ladder pressed together tell the ladder's supply
+   voltage (see keyTolerances), so that every pair of keys can be told
+   apart later. Asked only when the ladder has three keys or more and
+   some pair stands clear of the other levels; skipped after 8 s.      */
+static void learnPairs() {
+  int8_t a = -1, b = -1;
+  static const uint8_t TRY[4][2] = { { B_UP, B_RIGHT }, { B_UP, B_LEFT }, { B_DOWN, B_RIGHT }, { B_DOWN, B_LEFT } };
+  for (uint8_t t = 0; t < 4 && a < 0; t++) {
+    uint8_t x = TRY[t][0], y = TRY[t][1];
+    if (BTN_MV[x] > 60 && BTN_MV[y] > 60 && BTN_PIN[x] == BTN_PIN[y]) { a = (int8_t)x; b = (int8_t)y; }
+  }
+  if (a < 0) return;
+  uint8_t n = 0;
+  bool pairs = false;
+  for (uint8_t k = 0; k < B_COUNT; k++) if (BTN_PIN[k] == BTN_PIN[a] && BTN_MV[k] > 60) n++;
+  for (uint8_t k = 0; k < ladN; k++) if (ladLv[k].pin == BTN_PIN[a] && (ladLv[k].mask & (ladLv[k].mask - 1))) pairs = true;
+  if (n < 3 || !pairs) return;
+  int16_t va = (int16_t)(BTN_MV[a] - 1), vb = (int16_t)(BTN_MV[b] - 1), lo = va < vb ? va : vb, last = -1;
+  uint32_t t0 = millis();
+  char msg[40];
+  snprintf(msg, sizeof(msg), "hold %s + %s together", BTN_NAME[a], BTN_NAME[b]);
+  while (millis() - t0 < 8000) {
+    int16_t mv = pinMv(BTN_PIN[a]);
+    gfx.gradient(0, 0, SCR_W, SCR_H, C::DKBLUE, C::BLACK);
+    gfx.center(10, "KEY SETUP", C::WHITE, F_BOLD);
+    gfx.center(48, msg, C::YELLOW);
+    gfx.center(80, "so that two keys at once work", C::LTGREY);
+    arrow(SCR_W / 2 - 40, 130, (uint8_t)a, C::CYAN, 22);
+    arrow(SCR_W / 2 + 40, 130, (uint8_t)b, C::CYAN, 22);
+    char l[40];
+    snprintf(l, sizeof(l), "%u.%02u V   skipped in %lu s", mv / 1000, mv % 1000 / 10, (unsigned long)((8999 - (millis() - t0)) / 1000));
+    gfx.center(176, l, C::LTGREY);
+    gfx.send();
+    if (mv < lo - 30 && mv > 30) {                           // lower than either key alone: both are down
+      if (last >= 0 && abs(mv - last) <= 15) {
+        float inv = 1.0f / va + 1.0f / vb - 1.0f / ((mv + last) / 2);
+        uint16_t vs = inv > 0 ? (uint16_t)(1.0f / inv) : 0;
+        if (vs >= 2700 && vs <= 3900) { ladVs = vs; sfx(1500, 80); break; }
+      }
+      last = mv;
+    } else last = -1;
+    delay(50);
+  }
+  uint32_t rt = millis();
+  while (pinMv(BTN_PIN[a]) < lo + 150 && millis() - rt < 5000) delay(10);   // let go
+  delay(80);
+}
+
 void learnKeys() {
   bool used[sizeof(PINS_ALL)];
   uint8_t act = 0;
@@ -178,6 +226,8 @@ void learnKeys() {
     while (rawPressed(b) && millis() - rt < 5000) delay(10);
     delay(80);
   }
+  ladVs = 3300;
+  learnPairs();
   savePins();
   applyPinModes();
 

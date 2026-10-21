@@ -59,19 +59,51 @@ static uint32_t okTime = 0;
    key for a moment and the phone repeats it while the finger stays on.  */
 static volatile uint32_t vKeyUntil[B_COUNT];
 
-// half the distance to the next key on the same ladder (the levels may be
-// only some 40 mV apart when the keys use the pin's own pull-up)
+/* Two keys of one ladder together: both resistors in parallel. With the
+   pull-up to the supply Vs, 1/V(pair) = 1/V(a) + 1/V(b) - 1/Vs, so the
+   level of every pair follows from the two learned keys. Vs is measured
+   once by the key wizard (two keys together), else taken as 3.3 V. A pair
+   is only told apart when it lies clear of every other level.          */
+static uint16_t ladVs = 3300;            // the ladder's supply in mV, saved as "lvs"
+struct LadLevel { uint8_t pin, mask; int16_t mv, tol; };
+static LadLevel ladLv[B_COUNT * (B_COUNT + 1) / 2];
+static uint8_t  ladN = 0;
+static int16_t ladPair(int16_t a, int16_t b) {      // 0 = cannot be told
+  if (a < 60 || b < 60) return 0;                    // a key straight to GND: no pairs
+  float inv = 1.0f / a + 1.0f / b - 1.0f / ladVs;
+  return inv > 0 ? (int16_t)(1.0f / inv) : 0;
+}
+
+// every level of every ladder, each with half the distance to its nearest neighbour
 static void keyTolerances() {
-  for (uint8_t i = 0; i < B_COUNT; i++) {
-    if (!BTN_MV[i]) continue;
+  ladN = 0;
+  for (uint8_t i = 0; i < B_COUNT; i++)
+    if (BTN_MV[i]) ladLv[ladN++] = { BTN_PIN[i], (uint8_t)(1 << i), (int16_t)(BTN_MV[i] - 1), 250 };
+  uint8_t singles = ladN;
+  for (uint8_t i = 0; i < B_COUNT; i++)
+    for (uint8_t j = i + 1; j < B_COUNT; j++) {
+      if (!BTN_MV[i] || !BTN_MV[j] || BTN_PIN[i] != BTN_PIN[j]) continue;
+      int16_t mv = ladPair((int16_t)(BTN_MV[i] - 1), (int16_t)(BTN_MV[j] - 1));
+      if (mv) ladLv[ladN++] = { BTN_PIN[i], (uint8_t)(1 << i | 1 << j), mv, 250 };
+    }
+  // pairs too close to another level drop out (a learned OK of two keys stays a key)
+  uint16_t crowded = 0;                               // judged against all levels, dropped ones too
+  for (uint8_t k = singles; k < ladN; k++)
+    for (uint8_t m = 0; m < ladN; m++)
+      if (m != k && ladLv[m].pin == ladLv[k].pin && abs(ladLv[m].mv - ladLv[k].mv) < 30) crowded |= (uint16_t)(1 << k);
+  for (uint8_t k = singles; k < ladN; k++) if (crowded >> k & 1) ladLv[k].mask = 0;
+  for (uint8_t k = 0; k < ladN; k++) {
+    if (!ladLv[k].mask) continue;
     int16_t tol = 250;
-    for (uint8_t j = 0; j < B_COUNT; j++)
-      if (j != i && BTN_MV[j] && BTN_PIN[j] == BTN_PIN[i]) {
-        int16_t half = (int16_t)(abs((int)BTN_MV[i] - (int)BTN_MV[j]) / 2);
+    for (uint8_t m = 0; m < ladN; m++)
+      if (m != k && ladLv[m].mask && ladLv[m].pin == ladLv[k].pin) {
+        int16_t half = (int16_t)(abs(ladLv[k].mv - ladLv[m].mv) / 2);
         if (half < tol) tol = half;
       }
-    BTN_TOL[i] = (uint16_t)(tol < 8 ? 8 : tol);
+    ladLv[k].tol = tol < 8 ? 8 : tol;
   }
+  for (uint8_t k = 0; k < singles; k++)
+    for (uint8_t b = 0; b < B_COUNT; b++) if (ladLv[k].mask == 1 << b) BTN_TOL[b] = (uint16_t)ladLv[k].tol;
 }
 
 // a pin in millivolts, the mean of eight readings
@@ -81,35 +113,36 @@ static int16_t pinMv(uint8_t pin) {
   return (int16_t)(sum / 8);
 }
 
-/* Which ladder key is down on a pin (-1 = none): the nearest learned
-   voltage. Read at most once per millisecond, and a new key counts only
-   when two readings in a row agree - a finger sliding from one key to
-   the next must not flash a third.                                     */
+/* Which ladder keys are down on a pin (a mask, 0 = none): the nearest
+   level, a key or a pair. Read at most once per millisecond, and a new
+   level counts only when two readings in a row agree - a finger sliding
+   from one key to the next must not flash a third.                     */
 static void sndPause(bool pause);        // with the sound, below
 
-struct LadderPin { uint8_t pin; int8_t key, prev; uint32_t at; };
-static LadderPin ladders[3] = { { 255, -1, -1, 0 }, { 255, -1, -1, 0 }, { 255, -1, -1, 0 } };
-static int8_t ladderKey(uint8_t pin) {
+struct LadderPin { uint8_t pin, keys, prev; uint32_t at; };
+static LadderPin ladders[3] = { { 255, 0, 0, 0 }, { 255, 0, 0, 0 }, { 255, 0, 0, 0 } };
+static uint8_t ladderMask(uint8_t pin) {
   LadderPin *l = NULL;
   for (uint8_t i = 0; i < 3 && !l; i++) if (ladders[i].pin == pin) l = &ladders[i];
   for (uint8_t i = 0; i < 3 && !l; i++) if (ladders[i].pin == 255) { l = &ladders[i]; l->pin = pin; }
-  if (!l) return -1;
+  if (!l) return 0;
   uint32_t now = millis();
-  if (l->at == now) return l->key;
+  if (l->at == now) return l->keys;
   sndPause(true);                        // the buzzer's current shifts the levels
   int16_t mv = pinMv(pin);
   sndPause(false);
-  int8_t best = -1;
+  uint8_t best = 0;
   int16_t bestD = 32767;
-  for (uint8_t b = 0; b < B_COUNT; b++) {
-    if (BTN_PIN[b] != pin || !BTN_MV[b]) continue;
-    int16_t dv = (int16_t)abs(mv - ((int)BTN_MV[b] - 1));
-    if (dv <= (int16_t)BTN_TOL[b] && dv < bestD) { bestD = dv; best = (int8_t)b; }
+  for (uint8_t k = 0; k < ladN; k++) {
+    const LadLevel &v = ladLv[k];
+    if (v.pin != pin || !v.mask) continue;
+    int16_t dv = (int16_t)abs(mv - v.mv);
+    if (dv <= v.tol && dv < bestD) { bestD = dv; best = v.mask; }
   }
-  if (best == l->prev) l->key = best;
+  if (best == l->prev) l->keys = best;
   l->prev = best;
   l->at = now;
-  return l->key;
+  return l->keys;
 }
 
 void applyPinModes() {
@@ -135,7 +168,7 @@ bool rawPressed(uint8_t i) {
   if (u && (int32_t)(u - millis()) > 0) return true;
   if (i < 4 && tiltKey[i]) return true;
   if (BTN_PIN[i] == 255) return false;
-  if (BTN_MV[i]) return ladderKey(BTN_PIN[i]) == (int8_t)i;
+  if (BTN_MV[i]) return ladderMask(BTN_PIN[i]) >> i & 1;
   return digitalRead(BTN_PIN[i]) == (BTN_ACT[i] ? HIGH : LOW);
 }
 
@@ -155,9 +188,12 @@ void btnUpdate() {
     if (d && !kDown[i]) { kDown[i] = true; kTime[i] = now; kSent[i] = kChord[i] = false; }
     else if (!d && kDown[i]) {
       kDown[i] = false;
-      // a ladder key that turns straight into another on its pin (two keys
-      // pressed together for OK) was no tap of its own
-      if (BTN_MV[i] && ladderKey(BTN_PIN[i]) >= 0) kChord[i] = true;
+      // a ladder key that turns straight into another one on its pin (a
+      // finger sliding, or two keys together read as OK) was no tap of its
+      // own; letting go of one of two keys held together still is
+      if (BTN_MV[i])
+        for (uint8_t m = ladderMask(BTN_PIN[i]) & ~(1 << i), j = 0; m; m >>= 1, j++)
+          if ((m & 1) && (j == B_OK || !kDown[j])) kChord[i] = true;
       if (!kSent[i] && !kChord[i]) dirEmit(i, now);          // a quick tap
       kChord[i] = false;
     }
@@ -321,6 +357,7 @@ bool loadPins() {
   cfgSpi    = (uint8_t)prefs.getUShort("spi", CONFIG_ARCADE_TFT_MHZ);
   cfgFps    = prefs.getUShort("fps", 0) != 0;
   bool ok = prefs.getUShort("pset", 0) == 3;      // version 3 = four keys + optional OK
+  ladVs     = prefs.getUShort("lvs", 3300);
   if (ok)
     for (uint8_t i = 0; i < B_COUNT; i++) {
       char k[4];
@@ -340,6 +377,7 @@ void savePins() {
     snprintf(k, sizeof(k), "m%u", i); prefs.putUShort(k, BTN_MV[i]);
   }
   prefs.putUShort("pset", 3);
+  prefs.putUShort("lvs", ladVs);
   prefs.end();
 }
 void saveSound() { prefs.begin("arcade", false); prefs.putUShort("snd", sndPin); prefs.end(); }
