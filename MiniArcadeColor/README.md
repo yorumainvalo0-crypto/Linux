@@ -12,7 +12,8 @@ Shooter, Jump & Run, Sokoban, Battleship, Sudoku, Lights Out, Match 3,
 Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
 the CPU or two players on one console (and online, see below). Plus
 Mine 3D, a block world in first person, Palace, a platformer, Block Puzzle,
-Fruit Pot, Skat against two CPU players (all below), and Chess with all
+Fruit Pot, Pumpkin Maze, a tilt labyrinth with a level editor on the phone,
+Skat against two CPU players (all below), and Chess with all
 rules (castling, en passant, promotion, check, mate, stalemate, 50 moves),
 against the CPU, for two players on one console or online (the board can
 turn round for black):
@@ -148,6 +149,42 @@ The physics runs in whole numbers in fixed 10 ms steps (Verlet, six passes
 of circle against circle and wall per step, the push limited per pass and
 contact damping), so a stack settles still and nothing tunnels or flies
 apart; up to 40 fruits.
+
+## Pumpkin Maze
+
+The wooden ball maze, Halloween style: tilt the console (or hold the arrow
+keys) and roll the pumpkin into the glowing goal hole. Every other hole is a
+pit - but like in the toy it only swallows the pumpkin when the pumpkin's
+middle gets close to the pit's middle, so a fast pumpkin rolls over the rim.
+Three pumpkins a level; a fall starts again at the start or at the last rune.
+
+| Tile | | Tile | |
+|------|-|------|-|
+| wall | stone, bounces | ice | slides on, little grip |
+| pit | swallows near its middle | mud | holds the pumpkin |
+| wandering pit | moves along its row or column | bumper | kicks the pumpkin away |
+| arrow | pushes one way, cannot be rolled against | candy | a star for all of them |
+| key / door | the doors open when every key is taken | rune | the place to start again |
+
+Stars: one for getting through, one for every candy (a level without candy:
+for losing no pumpkin), one for a time under par. 15 levels, each opens the
+next; stars and best times are kept, best in the library = all stars.
+
+Own levels: up to 8, made on the phone (20 x 13 tiles, one character each,
+`NAME|row|row|...` as text). In the level list DOWN goes to the own levels and
+"+ level editor on the phone": without a WLAN the console opens its own
+hotspot and shows its name, password and a QR code to join it, then the link
+http://192.168.4.1/maze (LEFT/RIGHT shows the link as a QR code); in the home
+WLAN it shows http://<its address>/maze. On the page: pick a tile and paint,
+set start and goal, name the level, "check" (one start and goal, keys for the
+doors, a way to the goal), save it into a slot, load, rename or delete the
+own levels, export and import them as text. A saved level shows up on the
+console at once; leaving the editor screen switches the hotspot off again.
+The OLED console does not show the editor.
+
+Physics in whole numbers (1/256 px) in 10 ms steps. The board is drawn once;
+a frame redraws only the tiles that changed or had something over them, so
+about 1-2 % of the picture goes to the display while rolling.
 
 ## Boards
 

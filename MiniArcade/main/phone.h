@@ -166,4 +166,8 @@ int appLevelGet(uint8_t slot, char *out, int max) {
   strlcpy(out, skOwn[slot], max);
   return strlen(out);
 }
+
+// Pumpkin Maze is a game of the colour console only: no slots here (the page says so)
+int appMazeGet(int slot, char *out, int max) { return slot < 0 ? snprintf(out, max, "{\"slots\":0,\"l\":[]}") : (out[0] = 0); }
+const char *appMazePut(uint8_t, const char *) { return "no Pumpkin Maze on this console"; }
 #endif

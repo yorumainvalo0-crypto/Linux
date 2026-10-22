@@ -66,6 +66,8 @@
 #include "game_minigolf.h"
 #include "game_palace.h"
 #include "game_chess.h"
+#include "qr.h"
+#include "game_pumpkin.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -146,6 +148,7 @@ static const Game GAMES[] = {
   { "Minigolf",    "GLF", minigolfRun,    IC_MINIGOLF,    C::GREEN,         NULL },
   { "Lander",      "LND", landerRun,      IC_LANDER,      C::GREY,          NULL },
   { "Palace",      "PAL", palaceRun,      IC_PALACE,      rgb(210,150,40),  NULL },
+  { "Pumpkin Maze", "PMZ", pumpkinRun,    IC_PUMPKIN,     rgb(255,102,0),   NULL },
   // more games come here (before the entries with a tag)
   { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
   { "Online",      "ONL", onlineRun,      IC_ONLINE,      MP_ACCENT,        "nearby" },
@@ -256,7 +259,7 @@ int appStats(char *out, int max) {
 
 int appSettings(char *out, int max) {
   tvLoad();
-  return snprintf(out, max, "{\"name\":\"%s\",\"bright\":%u,\"sleep\":%u,\"sound\":%u,\"clock\":%u,\"buzzer\":%u,\"tv\":\"%s\"}",
+  return snprintf(out, max, "{\"name\":\"%s\",\"bright\":%u,\"sleep\":%u,\"sound\":%u,\"clock\":%u,\"buzzer\":%u,\"tv\":\"%s\",\"maze\":1}",
                   linkName(), cfgBright, cfgSleep, cfgMute ? 0 : 1, cfgClock, sndPin != 255 ? 1 : 0, tvUrl);
 }
 
