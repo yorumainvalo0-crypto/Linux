@@ -44,6 +44,7 @@ const char *netApName();
 const char *netVersion();         // version of the running firmware
 
 void        netSetUpdateBin(const char *name);   // firmware file the GitHub update fetches
+extern void (*netInstallHook)();  // set: "install" on the web page calls this instead of installing
 void        netCheckUpdate();     // runs in the background, see netJob()
 void        netInstallUpdate();
 NetJob      netJob();

@@ -3,6 +3,10 @@
 // itself is net.cpp, shared with the OLED console; the updates come from
 // the colour console's own release channel (CONFIG_ARCADE_UPDATE_PATH).
 
+#include "updmem.h"
+static volatile bool updAsked = false;   // "install" on the phone page: restart into the update mode
+static void updAsk() { updAsked = true; }
+
 /* The display chip is stored once ("tftc": 1 = ILI9341, 2 = ST7789). Each
    chip has its own firmware file in the release, and the GitHub update
    fetches the one for the stored chip. Flashing the other build over USB
@@ -27,6 +31,7 @@ static void tftChipRemember() {
     prefs.putUShort("tftc", chip);
     prefs.end();
   }
+  netInstallHook = updAsk;                     // "install" on the web page: the update mode too
   netSetUpdateBin(chip == 2 ? "miniarcade-color-" FW_TARGET "-st7789.bin"
                             : "miniarcade-color-" FW_TARGET ".bin");
 }
@@ -34,7 +39,18 @@ static void tftChipRemember() {
 static bool wlanStay = false;        // keep the WLAN on after leaving this page
 static bool phoneLink = false;       // WLAN on outside this page right now
 
-static void phoneHook() { netTick(); lastInput = millis(); }
+static bool uploadShown = false;     // the upload question is on the screen right now
+static void uploadPrompt();          // below, with the WLAN page
+
+/* While the WLAN stays on outside the WLAN page, a firmware sent from the
+   web page must still be confirmed on the console - on whatever screen it
+   is (the web page waits 30 s for the answer).                         */
+static void phoneHook() {
+  netTick();
+  lastInput = millis();
+  if (updAsked) updRequest(UPD_GITHUB);
+  if (!uploadShown && netJob() == JOB_ASKING) uploadPrompt();
+}
 
 void phoneLinkOff() {
   if (!phoneLink) return;
@@ -75,6 +91,31 @@ static void askBox(const char *title, const char *l1, const char *l2, const char
   gfx.send();
 }
 
+// the question, then the progress until the board restarts (or the answer was no)
+static void uploadPrompt() {
+  uploadShown = true;
+  btnClear();
+  for (;;) {
+    bool alive = poll();                 // runs phoneHook too, which only ticks the network now
+    NetJob jb = netJob();
+    if (jb == JOB_ASKING) {
+      if (!alive || btn(B_LEFT)) { netAnswer(false); sfx(300, 120); continue; }
+      if (btn(B_OK)) { netAnswer(true); sfx(1200, 50); continue; }
+      char b[40];
+      snprintf(b, sizeof(b), "v%.31s", netAskVersion());
+      askBox(TR("UPLOAD", "HOCHLADEN"), TR("install the firmware", "die Firmware installieren"), b, TR("from the web page?", "von der Webseite?"));
+    } else if (jb == JOB_UPDATING || jb == JOB_DONE) {
+      wlanTitle("UPDATE", C::GREEN);
+      gfx.center(80, jb == JOB_DONE ? TR("done - restarting", "fertig - Neustart") : TR("installing...", "installiere..."), C::WHITE, F_BOLD);
+      bar(30, 130, SCR_W - 60, netProgress(), C::LIME);
+      gfx.center(180, TR("do not switch off", "nicht ausschalten"), C::YELLOW);
+      gfx.send();
+    } else break;
+  }
+  btnClear();
+  uploadShown = false;
+}
+
 void wlanRun() {
   if (runClock < 80) { wlanNeedsClock(); return; }
   uint8_t sel = 0;
@@ -88,6 +129,7 @@ void wlanRun() {
     lastInput = millis();
     NetState st = netState();
     NetJob jb = netJob();
+    if (updAsked) updRequest(UPD_GITHUB);
     bool locked = jb == JOB_UPDATING || jb == JOB_DONE || jb == JOB_ASKING;
     if (!alive) { leaving = true; gfx.clear(); }
     if (leaving && !locked && jb != JOB_CHECKING) break;
@@ -144,7 +186,7 @@ void wlanRun() {
     }
 
     bool on = st == NET_CONNECTING || st == NET_ONLINE;
-    const uint8_t ITEMS = 7;
+    const uint8_t ITEMS = 8;
     if (btn(B_UP))   { sel = sel ? sel - 1 : ITEMS - 1; sfx(700, 15); }
     if (btn(B_DOWN)) { sel = (sel + 1) % ITEMS; sfx(700, 15); }
     if (btn(B_OK)) {
@@ -153,16 +195,17 @@ void wlanRun() {
       else if (sel == 1) netSetup();
       else if (sel == 2) {
         if (st != NET_ONLINE) sfx(300, 120);
-        else if (jb == JOB_NEWER) netInstallUpdate();
+        else if (jb == JOB_NEWER) updRequest(UPD_GITHUB);   // restarts into the update mode
         else if (jb != JOB_CHECKING) netCheckUpdate();
       } else if (sel == 3) netPlay();
       else if (sel == 4) netForget();
       else if (sel == 5) wlanStay = !wlanStay;
+      else if (sel == 6) { if (st == NET_ONLINE) updRequest(UPD_UPLOAD); else sfx(300, 120); }
       else leaving = true;
       btnClear();
       continue;
     }
-    char info[48], item[7][32];
+    char info[48], item[8][32];
     col infoC = C::LTGREY;
     if (jb == JOB_ERROR)           { snprintf(info, sizeof(info), "%s", netError()); infoC = C::ORANGE; }
     else if (st == NET_ONLINE)     { snprintf(info, sizeof(info), "http://%s", netAddress()); infoC = C::CYAN; }
@@ -180,7 +223,8 @@ void wlanRun() {
     snprintf(item[3], 32, TR("phone hotspot", "Handy-Hotspot"));
     snprintf(item[4], 32, TR("forget network", "Netz vergessen"));
     snprintf(item[5], 32, TR("stay online: %s", "online bleiben: %s"), wlanStay ? TR("yes", "ja") : TR("no", "nein"));
-    snprintf(item[6], 32, TR("back", "zurück"));
+    snprintf(item[6], 32, TR("update from a file", "Update aus Datei"));
+    snprintf(item[7], 32, TR("back", "zurück"));
 
     wlanTitle("WLAN");
     {
@@ -194,9 +238,14 @@ void wlanRun() {
       gfx.text(132, 9, s, C::WHITE);
     }
     gfx.text(12, 40, info, infoC);
+    {                                    // free memory: TLS for the GitHub update needs a 16 kB block
+      char m[24];
+      snprintf(m, sizeof(m), "RAM %luk/%luk", (unsigned long)(tvFreeHeap(NULL) / 1024), (unsigned long)(tvLargestBlock() / 1024));
+      gfx.right(SCR_W - 10, 42, m, tvLargestBlock() < 17 * 1024 ? C::ORANGE : C::GREY, F_SMALL);
+    }
     for (uint8_t i = 0; i < ITEMS; i++) {
-      int16_t y = 62 + i * 25;
-      if (i == sel) gfx.rbox(6, y - 3, SCR_W - 12, 23, 5, C::BLUE);
+      int16_t y = 60 + i * 22;
+      if (i == sel) gfx.rbox(6, y - 3, SCR_W - 12, 21, 5, C::BLUE);
       gfx.text(16, y + 1, item[i], i == sel ? C::WHITE : C::LTGREY);
     }
     gfx.send();

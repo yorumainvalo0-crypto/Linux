@@ -13,8 +13,8 @@
 #include "esp_random.h"
 #include "esp_http_server.h"
 #include "esp_http_client.h"
-#include "esp_https_ota.h"
 #include "esp_ota_ops.h"
+#include "esp_heap_caps.h"
 #include "esp_app_format.h"
 #include "esp_image_format.h"
 #include "esp_crt_bundle.h"
@@ -39,6 +39,7 @@
 // matches its display chip
 static const char *updateBin = CONFIG_ARCADE_UPDATE_BIN;
 void netSetUpdateBin(const char *name) { updateBin = name; }
+void (*netInstallHook)() = NULL;
 
 static volatile NetState state = NET_OFF;
 static volatile NetJob   job = JOB_IDLE;
@@ -359,35 +360,102 @@ static bool fetchVersion() {
   return ok;
 }
 
+/* The update comes in pieces: a weak WLAN or a short drop on the way only
+   costs another request from where it stopped (HTTP Range), not the whole
+   download. The flash is erased while writing, so no long pause first. */
 static void installFromGithub() {
-  esp_http_client_config_t cfg;
   static char url[160];
   snprintf(url, sizeof(url), "%s%s", GITHUB_BASE, updateBin);
-  clientCfg(&cfg, url);
-  cfg.timeout_ms = 30000;
-  esp_https_ota_config_t oc = {};
-  oc.http_config = &cfg;
-  esp_https_ota_handle_t h = NULL;
-  if (esp_https_ota_begin(&oc, &h) != ESP_OK) { fail("download failed"); return; }
-
-  esp_app_desc_t d;
-  if (esp_https_ota_get_img_desc(h, &d) != ESP_OK ||
-      strncmp(d.project_name, esp_app_get_description()->project_name, sizeof(d.project_name))) {
-    esp_https_ota_abort(h);
-    fail("not a MiniArcade firmware");
+  const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+  if (!part) { fail("no update slot - flash once by cable"); return; }
+  char *buf = (char *)malloc(4096);
+  if (!buf) { fail("out of memory"); return; }
+  const size_t head = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t);
+  esp_ota_handle_t h = 0;
+  bool begun = false, fatal = false;
+  size_t done = 0, total = 0;
+  static char why[48];
+  strlcpy(why, "download failed", sizeof(why));
+  for (uint8_t attempt = 0; attempt < 10 && !fatal && (!total || done < total); attempt++) {
+    if (attempt) vTaskDelay(pdMS_TO_TICKS(attempt < 4 ? 1000 * attempt : 4000));
+    esp_http_client_config_t cfg;
+    clientCfg(&cfg, url);
+    cfg.timeout_ms = 20000;
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) { strlcpy(why, "out of memory", sizeof(why)); continue; }
+    char range[32];
+    if (done) { snprintf(range, sizeof(range), "bytes=%u-", (unsigned)done); esp_http_client_set_header(c, "Range", range); }
+    int status = 0;
+    int64_t len = -1;
+    for (uint8_t hop = 0; hop < 5; hop++) {        // follow the redirect to the file
+      if (esp_http_client_open(c, 0) != ESP_OK) {
+        status = -1;
+        snprintf(why, sizeof(why), "no connection to GitHub (mem %uk/%uk)",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024));
+        break;
+      }
+      len = esp_http_client_fetch_headers(c);
+      if (len < 0) { status = -1; strlcpy(why, "no answer from GitHub", sizeof(why)); break; }
+      status = esp_http_client_get_status_code(c);
+      if (status < 300 || status > 308) break;
+      esp_http_client_set_redirection(c);
+      int dummy;
+      esp_http_client_flush_response(c, &dummy);
+      esp_http_client_close(c);
+    }
+    if (status == 404) { strlcpy(why, "no release on GitHub yet", sizeof(why)); fatal = true; }
+    else if (status > 0 && status != (done ? 206 : 200))
+      snprintf(why, sizeof(why), "GitHub error %d", status);
+    else if (status > 0) {
+      if (!total) total = (size_t)len;              // the first answer has the whole size
+      if (len <= 0 || total < head || total > part->size || done + (size_t)len != total) {
+        strlcpy(why, "file size does not fit", sizeof(why));
+        fatal = true;
+      }
+      while (!fatal && done < total) {
+        if (!begun) {                               // first the header, to check the file
+          size_t got = 0;
+          while (got < head) {
+            int n = esp_http_client_read(c, buf + got, head - got);
+            if (n <= 0) break;
+            got += n;
+          }
+          if (got < head) break;
+          const char *bad = checkImage((const uint8_t *)buf, got);
+          if (bad) { strlcpy(why, bad, sizeof(why)); fatal = true; break; }
+          if (esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &h) != ESP_OK) {
+            strlcpy(why, "cannot erase the update slot", sizeof(why)); fatal = true; break;
+          }
+          begun = true;
+          if (esp_ota_write(h, buf, got) != ESP_OK) { strlcpy(why, "cannot write the flash", sizeof(why)); fatal = true; break; }
+          done = got;
+        } else {
+          size_t want = total - done;
+          int n = esp_http_client_read(c, buf, want < 4096 ? want : 4096);
+          if (n <= 0) {                             // where, and how much memory was left (TLS needs a 16 kB block)
+            snprintf(why, sizeof(why), "broken off at %u%% (mem %uk/%uk)", (unsigned)(done * 100 / total),
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024),
+                     (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024));
+            break;
+          }
+          if (esp_ota_write(h, buf, n) != ESP_OK) { strlcpy(why, "cannot write the flash", sizeof(why)); fatal = true; break; }
+          done += n;
+        }
+        progress = (uint8_t)((uint64_t)done * 100 / total);
+      }
+    }
+    esp_http_client_close(c);
+    esp_http_client_cleanup(c);
+  }
+  free(buf);
+  if (!begun || !total || done < total) {
+    if (begun) esp_ota_abort(h);
+    fail(why);
     return;
   }
-  esp_err_t e;
-  while ((e = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
-    int size = esp_https_ota_get_image_size(h);
-    if (size > 0) progress = (uint8_t)((int64_t)esp_https_ota_get_image_len_read(h) * 100 / size);
-  }
-  if (e != ESP_OK || !esp_https_ota_is_complete_data_received(h)) {
-    esp_https_ota_abort(h);
-    fail("download broken off");
-    return;
-  }
-  if (esp_https_ota_finish(h) != ESP_OK) { fail("image is damaged"); return; }  // also sets the boot slot
+  if (esp_ota_end(h) != ESP_OK) { fail("image is damaged"); return; }
+  if (esp_ota_set_boot_partition(part) != ESP_OK) { fail("cannot switch to the new image"); return; }
   progress = 100;
   job = JOB_DONE;
   restartSoon();
@@ -814,6 +882,10 @@ static esp_err_t githubPost(httpd_req_t *r) {
   char q[24], v[12];
   bool install = httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK &&
                  httpd_query_key_value(q, "do", v, sizeof(v)) == ESP_OK && !strcmp(v, "install");
+  if (install && netInstallHook) {               // the console installs in a mode of its own
+    netInstallHook();
+    return httpd_resp_sendstr(r, "the console restarts into its update mode");
+  }
   startGithub(install);
   return httpd_resp_sendstr(r, "ok");
 }

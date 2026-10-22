@@ -2,7 +2,7 @@
 # console (../../MiniArcade/main): WLAN and updates, the phone pages, the
 # multiplayer radio and protocol, the board game rules, the battery curve.
 set(SHARED ../../MiniArcade/main)
-idf_component_register(SRCS "main.cpp" "platform.cpp" "gfx.cpp" "tft_spi.cpp" "gyro.cpp" "sdcard.cpp" "console.cpp" "tvnet.cpp"
+idf_component_register(SRCS "main.cpp" "platform.cpp" "gfx.cpp" "tft_spi.cpp" "gyro.cpp" "sdcard.cpp" "console.cpp" "tvnet.cpp" "updmem.cpp"
                             "${SHARED}/net.cpp" "${SHARED}/link.cpp" "${SHARED}/phone.cpp"
                        INCLUDE_DIRS "." "${SHARED}"
                        REQUIRES esp_driver_spi esp_driver_i2c esp_driver_gpio esp_driver_ledc esp_adc esp_timer nvs_flash

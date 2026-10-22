@@ -50,6 +50,7 @@ public:
   void     sleep(bool off);
 
   uint8_t *buffer() { return fb; }
+  int16_t  liveRows = SCR_H;              // send() looks at these rows only (the update mode gives the rest away)
   void     clear(col c = C::BLACK) { memset(fb, c, sizeof(fb)); }
 
   inline void pixel(int16_t x, int16_t y, col c) {
