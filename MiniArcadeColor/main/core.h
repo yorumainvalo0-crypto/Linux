@@ -500,14 +500,14 @@ uint8_t batPercent() {
 }
 void batReset() { batLow = 0; batShown = 255; }
 
-// battery symbol: x, y = top left, 22 x 11
+// battery as a number, right-aligned to the old 22 x 11 symbol at x, y
 void batIcon(int16_t x, int16_t y) {
   if (!batValid()) { gfx.text(x - 4, y + 1, "USB", C::LTGREY, F_SMALL); return; }
   uint8_t p = batPercent();
   col c = p > 50 ? C::GREEN : (p > 20 ? C::YELLOW : C::RED);
-  gfx.frame(x, y, 19, 11, C::WHITE);
-  gfx.fill(x + 19, y + 3, 2, 5, C::WHITE);
-  gfx.fill(x + 2, y + 2, (int16_t)(15 * p / 100), 7, c);
+  char t[6];
+  snprintf(t, sizeof(t), "%u%%", p);
+  gfx.text((int16_t)(x + 22 - Gfx::width(t, F_SMALL)), y + 1, t, c, F_SMALL);
 }
 
 // =========================================================
