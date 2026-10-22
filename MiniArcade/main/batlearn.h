@@ -5,13 +5,17 @@
 #include <string.h>
 
 /* Resting voltage of a Li-ion cell against its charge. The curve is flat in
-   the middle, so a straight line from empty to full shows nonsense there. */
+   the middle, so a straight line from empty to full shows nonsense there.
+   A console can bring its own curve: define BAT_CURVE_OWN, BAT_CURVE,
+   BAT_GEN_EMPTY and BAT_GEN_FULL before including this file.          */
+#ifndef BAT_CURVE_OWN
 static const uint16_t BAT_CURVE[][2] = {
   {3300, 0}, {3450, 5}, {3600, 10}, {3680, 20}, {3710, 30}, {3750, 40},
   {3800, 50}, {3850, 60}, {3920, 70}, {4000, 80}, {4100, 90}, {4180, 100}
 };
 #define BAT_GEN_EMPTY 3300
 #define BAT_GEN_FULL  4180
+#endif
 
 uint8_t batCurve(uint16_t mv) {
   const uint8_t n = sizeof(BAT_CURVE) / sizeof(BAT_CURVE[0]);
