@@ -12,6 +12,11 @@
 //
 // A game counts as abandoned when the other console stops sending beacons
 // with our session id for LK_GONE_MS.
+//
+// The same packets also go over the internet (MiniArcadeColor/main/inetcore.h):
+// the server makes the match, startNet() begins the game right away, and the
+// relay carries MOVE, ACK, BEACON, SYNC and BYE. The relay is slower than the
+// radio, so real-time games get a longer input delay there (lead).
 #pragma once
 #include <stdint.h>
 #include <string.h>
@@ -24,7 +29,7 @@
 #define LK_INVITE_RS    600   // invites
 #define LK_PEERS         12
 #define LK_NAME           6   // characters of a player name
-#define LK_LEAD           3   // real-time: an input counts this many ticks later
+#define LK_LEAD           3   // real-time: an input counts this many ticks later (on the radio)
 #define LK_SYNC_N        12   // real-time: inputs repeated in every packet
 #define LK_SYNC_MS       20   // real-time: send this often
 #define LK_RING          64   // real-time: inputs kept (power of two)
@@ -89,6 +94,7 @@ public:
   LkPeer   opp;                      // the other player of the current session
   uint32_t deadline = 0;             // end of the 30 s for a challenge
   uint8_t  caps = LK_CAPS;           // games we offer in the beacon (the colour console adds LK_CAP_CHESS)
+  uint8_t  lead = LK_LEAD;           // real-time: input delay in ticks, the same on both consoles
 
   /* short id from the chip's MAC: 4 characters, no 0/O or 1/I mix-ups */
   static void codeOf(const uint8_t *mac, char *out) {
@@ -107,6 +113,7 @@ public:
     seed = rnd | 1;
     peers = 0;
     state = LK_LOBBY; why = LKE_NONE; sid = 0;
+    lead = LK_LEAD;
     nextBeacon = now;
   }
 
@@ -127,6 +134,7 @@ public:
     game = g;
     iStart = rnd() & 1;                       // a coin decides who begins
     do sid = (uint16_t)rnd(); while (!sid);
+    lead = LK_LEAD;
     startSession();
     state = LK_INVITING;
     deadline = now + LK_INVITE_MS;
@@ -150,6 +158,23 @@ public:
     }
     if (state == LK_PLAYING) { state = LK_OVER; why = LKE_LEFT; }
     else if (state != LK_OVER) state = LK_LOBBY;
+  }
+
+  /* A game agreed on somewhere else (the internet server): it begins now.
+     ld is the input delay of real-time games, both consoles get the same;
+     the received inputs must fit the ring (at most 2 * lead ahead).     */
+  void startNet(const LkPeer &o, uint16_t s, uint8_t g, bool first, uint8_t ld, uint32_t now) {
+    opp = o;
+    sid = s; game = g; iStart = first;
+    lead = ld < LK_LEAD ? LK_LEAD : (ld > LK_RING / 2 - 2 ? LK_RING / 2 - 2 : ld);
+    answered = declined = 0;
+    startSession();
+    state = LK_PLAYING;
+    lastOpp = now;
+  }
+  // the transport lost the other one (the server says gone, our connection broke)
+  void lost(LkEnd w) {
+    if (state == LK_PLAYING || state == LK_INVITING || state == LK_INVITED) { state = LK_OVER; why = w; }
   }
 
   // the game is decided; keep sending until the last move is confirmed
@@ -189,7 +214,7 @@ public:
   }
 
   /* The next tick, when both inputs for it are there. After each tick the
-     game hands in its input for the tick LK_LEAD ahead with syncPut().   */
+     game hands in its input for the tick `lead` ahead with syncPut().    */
   bool syncStep(uint8_t *mine, uint8_t *theirs) {
     if (!sync || state != LK_PLAYING) return false;
     if (simTick >= myTick || simTick >= theirTick) return false;
@@ -199,7 +224,7 @@ public:
     return true;
   }
   void syncPut(uint8_t in, uint32_t now) {
-    if (!sync || myTick != simTick + LK_LEAD - 1) return;   // one input per tick
+    if (!sync || myTick != simTick + lead - 1) return;      // one input per tick
     myTick++;
     myIn[myTick & (LK_RING - 1)] = in;
     nextSync = now;                                        // out with the next tick()
@@ -225,6 +250,7 @@ public:
       if (state == LK_LOBBY && pe && p.sid != declined) {
         opp = *pe;
         sid = p.sid; game = p.arg; iStart = !(p.flags & 1);
+        lead = LK_LEAD;
         startSession();
         state = LK_INVITED;
         deadline = now + LK_INVITE_MS;
@@ -367,8 +393,8 @@ private:
     mySeq = theirSeq = 0;
     pending = haveIn = false;
     why = LKE_NONE;
-    sync = realtime(game);                   // the first LK_LEAD ticks have no input
-    myTick = theirTick = acked = LK_LEAD;
+    sync = realtime(game);                   // the first `lead` ticks have no input
+    myTick = theirTick = acked = lead;
     simTick = 0;
     memset(myIn, 0, sizeof(myIn));
     memset(theirIn, 0, sizeof(theirIn));

@@ -7,6 +7,7 @@
 // Part of console.cpp, which includes it - not compiled on its own.
 #include "tvcodec.h"
 #include "tvnet.h"
+#include "jsonlite.h"                // reading the server's answers
 
 #define TV_ACCENT rgb(230, 40, 40)
 static const char *const IC_TV[12] = {
@@ -58,44 +59,6 @@ static const char *tvSetUrl(const char *v) {
   if (n && n < 10) return "address too short";
   tvLoad();
   if (strcmp(u, tvUrl)) { strcpy(tvUrl, u); tvTok[0] = 0; tvSave(); }
-  return NULL;
-}
-
-// ---------------- small JSON reading (the server's answers are flat) ----------------
-static const char *tvJFind(const char *p, const char *e, const char *key) {
-  char pat[16];
-  int pl = snprintf(pat, sizeof(pat), "\"%s\":", key);
-  for (const char *q = p; q + pl <= e; q++)
-    if (!memcmp(q, pat, pl)) { q += pl; while (q < e && *q == ' ') q++; return q; }
-  return NULL;
-}
-static bool tvJStr(const char *p, const char *e, const char *key, char *out, size_t max) {
-  const char *q = tvJFind(p, e, key);
-  if (!q || q >= e || *q != '"') return false;
-  size_t k = 0;
-  for (q++; q < e && *q != '"'; ) {
-    char c = *q++;
-    if (c == '\\' && q < e) { c = *q++; if (c == 'u') { q += 4; c = '?'; } else if (c == 'n' || c == 't') c = ' '; }
-    if (k + 1 < max) out[k++] = c;
-  }
-  out[k] = 0;
-  return true;
-}
-static long tvJInt(const char *p, const char *e, const char *key, long def) {
-  const char *q = tvJFind(p, e, key);
-  return q && q < e ? strtol(q, NULL, 10) : def;
-}
-// the next {...} from p on (strings skipped); NULL = none
-static const char *tvJObj(const char *p, const char *e, const char **end) {
-  while (p < e && *p != '{') p++;
-  int depth = 0;
-  bool str = false;
-  for (const char *q = p; q < e; q++) {
-    if (str) { if (*q == '\\') q++; else if (*q == '"') str = false; continue; }
-    if (*q == '"') str = true;
-    else if (*q == '{') depth++;
-    else if (*q == '}' && --depth == 0) { *end = q + 1; return p; }
-  }
   return NULL;
 }
 
@@ -165,17 +128,17 @@ static bool tvSay(const char *title, const char *l1, const char *l2, const char 
 
 static void tvHook() { netTick(); }
 
-// joins the saved WLAN; false = none saved, or left
-static bool tvOnline() {
+// joins the saved WLAN; false = none saved, or left (also for internet play: its title)
+static bool tvOnline(const char *title = "TV") {
   if (netState() == NET_ONLINE) return true;
-  if (!netHasConfig()) { tvSay("TV", TR("no WLAN saved", "kein WLAN"), TR("Settings > WLAN", "Einstellungen > WLAN"),
+  if (!netHasConfig()) { tvSay(title, TR("no WLAN saved", "kein WLAN"), TR("Settings > WLAN", "Einstellungen > WLAN"),
                                    TR("set it up with the phone first", "erst mit dem Handy einrichten")); return false; }
   if (netState() != NET_CONNECTING) netConnect();
   btnClear();
   while (poll()) {
     NetState st = netState();
     if (st == NET_ONLINE) return true;
-    tvTitle("TV");
+    tvTitle(title);
     char b[48];
     snprintf(b, sizeof(b), st == NET_FAILED ? TR("can't join %.20s", "%.20s geht nicht") : TR("joining %.24s ...", "verbinde %.24s ..."), netSsid());
     gfx.center(100, b, st == NET_FAILED ? C::ORANGE : C::WHITE);
@@ -373,7 +336,7 @@ static bool tvPair() {
     memset(pin, 0, sizeof(pin));
     if (st < 0) return false;
     char tok[sizeof(tvTok)] = "";
-    if (r && tvJStr(r, r + strlen(r), "token", tok, sizeof(tok)) && tok[0]) {
+    if (r && jsStr(r, r + strlen(r), "token", tok, sizeof(tok)) && tok[0]) {
       strcpy(tvTok, tok);
       tvSave();
       tvNetToken(tvTok);
@@ -620,14 +583,14 @@ static void tvParseItems(const char *r) {
   const char *e = r + strlen(r), *p = strstr(r, "\"items\"");
   if (!p) return;
   const char *end;
-  for (const char *o; tvN < TV_ITEMS && (o = tvJObj(p, e, &end)); p = end) {
+  for (const char *o; tvN < TV_ITEMS && (o = jsObj(p, e, &end)); p = end) {
     TvItem &it = tvItems[tvN];
-    if (!tvJStr(o, end, "id", it.id, sizeof(it.id)) || strlen(it.id) != 11) continue;
-    if (!tvJStr(o, end, "t", it.t, sizeof(it.t))) it.t[0] = 0;
-    if (!tvJStr(o, end, "c", it.c, sizeof(it.c))) it.c[0] = 0;
-    long d = tvJInt(o, end, "d", 0);
+    if (!jsStr(o, end, "id", it.id, sizeof(it.id)) || strlen(it.id) != 11) continue;
+    if (!jsStr(o, end, "t", it.t, sizeof(it.t))) it.t[0] = 0;
+    if (!jsStr(o, end, "c", it.c, sizeof(it.c))) it.c[0] = 0;
+    long d = jsInt(o, end, "d", 0);
     it.d = (uint16_t)(d < 0 ? 0 : (d > 65535 ? 65535 : d));
-    it.f = tvJInt(o, end, "f", 0) ? 1 : 0;
+    it.f = jsInt(o, end, "f", 0) ? 1 : 0;
     tvN++;
   }
 }
@@ -781,11 +744,11 @@ static bool tvBrowse() {
         if (rs == TVR_DONE && n == TV_TW * TV_TH && tvThumb) memcpy(tvThumb + tvQSlot * TV_TW * TV_TH, body, n);
       } else if (q == TVQ_NOW && rs == TVR_DONE) {
         const char *e = body + n;
-        uint16_t g = (uint16_t)tvJInt(body, e, "g", 0);
-        uint8_t s = (uint8_t)tvJInt(body, e, "s", 0);
+        uint16_t g = (uint16_t)jsInt(body, e, "g", 0);
+        uint8_t s = (uint8_t)jsInt(body, e, "s", 0);
         if (s == TVS_PLAYING && (first || g != curGen)) {      // started on the phone
           char t[41] = "";
-          tvJStr(body, e, "t", t, sizeof(t));
+          jsStr(body, e, "t", t, sizeof(t));
           tvReqClear();
           tvThumbFree();
           if (!tvPlayer(t)) return false;

@@ -161,7 +161,142 @@ static bool playRealtime(int loss, int seed, uint8_t game, double *tps, uint8_t 
   return g[0].winner && !memcmp(&g[0], &g[1], sizeof(G)) && A.core.delivered() && B.core.delivered();
 }
 
+/* The internet relay (MiniArcadeColor/main/inetcore.h, the server's net.py):
+   nothing is lost, everything arrives in order, but late - here lat ms plus
+   up to jit ms, never overtaking. The server made the match: startNet() on
+   both sides with the same input delay.                                */
+struct Pipe { std::vector<std::pair<uint32_t, std::vector<uint8_t>>> q; uint32_t last = 0; };
+struct Relay;
+struct RelayEnd { Relay *r; int i; };
+struct Relay {
+  LinkCore c[2];
+  RelayEnd end[2];
+  uint8_t mac[2][6] = { { 2, 0, 0, 0, 0, 1 }, { 2, 0, 0, 0, 0, 2 } };
+  Pipe to[2];                                               // packets on their way to c[i]
+  uint32_t now = 1000, lat = 100, jit = 0, rs = 99;
+  uint32_t rnd() { rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; }
+  void step(uint32_t ms) {
+    for (uint32_t t = 0; t < ms; t += 10) {
+      now += 10;
+      for (int i = 0; i < 2; i++) {
+        size_t k = 0;
+        while (k < to[i].q.size() && to[i].q[k].first <= now) {
+          c[i].onPacket(mac[1 - i], to[i].q[k].second.data(), (int)to[i].q[k].second.size(), -50, now);
+          k++;
+        }
+        to[i].q.erase(to[i].q.begin(), to[i].q.begin() + k);
+      }
+      c[0].tick(now); c[1].tick(now);
+    }
+  }
+};
+static void relaySend(void *ctx, const uint8_t *, const uint8_t *d, uint8_t len) {
+  RelayEnd *e = (RelayEnd *)ctx;
+  Relay *r = e->r;
+  Pipe &p = r->to[1 - e->i];
+  uint32_t at = r->now + r->lat + (r->jit ? r->rnd() % r->jit : 0);
+  if (at < p.last) at = p.last;                             // in order
+  p.last = at;
+  p.q.push_back({ at, std::vector<uint8_t>(d, d + len) });
+}
+static Relay *relayNew(uint32_t lat, uint32_t jit, int seed) {
+  Relay *r = new Relay;
+  r->lat = lat; r->jit = jit; r->rs = 77 + seed;
+  for (int i = 0; i < 2; i++) {
+    r->end[i] = { r, i };
+    r->c[i].begin(r->mac[i], i ? "TOM" : "ANNA", relaySend, &r->end[i], r->now, 5 + i);
+  }
+  return r;
+}
+
+template <class G>
+static bool playRelay(uint32_t lat, uint32_t jit, uint8_t lead, int seed, uint8_t game, double *tps) {
+  Relay *r = relayNew(lat, jit, seed);
+  for (int i = 0; i < 2; i++) {
+    LkPeer o; memset(&o, 0, sizeof(o));
+    memcpy(o.mac, r->mac[1 - i], 6);
+    r->c[i].startNet(o, (uint16_t)(4711 + seed), game, i == 0, lead, r->now);
+  }
+  G g[2];
+  uint32_t rr[2] = { 11u + seed, 99u + seed }, next[2] = { r->now, r->now };
+  for (int i = 0; i < 2; i++) g[i].begin((4711u + seed) * 2654435761u);
+  uint32_t t0 = r->now;
+  bool ok = r->c[0].lead == lead && r->c[1].lead == lead;
+  while (r->now - t0 < 1800000 && (!g[0].winner || !g[1].winner)) {      // slow with a short delay
+    r->step(10);
+    for (int i = 0; i < 2; i++) {
+      LinkCore &c = r->c[i];
+      uint8_t me = c.iStart ? 0 : 1;
+      for (int k = 0; k < 3 && !g[i].winner && lkDue(r->now, next[i]); k++) {
+        uint8_t mine, theirs;
+        if (!c.syncStep(&mine, &theirs)) break;
+        uint8_t in[2]; in[me] = mine; in[1 - me] = theirs;
+        g[i].step(in);
+        c.syncPut(botInput(g[i], me, rr[i]), r->now);
+        next[i] += RT_TICK_MS;
+        if ((int32_t)(r->now - next[i]) > 100) next[i] = r->now;
+      }
+      if (g[i].winner && c.state == LK_PLAYING) c.finish();
+    }
+  }
+  for (int w = 0; w < 200 && !(r->c[0].delivered() && r->c[1].delivered()); w++) r->step(50);
+  *tps = r->c[0].syncTick() * 1000.0 / (r->now - t0);
+  ok = ok && g[0].winner && !memcmp(&g[0], &g[1], sizeof(G)) && r->c[0].delivered() && r->c[1].delivered();
+  delete r;
+  return ok;
+}
+
 int main() {
+  // ---- the internet relay: late but complete; the input delay keeps it smooth ----
+  for (uint8_t game : { (uint8_t)LKG_PONG, (uint8_t)LKG_SNAKE, (uint8_t)LKG_PAC, (uint8_t)LKG_BOMB }) {
+    const char *gn = game == LKG_PONG ? "pong" : (game == LKG_SNAKE ? "snake" : (game == LKG_PAC ? "pac-man" : "bomberman"));
+    double fast = 0, slow = 0;
+    bool same = true;
+    for (int seed = 0; seed < 3; seed++) {
+      double t1 = 0, t2 = 0;
+      // 150 ms + up to 60 ms each way, with the delay the server would choose (24 ticks) ...
+      bool a = game == LKG_PONG  ? playRelay<RtPong>(150, 60, 24, seed, game, &t1)
+             : game == LKG_SNAKE ? playRelay<RtSnake>(150, 60, 24, seed, game, &t1)
+             : game == LKG_PAC   ? playRelay<RtPac>(150, 60, 24, seed, game, &t1)
+                                 : playRelay<RtBomb2>(150, 60, 24, seed, game, &t1);
+      // ... and with the radio's 3 ticks: the same game, only slower
+      bool b = game == LKG_PONG  ? playRelay<RtPong>(150, 60, LK_LEAD, seed, game, &t2)
+             : game == LKG_SNAKE ? playRelay<RtSnake>(150, 60, LK_LEAD, seed, game, &t2)
+             : game == LKG_PAC   ? playRelay<RtPac>(150, 60, LK_LEAD, seed, game, &t2)
+                                 : playRelay<RtBomb2>(150, 60, LK_LEAD, seed, game, &t2);
+      same = same && a && b;
+      fast += t1 / 3; slow += t2 / 3;
+    }
+    printf("      %s over a slow relay: %.0f ticks/s with lead 24, %.0f with lead %d\n", gn, fast, slow, LK_LEAD);
+    char w1[80], w2[80];
+    snprintf(w1, sizeof(w1), "%s: relay with a long input delay, same game on both", gn);
+    snprintf(w2, sizeof(w2), "%s: the long input delay runs at full speed", gn);
+    check(w1, same);
+    check(w2, fast > 45 && slow < fast);
+  }
+  {  // a game started by the server: moves in order, the delay kept in its bounds
+    Relay *r = relayNew(100, 40, 1);
+    LkPeer o; memset(&o, 0, sizeof(o));
+    memcpy(o.mac, r->mac[1], 6); r->c[0].startNet(o, 9, LKG_C4, true, 99, r->now);
+    memcpy(o.mac, r->mac[0], 6); r->c[1].startNet(o, 9, LKG_C4, false, 1, r->now);
+    check("startNet: the delay stays in the ring, never under the radio's",
+          r->c[0].lead == LK_RING / 2 - 2 && r->c[1].lead == LK_LEAD && r->c[0].state == LK_PLAYING);
+    int okm = 0;
+    for (int m = 0; m < 20; m++) {
+      LinkCore &a = r->c[m & 1], &b = r->c[1 - (m & 1)];
+      uint8_t got = 255;
+      a.sendMove((uint8_t)(m * 3), r->now);
+      for (int w = 0; w < 100 && !b.moveIn(&got); w++) r->step(20);
+      okm += got == m * 3;
+    }
+    check("turn by turn over the relay: 20 moves in order", okm == 20);
+    r->c[1].lost(LKE_GONE);
+    check("the transport ends a game: lost()", r->c[1].state == LK_OVER && r->c[1].why == LKE_GONE);
+    r->c[1].lost(LKE_ERROR);
+    check("... only a running one", r->c[1].why == LKE_GONE);
+    delete r;
+  }
+
   // ---- real-time games: both copies stay the same, even with heavy loss ----
   for (uint8_t game : { (uint8_t)LKG_PONG, (uint8_t)LKG_SNAKE, (uint8_t)LKG_PAC, (uint8_t)LKG_BOMB }) {
     const char *gn = game == LKG_PONG ? "pong" : (game == LKG_SNAKE ? "snake" : (game == LKG_PAC ? "pac-man" : "bomberman"));

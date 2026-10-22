@@ -113,6 +113,7 @@ static void applyMask(uint8_t m) {
   ladder = m >> 4 & 7;
 }
 void simDelayUs(uint32_t us) { clockUs += us; }
+static void simInetTick(uint32_t t);             // the pretend relay of internet play (inetsrv.h), every ms
 
 // a player that looks at the game's state (board games): called every ms
 static void (*simBot)(uint32_t t) = NULL;
@@ -135,6 +136,7 @@ void simDelayMs(uint32_t ms) {
       applyMask(o[rand() % 8]);
     }
     if (pzBot) pzBot(t);
+    simInetTick(t);
     if (simBot && t >= botFrom) simBot(t);
     if (simEnd && t >= simEnd) throw SimEnd{};
   }
@@ -198,6 +200,7 @@ static uint8_t lastFrame[SCR_W * SCR_H];
 // the TV: how many sent screens showed a golden picture (the text strip left out)
 static std::vector<uint32_t> tvGoldTop;
 static long tvGoldSeen = 0, tvSends = 0;
+static uint32_t inStalled = 0, inFrames = 0;     // internet play: frames of a real-time game, those that waited
 static void tvCheckScreen(const uint8_t *fb) {
   uint32_t h = 2166136261u;
   for (int i = 0; i < SCR_W * (SCR_H - TV_STRIP); i++) { h ^= fb[i]; h *= 16777619u; }
@@ -222,6 +225,7 @@ void Gfx::setSpeed(uint8_t) {}
 void Gfx::send() {
   if (overlay) overlay();
   frames++;
+  if (mpRt) { inFrames++; if (mpStalled) inStalled++; }      // real-time online: frames that waited
   if (pm && tiltGame && pm->st == PS_ROLL) {                     // Pumpkin Maze: what goes to the panel (per row: first to last changed block)
     for (int y = 0; y < SCR_H; y++) {
       int b0 = -1, b1 = -1;
@@ -1113,6 +1117,7 @@ static void onlineDriver(uint32_t t) {
     if (!simEnd || simEnd > t + 800) simEnd = t + 800;
     return;
   }
+  if (mpChoosing && !botBusy(t) && t >= mpWait) { botPress(t, OK, 80); mpWait = t + 600; return; }   // nearby
   if (botBusy(t) || t < mpWait || !simOpen) return;
   LinkCore &L = linkCore();
   if (L.state == LK_PLAYING) { mpPlay(t); return; }
@@ -1154,6 +1159,157 @@ static void onlineGame(uint8_t game, uint32_t t) {
   simBot = onlineDriver; botFrom = t;
   simBotOther = chessPeer;
   simPeer.caps = LK_CAPS | LK_CAP_CHESS;                        // ANNA is a colour console here
+}
+
+// ---------------- online over the internet (inet.h): ANNA, BOB and CARL on the pretend relay (inetsrv.h) ----------------
+/* The plan, one step after the other when the lobby is up: 'I' Internet
+   in the first list, 'c' + game: challenge ANNA (and play), 'i' + game:
+   ANNA challenges us, 'a' / 'd' accept / decline, 'x' / 'y' / 'n' ANNA will
+   say no / yes / nothing, 'b' challenge CARL (busy), 'm' the own code
+   shown, 'f' BOB added by his code, 'u' a code nobody has, 's' our own
+   code, 'o' challenge BOB (a friend, offline), 'r' ANNA a friend with
+   RIGHT, 'D' the server goes away in the next game, 'U' back when the
+   lobby says so, 'g' ANNA is switched off in the next game, 'q' leave. */
+static std::string inSteps;
+static size_t   inStep = 0;
+static uint32_t inWait = 0, inNoteT = 0, inGameT = 0, inEvent = 0;
+static bool     inChose = false, inDownNext = false, inGoneNext = false, inDownSeen = false, inBack = false;
+static int      inGames = 0;
+static uint32_t inTicks = 0, inGameMs = 0, inLastGame = 0;
+static std::vector<int> inResults;                               // ours, as ANNA counts them: 1 she won, 2 she lost, 3 draw
+static std::string inTyping;                                     // the code being typed
+static const char *inTarget(char s) { return s == 'f' ? "BQB234" : s == 'u' ? "ZZZZZZ" : "MY3CDE"; }
+
+// the row of the lobby with this code ("" = own): moves there, true when it is picked
+static bool inPick(uint32_t t, const char *code) {
+  InRow rows[IN_LIST * 2];
+  uint8_t n = inRows(rows, IN_LIST * 2);
+  int want = code[0] ? -1 : 0, cur = 0;
+  for (uint8_t i = 0; i < n; i++) {
+    if (!strcmp(rows[i].p.code, code)) want = i + 1;
+    if (inSelCode[0] && !strcmp(rows[i].p.code, inSelCode)) cur = i + 1;
+  }
+  if (want < 0) return false;
+  if (cur == want) return true;
+  botPress(t, cur < want ? DN : UP, 50);
+  return false;
+}
+
+static void inetDriver(uint32_t t) {
+  if (inStep >= inSteps.size() && !inS && pollHook == NULL && inChose) {   // all done and left: the end
+    if (!simEnd || simEnd > t + 800) simEnd = t + 800;
+    return;
+  }
+  if (botBusy(t) || t < inWait) return;
+  if (mpChoosing) {                                             // nearby or internet: the second
+    if (inStep < inSteps.size() && inSteps[inStep] == 'I') { press(t + 1, DN); press(t + 300, OK, 80); inStep++; inChose = true; inWait = t + 800; }
+    return;
+  }
+  if (!inS) {                                                   // pairing first: OK on its message
+    if (tvWhere == TVW_SAY && t > inEvent + 400) { botPress(t, OK, 80); inEvent = t; }
+    return;
+  }
+  NetLink &N = inS->n;
+  LinkCore &L = linkCore();
+  if (mpNoting) {                                               // a message: read, then OK
+    if (!inNoteT) inNoteT = t;
+    if (t > inNoteT + 500) { botPress(t, OK, 80); inNoteT = 0; inWait = t + 300; }
+    return;
+  }
+  inNoteT = 0;
+  if (L.state == LK_PLAYING) {
+    if (!inGameT) { inGameT = t; inGames++; }
+    if (inDownNext && t > inGameT + 4000) { inDownNext = false; simNetDown = true; printf("      the server goes away at %u ms\n", t); }
+    if (inGoneNext && t > inGameT + 4000) { inGoneNext = false; annaStop(); printf("      ANNA is switched off at %u ms\n", t); }
+    if (LinkCore::realtime(L.game)) { inTicks = L.syncTick(); inGameMs = t - inGameT; }
+    mpPlay(t);
+    return;
+  }
+  if (inGameT) inLastGame = inGameT;
+  inGameT = 0;
+  if (inLastGame && inWhere == IW_LOBBY) {                     // back from a game: what we saw
+    auto after = [](const char *x) { auto it = textAt.find(x); return it != textAt.end() && it->second >= inLastGame; };
+    inResults.push_back(after("YOU WIN") ? 2 : after("YOU LOST") ? 1 : after("DRAW") ? 3 : 0);
+    inLastGame = 0;
+  }
+  if (simNetDown && inWhere == IW_LOBBY && inDown()) {         // the lobby says it: the server comes back
+    inDownSeen = true;
+    if (inStep < inSteps.size() && inSteps[inStep] == 'U') {
+      if (!inEvent) inEvent = t;
+      if (t > inEvent + 3000) { simNetDown = false; inStep++; inEvent = 0; inBack = true; printf("      the server is back at %u ms\n", t); }
+    }
+    return;
+  }
+  if (inWhere == IW_CODE) {                                     // typing a code: letter by letter
+    static const char CH[] = "-23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    const char *want = inTyping.c_str();
+    static bool shot = false;
+    if (!shot && inCodePos == 4) { shot = true; captureMs.push_back(t); }   // a picture half typed
+    if (!strcmp(inCode, want)) { botPress(t, OK, 80); inWait = t + 600; return; }
+    uint8_t p = inCodePos;
+    if (inCode[p] == want[p]) { botPress(t, RT, 40); return; }
+    int a = (int)(strchr(CH, inCode[p]) - CH), b = (int)(strchr(CH, want[p]) - CH), n = (int)strlen(CH);
+    botPress(t, ((b - a + n) % n) <= n / 2 ? UP : DN, 40);
+    return;
+  }
+  if (inWhere == IW_MYCODE) {
+    if (t > inEvent + 1200) { botPress(t, OK, 80); inEvent = t; captureMs.push_back(t - 100); }
+    return;
+  }
+  if (inWhere == IW_INVITED) {
+    if (inStep < inSteps.size() && (inSteps[inStep] == 'a' || inSteps[inStep] == 'd') && t > inEvent + 1500) {
+      captureMs.push_back(t);
+      botPress(t, inSteps[inStep] == 'a' ? OK : LT, 80);
+      inStep++; inWait = t + 1000;
+    } else if (!inEvent || t > inEvent + 5000) inEvent = t;
+    return;
+  }
+  if (inWhere != IW_LOBBY || N.out != INO_NONE || N.inv || !N.haveLists || inDown() || inStep >= inSteps.size()) return;
+  char s = inSteps[inStep];
+  uint8_t game = inStep + 1 < inSteps.size() ? (uint8_t)(inSteps[inStep + 1] - '0') : 0;
+  switch (s) {
+  case 'x': case 'y': case 'n': simBotAnswer = s == 'y' ? 1 : (s == 'x' ? 0 : -1); inStep++; break;
+  case 'i': annaInviteGame = game; annaInviteAt = t + 300; inStep += 2; inEvent = t; break;
+  case 'D': inDownNext = true; inStep++; break;
+  case 'g': inGoneNext = true; inStep++; break;
+  case 'a': case 'd': break;                                    // waits for ANNA's challenge
+  case 'c': case 'b': case 'o': case 'r': {
+    const char *code = s == 'b' ? "CRL567" : (s == 'o' ? "BQB234" : "AN4K7Q");
+    if (!inPick(t, code)) break;
+    if (s == 'r') { botPress(t, RT, 60); inStep++; inWait = t + 1500; break; }
+    press(t + 1, OK, 80);
+    if (s != 'c') { inStep++; inWait = t + 1500; break; }
+    uint32_t k = t + 700;                                       // the game list, then the game
+    for (uint8_t i = 1; i < game; i++, k += 250) press(k, DN);
+    press(k, OK, 80);
+    inStep += 2; inWait = k + 1200;
+    break;
+  }
+  case 'm': case 'f': case 'u': case 's':                       // the own row's menu
+    if (!inPick(t, "")) break;
+    press(t + 1, OK, 80);
+    if (s != 'm') press(t + 700, DN);
+    press(t + 1000, OK, 80);
+    inTyping = inTarget(s);
+    inStep++; inWait = t + 2000; inEvent = t + 1500;
+    break;
+  case 'q': captureMs.push_back(t); botPress(t + 20, OK, 1100); inStep++; break;   // the lobby once more, hold OK: back
+  default: inStep++; break;
+  }
+}
+
+// a scenario of internet play: the relay with its delay, ANNA online from the start
+static void inetScenario(const char *steps, uint32_t t) {
+  inSteps = steps;
+  simBot = inetDriver; botFrom = t;
+  simBotOther = chessPeer;
+  simPeer.caps = LK_CAPS | LK_CAP_CHESS;
+  fsSetup();
+  annaStart(0);
+  simNvsBlob["url"] = std::string("https://arcade.example.de") + '\0';
+  simNvsBlob["tok"] = std::string(SIM_ME_TOK) + '\0';           // paired for the TV: ready for the internet too
+  if (getenv("SIM_NETMS")) simNetMs = (uint32_t)atoi(getenv("SIM_NETMS"));   // experiments: another relay
+  if (getenv("SIM_NETJIT")) simNetJit = (uint32_t)atoi(getenv("SIM_NETJIT"));
 }
 
 /* The chess moves on the protocol: two consoles (LinkCore) on a radio that
@@ -3928,6 +4084,36 @@ int main(int argc, char **argv) {
     simBot = onlineDriver; botFrom = t;
     captureMs = { t + 1500, t + 2600 };
     setenv("GRAB", "wants to play", 1);
+  } else if (scenario == "inetc4") {
+    // internet: 4 wins with ANNA, her challenge to Tic Tac Toe accepted, a "no", no answer
+    // at all, CARL busy, back
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
+    inetScenario("Ic1i2axc1nc2ybq", t);
+    captureMs = { t + 3500 };
+  } else if (scenario == "inetpong") {
+    // internet: Pong to its end over a relay 40-70 ms each way
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
+    simNetMs = 40; simNetJit = 30;
+    inetScenario("Ic3q", t);
+    captureMs = { t + 9000 };
+  } else if (scenario == "inetfriend") {
+    // internet, not paired yet: the PIN, then the own code, BOB added by his code (offline),
+    // a code nobody has, the own one, ANNA a friend with RIGHT, back
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
+    inetScenario("Imfousrq", t);
+    simNvsBlob.erase("tok");
+    strcpy(tvPinRam, "120000");                                  // the PIN, as if typed on the phone page
+  } else if (scenario == "inetall") {
+    // internet: every online game with ANNA, one after the other, 30-50 ms each way;
+    // Chess is left after 40 plies like in mpchessgame
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 3000000;
+    simNetMs = 30; simNetJit = 20;
+    inetScenario("Ic1c2c3c4c5c6c7c8c9c:q", t);
+  } else if (scenario == "inetlost") {
+    // internet: the server goes away in a game (connection lost), comes back; then ANNA is
+    // switched off in a game (gone)
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
+    inetScenario("IDc1Ugc2q", t);
   } else if (scenario.compare(0, 2, "mp") == 0 && scenario.size() > 2) {   // one game online, to its end
     static const char *const G[] = { "c4", "ttt", "pong", "snake", "pac", "ship", "dame", "mau", "bomb", "chessgame" };
     uint8_t g = 0;
@@ -4166,6 +4352,63 @@ int main(int argc, char **argv) {
     check("the next one declined", mpInvited == 2 && mpStep == mpSteps.size());
     check("back in the menu, radio off", !simOpen && pollHook == NULL && barRight == NULL);
     check("no connection error", !seen("connection error"));
+  }
+  if (scenario.compare(0, 4, "inet") == 0) {
+    printf("      steps %zu/%zu, games %d, ANNA saw %d (last: %s), relayed %u packets, polls %u / %u (ANNA), held %u ms in all\n",
+           inStep, inSteps.size(), inGames, simBotGames, simBotResult == 1 ? "ANNA won" : simBotResult == 2 ? "ANNA lost" :
+           simBotResult == 3 ? "draw" : "-", simNetMsgs, simNetPolls[0], simNetPolls[1], simNetHeld);
+    for (const std::string &l : simNetLog) printf("        %s\n", l.c_str());
+    check("internet chosen, the lobby shown", seen("INTERNET") && seen("Internet (server)") && inChose);
+    check("all steps done, back in the menu, the page closed", inStep == inSteps.size() && !inS && pollHook == NULL && barRight == NULL);
+    check("no connection error in a game", !seen("connection error"));
+    bool left = true;
+    for (auto &kv : fsSes) if (!kv.second.left[1]) left = false;                     // our side left every game
+    check("every game left on the server", left && !fsOf.count("MY3CDE"));
+  }
+  if (scenario == "inetc4") {
+    check("lobby: ANNA free, CARL busy with a game he would like", seen("ANNA") && seen("free") && seen("busy") && seen("Chess"));
+    check("4 wins over the relay to its end, ANNA's challenge to Tic Tac Toe played too", seen("4 WINS") && seen("TIC TAC TOE") &&
+          seen("vs ANNA") && mpOver && simBotGames == 2 && inGames == 2);
+    check("ANNA's challenge shown", seen("CHALLENGE!") && seen("wants to play"));
+    check("the last result the same on both", (seen("YOU WIN") && simBotResult == 2) || (seen("YOU LOST") && simBotResult == 1) ||
+                                              (seen("DRAW") && simBotResult == 3));
+    check("a no, no answer, a busy one", seen("ANNA said no") && seen("no answer from ANNA") && seen("CARL is busy"));
+    check("the moves went through the relay, numbered", simNetMsgs > 20 && simNetSessions == 2);
+  }
+  if (scenario == "inetpong") {
+    double tps = inGameMs ? inTicks * 1000.0 / inGameMs : 0;
+    printf("      input delay %u ticks (%u ms), round trip %u ms, %.1f ticks/s, %u of %u frames waiting\n", simNetLead,
+           simNetLead * RT_TICK_MS, inS ? 0 : annaNet.rtt, tps, inStalled, inFrames);
+    check("pong over the relay to its end, the same result on both", seen("PONG") && mpOver && simBotGames == 1 &&
+          ((seen("YOU WIN") && simBotResult == 2) || (seen("YOU LOST") && simBotResult == 1)));
+    check("a longer input delay for the internet, from the round trips", simNetLead >= 10 && simNetLead <= 18);
+    check("smooth: nearly full speed, hardly ever waiting", tps > 44 && inStalled * 20 < inFrames);
+  }
+  if (scenario == "inetfriend") {
+    FsCon &me = fsCon["MY3CDE"], &bob = fsCon["BQB234"], &anna = fsCon["AN4K7Q"];
+    auto has = [](const FsCon &c, const char *x) { return std::find(c.fr.begin(), c.fr.end(), x) != c.fr.end(); };
+    check("not paired: the PIN, the token saved (TV and internet)", seen("not paired with the server") &&
+          !strcmp(tvTok, "TOKEN-1234567890-abcdefghijklmnop"));
+    check("the own code shown", seen("MY CODE") && seen("MY3CDE"));
+    check("BOB added by his code, both ways", seen("FRIEND'S CODE") && seen("BOB is your friend now") && has(me, "BQB234") && has(bob, "MY3CDE"));
+    check("BOB is offline: no challenge", seen("BOB is offline") && seen("offline"));
+    check("a code nobody has, the own code", seen("no console has this code") && seen("that is your own code"));
+    check("ANNA a friend with RIGHT", seen("ANNA is your friend now") && has(me, "AN4K7Q") && has(anna, "MY3CDE"));
+  }
+  if (scenario == "inetall") {
+    std::string ours, hers;
+    for (int r : inResults) ours += (char)('0' + r);
+    for (int r : annaResults) hers += (char)('0' + r);
+    printf("      results (1 ANNA won, 2 ANNA lost, 3 draw) - ours: %s  ANNA's: %s, chess %d plies, boards the same %d\n",
+           ours.c_str(), hers.c_str(), cpPlies, mpChSame);
+    check("all ten games over the relay; nine to their end, the same result on both", inGames == 10 && inResults.size() == 10 &&
+          ours.substr(0, 9) == hers && hers.size() == 9 && hers.find('0') == std::string::npos);
+    check("chess over the relay: 40 plies, both boards the same, then left", cpPlies >= 40 && mpChSame == 1 && seen("you left the game"));
+  }
+  if (scenario == "inetlost") {
+    check("the server went away in a game: connection lost, back to the lobby", seen("connection lost") && seen("back to the lobby"));
+    check("the lobby said so and recovered", inDownSeen && seen("server unreachable") && inBack);
+    check("ANNA switched off in a game: gone", seen("ANNA is gone") && inGames == 2);
   }
   if (scenario.compare(0, 2, "mp") == 0 && scenario != "mpchess") {
     printf("      games ANNA saw %d (last: %s), steps %zu/%zu\n", simBotGames, simBotResult == 1 ? "ANNA won" :

@@ -1,4 +1,5 @@
-// MiniArcade Color: talking to the MiniArcade server for the TV (tv.h).
+// MiniArcade Color: talking to the MiniArcade server for the TV (tv.h) and
+// internet play (inet.h, its polls carry a JSON body).
 // One background task does all of it over one kept-alive HTTPS connection,
 // so only one TLS session needs memory: short requests (lists, thumbnails,
 // pairing) one at a time, and while a video plays the stream - segments of
@@ -12,6 +13,7 @@
 #include "sdkconfig.h"
 
 #define TV_RESP_MAX  4096          // the longest answer to a short request
+#define TV_BODY_MAX  1400          // the longest JSON body of a request (internet play's poll)
 #if CONFIG_IDF_TARGET_ESP32S3
 #define TV_RING      16384         // stream bytes waiting for the decoder (a power of 2)
 #else
@@ -24,7 +26,8 @@ bool        tvNetStart(const char *base, const char *token);   // base: https://
 void        tvNetStop();
 void        tvNetToken(const char *token);                     // after pairing
 
-bool        tvReq(const char *path, bool post = false);        // false = one is still running
+bool        tvReq(const char *path, bool post = false, const char *json = NULL);   // false = one is still running;
+                                                               // json: POSTed as the body
 TvReqState  tvReqState();
 int         tvReqStatus();                                     // HTTP status, 0 = no connection
 const uint8_t *tvReqBody(size_t *len);                         // the answer, 0-terminated

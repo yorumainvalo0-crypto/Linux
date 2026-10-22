@@ -279,7 +279,8 @@ on a 7 x 9 cm perfboard.
 
 ## Online
 
-"Online" in the game list plays with a console nearby over ESP-NOW (no WLAN
+"Online" in the game list first asks: **Nearby (radio)** or **Internet
+(server)**. Nearby plays with a console nearby over ESP-NOW (no WLAN
 needed), on the same protocol as the OLED console's "Multiplayer" page - a
 colour and an OLED console play together. Everybody who has the page open
 shows up in the list of the others with a name and a 4 letter code from the
@@ -295,6 +296,26 @@ The games: 4 wins, Tic Tac Toe, Pong, Snake, Pac-Man, Battleship, Checkers,
 Mau-Mau and Bomberman with either console, Chess only between two colour
 consoles (an OLED console is marked "OLED" in the list). Real-time games run
 in lockstep on both consoles; only the keys go over the radio.
+
+**Internet** plays through your own MiniArcade server - the TV's server, with
+the TV's pairing: a console paired for TV is ready, one that is not goes
+through the same address and PIN screens first. The lobby lists the consoles
+online on that server and your friends (online or not, a `*` in front);
+friends are added once with their 6 character **friend code** (no 0/O or
+1/I/L), shown under OK on your own row ("my code"; "add a friend by code" is
+an on-screen code entry), or with RIGHT on a console in the list. OK on a
+free console challenges it like nearby; all ten games work, Chess included.
+The packets of the same protocol (`linkcore.h`) go over the server's relay
+instead of the radio (`main/inetcore.h`, polls on the TV's one HTTPS
+connection, no WebSocket). Real-time games get a longer input delay there,
+picked by the server from both consoles' round trips: about 1.25 times both
+round trips plus 40 ms, 120 to 480 ms - at a round trip of 50 ms each that
+is 180 ms. They stay at full speed up to about 200 ms round trip; beyond, they
+slow down rather than freeze. Errors are said in the lobby's language:
+server unreachable (the lobby keeps trying), not paired, a friend offline,
+connection lost in a game (after 10 s without the server: back to the
+lobby), the other one gone (the server notices after 12 s). Server side:
+`../MiniArcadeServer`, "Mehrspieler übers Internet".
 
 ## TV
 

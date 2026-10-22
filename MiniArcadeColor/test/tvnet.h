@@ -3,6 +3,7 @@
 // golden frames of the server's tests (MiniArcadeServer/tests/golden.bin) as
 // a video in time with the simulated clock: the fluent frames over and over,
 // or the sharp ones, with an info record every half second like the server.
+// Internet play (/api/net/...) goes to the pretend relay of inetsrv.h.
 #pragma once
 #include "../main/tvnet.h"
 #include "gfx.h"
@@ -11,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <deque>
+#include "inetsrv.h"
 
 static std::vector<std::string> simTvLog;               // every path asked for
 static std::vector<std::string> simTvFluent, simTvSharp; // frame payloads of golden.bin
@@ -22,6 +24,7 @@ static uint16_t simTvGen = 1;
 static uint32_t simTvPos = 0;                           // ms of video where this gen started
 static TvReqState simTvReq = TVR_IDLE;
 static int      simTvStatus = 0;
+static bool     simTvNet = false;                       // the request in flight is internet play's
 static uint32_t simTvReqAt = 0;
 static std::string simTvResp, simTvAct;
 static std::deque<uint8_t> simTvRing;
@@ -114,7 +117,7 @@ static void simTvPump() {
 }
 
 bool tvNetStart(const char *, const char *tok) { simTvOn = simTvLoadGolden(); snprintf(simTvToken, sizeof(simTvToken), "%s", tok); simTvReq = TVR_IDLE; return simTvOn; }
-void tvNetStop() { simTvOn = simTvStream = false; simTvRing.clear(); }
+void tvNetStop() { simTvOn = simTvStream = false; simTvRing.clear(); simTvNet = false; simTvReq = TVR_IDLE; fsReq[0].active = false; }
 void tvNetToken(const char *tok) { snprintf(simTvToken, sizeof(simTvToken), "%s", tok); }
 
 static std::string simTvItems(const char *tag) {
@@ -129,9 +132,15 @@ static std::string simTvItems(const char *tag) {
 }
 
 static bool simTvDown = false;                          // the server cannot be reached at all
-bool tvReq(const char *path, bool post) {
+bool tvReq(const char *path, bool post, const char *json) {
   if (!simTvOn || simTvReq == TVR_BUSY || simTvDown) return false;
   std::string p = path;
+  if (p.compare(0, 9, "/api/net/") == 0) {              // the relay: its own delays
+    simTvReq = TVR_BUSY;
+    simTvNet = true;
+    fsSubmit(0, simTvToken, p, json ? json : "", simTvMs());
+    return true;
+  }
   simTvLog.push_back(std::string(post ? "POST " : "GET ") + p);
   simTvReq = TVR_BUSY;
   simTvReqAt = simTvMs() + 40;
@@ -160,6 +169,16 @@ bool tvReq(const char *path, bool post) {
   return true;
 }
 TvReqState tvReqState() {
+  if (simTvNet) {
+    if (simTvReq == TVR_BUSY && fsReq[0].done) {
+      simTvStatus = fsReq[0].status;
+      simTvResp = fsReq[0].resp;
+      fsReq[0].active = false;
+      simTvNet = false;
+      simTvReq = simTvStatus == 200 ? TVR_DONE : TVR_ERROR;
+    }
+    return simTvReq;
+  }
   if (simTvReq == TVR_BUSY && simTvMs() >= simTvReqAt) simTvReq = simTvStatus == 200 ? TVR_DONE : TVR_ERROR;
   return simTvReq;
 }
