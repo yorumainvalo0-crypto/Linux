@@ -1,5 +1,6 @@
 """The web server: the consoles' API (token in the header X-Token), the phone
-page (password, then a signed cookie) and the stream."""
+page (password, then a signed cookie), the stream and the relay for internet
+multiplayer (net.py)."""
 import asyncio
 import hashlib
 import hmac
@@ -17,6 +18,7 @@ from aiohttp import web
 
 from . import codec, palette, youtube
 from .egress import Blocked, Egress
+from .net import Relay
 from .store import Store
 from .stream import Hub, now
 
@@ -81,13 +83,13 @@ class Limits:
     def __init__(self):
         self.b = {}
 
-    def ok(self, key, rate, burst):
+    def ok(self, key, rate, burst, n=1):
         b = self.b.get(key)
         if not b:
             if len(self.b) > 5000:
                 self.b.clear()
             b = self.b[key] = Bucket(rate, burst)
-        return b.take()
+        return b.take(n)
 
 
 class Server:
@@ -109,6 +111,8 @@ class Server:
         self.media = {}                    # relay key -> (address, headers, made)
         self.thumb_fetch = thumb_fetch or self._thumb_ffmpeg
         self.limits = Limits()
+        self.net = Relay(self.store)
+        self.net.msg_ok = lambda cid, n: self.limits.ok(('nm', cid), 40, 80, n)
         self.fails = {}                    # ip or console code -> [failures, locked until]
         self.thumb_writes = 0
         self.pin = cfg.pin
@@ -142,14 +146,15 @@ class Server:
         xr = req.headers.get('X-Real-IP', '').strip()
         return xr or peer
 
-    def console(self, req):
+    def console(self, req, net=False):
         tok = req.headers.get('X-Token') or ''
         if not tok and req.headers.get('Authorization', '').startswith('Bearer '):
             tok = req.headers['Authorization'][7:]
         cid = self.store.by_token(tok.strip())
         if not cid:
             raise web.HTTPUnauthorized(text='not paired')
-        if not self.limits.ok(('c', cid), 10, 40):
+        # internet play polls often while a real-time game runs: its own, wider limit
+        if not (self.limits.ok(('n', cid), 40, 80) if net else self.limits.ok(('c', cid), 10, 40)):
             raise web.HTTPTooManyRequests(text='slow down')
         return cid
 
@@ -501,6 +506,84 @@ class Server:
         await resp.write_eof()
         return resp
 
+    # ---------------- internet play (net.py) ----------------
+    async def n_poll(self, req):
+        cid = self.console(req, net=True)
+        d = await self.body(req)
+        try:
+            return self.j(await self.net.poll(cid, d))
+        except ValueError as e:
+            raise web.HTTPBadRequest(text=str(e))
+        except OverflowError as e:
+            raise web.HTTPTooManyRequests(text=str(e))
+
+    async def n_me(self, req):
+        cid = self.console(req, net=True)
+        return self.j({'me': self.store.friend_code(cid), 'n': self.net.name_of(cid)})
+
+    async def n_invite(self, req):
+        cid = self.console(req, net=True)
+        d = await self.body(req)
+        if not self.limits.ok(('ni', cid), 1, 8):
+            raise web.HTTPTooManyRequests(text='slow down')
+        try:
+            g = int(d.get('g', 0))
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text='g')
+        try:
+            iv = self.net.invite(cid, str(d.get('to', '')), g)
+        except LookupError as e:
+            raise web.HTTPNotFound(text=str(e))
+        except ValueError as e:
+            return self.j({'why': str(e)}, status=409)
+        return self.j({'oid': iv.id})
+
+    async def n_cancel(self, req):
+        cid = self.console(req, net=True)
+        d = await self.body(req)
+        try:
+            self.net.cancel(cid, str(d.get('oid', '')))
+        except LookupError as e:
+            raise web.HTTPNotFound(text=str(e))
+        return self.j({'ok': 1})
+
+    async def n_answer(self, req):
+        cid = self.console(req, net=True)
+        d = await self.body(req)
+        try:
+            s = self.net.reply(cid, str(d.get('iid', '')), str(d.get('yes', '0')) == '1')
+        except LookupError as e:
+            raise web.HTTPNotFound(text=str(e))
+        except ValueError as e:
+            return self.j({'why': str(e)}, status=409)
+        return self.j(self.net.answer(cid, {'sid': s.sid}, 0) if s else {'ok': 1})
+
+    async def n_leave(self, req):
+        cid = self.console(req, net=True)
+        d = await self.body(req)
+        try:
+            self.net.leave(cid, int(d.get('sid', 0) or 0))
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text='sid')
+        return self.j({'ok': 1})
+
+    async def n_friend(self, req):
+        """Adds (on=1) or removes (on=0) a friend by the code; friends go both ways."""
+        cid = self.console(req, net=True)
+        d = await self.body(req)
+        if not self.limits.ok(('nf', cid), 0.2, 5):           # no guessing of codes
+            raise web.HTTPTooManyRequests(text='slow down')
+        other = self.store.by_friend_code(str(d.get('c', '')))
+        if not other:
+            raise web.HTTPNotFound(text='no console with this code')
+        if other == cid:
+            return self.j({'why': 'self'}, status=409)
+        if not self.store.set_friend(cid, other, str(d.get('on', '1')) == '1'):
+            return self.j({'why': 'full'}, status=409)
+        self.net.notify(other)
+        return self.j({'ok': 1, 'c': self.store.friend_code(other), 'n': self.net.name_of(other),
+                       'o': 1 if self.net.online(other) else 0})
+
     # ---------------- phone page ----------------
     async def index(self, req):
         html = (WEB / 'index.html').read_text(encoding='utf-8').replace('{{BASE}}', self.cfg.base)
@@ -624,6 +707,13 @@ class Server:
         r.add_get('/api/tv/now', self.tv_now)
         r.add_route('*', '/api/tv/ctl', self.tv_ctl)
         r.add_get('/api/tv/stream', self.tv_stream)
+        r.add_post('/api/net/poll', self.n_poll)
+        r.add_get('/api/net/me', self.n_me)
+        r.add_post('/api/net/invite', self.n_invite)
+        r.add_post('/api/net/cancel', self.n_cancel)
+        r.add_post('/api/net/answer', self.n_answer)
+        r.add_post('/api/net/leave', self.n_leave)
+        r.add_post('/api/net/friend', self.n_friend)
         r.add_post('/api/web/login', self.login)
         r.add_post('/api/web/logout', self.logout)
         r.add_get('/api/web/me', self.w_me)
@@ -654,7 +744,8 @@ def make_app(cfg, **kw):
     root['srv'] = srv
 
     async def bg(_):
-        tasks = [asyncio.get_running_loop().create_task(srv.hub.janitor())]
+        tasks = [asyncio.get_running_loop().create_task(srv.hub.janitor()),
+                 asyncio.get_running_loop().create_task(net_janitor(srv.net))]
         if cfg.update_h > 0:
             tasks.append(asyncio.get_running_loop().create_task(update_ytdlp(cfg.update_h)))
         yield
@@ -664,6 +755,13 @@ def make_app(cfg, **kw):
         await srv.egress.close()
     root.cleanup_ctx.append(bg)
     return root
+
+
+async def net_janitor(net):
+    """Timeouts of internet play: challenges, games, consoles that went away."""
+    while True:
+        await asyncio.sleep(2)
+        net.sweep()
 
 
 async def update_ytdlp(hours):
