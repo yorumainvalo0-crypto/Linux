@@ -426,6 +426,17 @@ static uint16_t batMilliVolts() {              // the lowest of four quick pairs
   return (uint16_t)(low * 2);
 }
 
+/* Samsung INR18650-30Q under the console's load (about 0.2 A, screen on):
+   from full after charging down to 3.2 V, where little charge is left and
+   the board soon gives up. The learning below still fits it to the own
+   cell over a few runs.                                                 */
+#define BAT_CURVE_OWN
+static const uint16_t BAT_CURVE[][2] = {
+  {3200, 0}, {3300, 5}, {3400, 10}, {3540, 20}, {3640, 30}, {3720, 40}, {3790, 50},
+  {3850, 60}, {3920, 70}, {4000, 80}, {4060, 90}, {4100, 95}, {4160, 100}
+};
+#define BAT_GEN_EMPTY 3200
+#define BAT_GEN_FULL  4160
 #include "batlearn.h"                          // the curve, and how it learns the own cell (shared)
 
 /* The percentage follows the low points under load: a dip pulls it down
