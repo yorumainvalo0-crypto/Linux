@@ -27,6 +27,7 @@
 #include "sd.h"
 #include "tvnet.h"                                   // the TV server client (also the RAM readout on the WLAN page)
 #include "wlan.h"
+#include "updmode.h"
 #include "settings.h"
 #include "fx.h"
 #include "game_snake.h"
@@ -360,6 +361,7 @@ void setup() {
   applyDisplay();
   applyPinModes();
   lastInput = millis();
+  if (uint8_t upd = updTake()) updModeRun(upd);   // asked for before the restart: never returns
 
   // splash
   for (int16_t f = 0; f <= 16; f++) {

@@ -39,6 +39,7 @@
 // matches its display chip
 static const char *updateBin = CONFIG_ARCADE_UPDATE_BIN;
 void netSetUpdateBin(const char *name) { updateBin = name; }
+void (*netInstallHook)() = NULL;
 
 static volatile NetState state = NET_OFF;
 static volatile NetJob   job = JOB_IDLE;
@@ -881,6 +882,10 @@ static esp_err_t githubPost(httpd_req_t *r) {
   char q[24], v[12];
   bool install = httpd_req_get_url_query_str(r, q, sizeof(q)) == ESP_OK &&
                  httpd_query_key_value(q, "do", v, sizeof(v)) == ESP_OK && !strcmp(v, "install");
+  if (install && netInstallHook) {               // the console installs in a mode of its own
+    netInstallHook();
+    return httpd_resp_sendstr(r, "the console restarts into its update mode");
+  }
   startGithub(install);
   return httpd_resp_sendstr(r, "ok");
 }

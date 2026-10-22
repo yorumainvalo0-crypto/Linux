@@ -107,6 +107,22 @@ void arcadeTraceStr(const char *s) {
 }
 void simDeepSleep() { simSlept = true; printf("      board went to deep sleep\n"); throw SimEnd{}; }
 
+// the update mode (updmem.h): the restart ends the run; the memory given
+// away is filled with a pattern that must survive untouched
+static uint8_t simUpdWhat = 0, simUpdReq = 0;
+static bool    simUpdRestart = false;
+static uint8_t *simDonated = nullptr;
+static size_t  simDonatedN = 0;
+void updRequest(uint8_t what) { simUpdReq = what; printf("      board restarts into the update mode %u\n", what); throw SimEnd{}; }
+uint8_t updTake() { uint8_t w = simUpdWhat; simUpdWhat = 0; return w; }
+bool updDonate(void *p, size_t n) { simDonated = (uint8_t *)p; simDonatedN = n; memset(p, 0xA5, n); return true; }
+void updRestart() { simUpdRestart = true; printf("      board restarts\n"); throw SimEnd{}; }
+static bool simDonatedIntact() {
+  if (!simDonated) return false;
+  for (size_t i = 0; i < simDonatedN; i++) if (simDonated[i] != 0xA5) return false;
+  return true;
+}
+
 // bits 0..3: the keys on their own pins, bits 4..5: the ladder key
 static void applyMask(uint8_t m) {
   for (int i = 0; i < 4; i++) if (KEYS[i] != LADDER) pinPress[KEYS[i]] = m >> i & 1;
@@ -3660,6 +3676,20 @@ int main(int argc, char **argv) {
   } else if (scenario == "settings") {
     simEnd = M + 3000; press(M, UP); press(M + 400, OK, 80); captureAt = { 200 };
     setenv("GRAB", "SETTINGS", 1);
+  } else if (scenario == "updgithub") {
+    simUpdWhat = UPD_GITHUB; simEnd = 20000;                     // started in the update mode: install from GitHub
+  } else if (scenario == "updupload") {
+    simUpdWhat = UPD_UPLOAD; simEnd = 20000;                     // waits for a file from the web page
+    simAt.push_back({ 2500, [] { simJob = JOB_ASKING; } });
+  } else if (scenario == "updask") {
+    // the WLAN page's "update from a file" restarts into the update mode
+    uint32_t t = M;
+    press(t, UP); press(t + 400, OK, 80); t += 1000;             // settings
+    for (int i = 0; i < 5; i++) { press(t, UP); t += 250; }      // up to the WLAN line
+    press(t, OK, 80); t += 800;
+    for (int i = 0; i < 6; i++) { press(t, DN); t += 250; }      // "update from a file"
+    press(t, OK, 80);
+    simEnd = t + 2000;
   } else if (scenario == "uploadask") {
     // WLAN stays on after the page; a firmware from the web page is asked about in the library
     uint32_t t = M;
@@ -4156,8 +4186,9 @@ int main(int argc, char **argv) {
     return failures ? 1 : 0;
   }
 
-  check("frames were drawn", frames > 20);
-  check("the picture uses many colours", colsInFrame() >= 6);
+  const bool updMode = scenario == "updgithub" || scenario == "updupload";   // a plain status screen, no sound
+  if (!updMode) check("frames were drawn", frames > 20);
+  if (!updMode) check("the picture uses many colours", colsInFrame() >= 6);
   if (scenario == "menu")      check("menu lists the games", seen("Snake") && seen("Tetris") && seen("Doom"));
   if (scenario == "snake")     check("snake ran", seen("SNAKE"));
   if (scenario == "snakeover") check("game over shown", seen("GAME OVER") || seen("NEW RECORD!"));
@@ -4526,6 +4557,14 @@ int main(int argc, char **argv) {
     check("sound setup shows the own OK key", seen("OK = yes"));
     check("OK while beeping picked the buzzer", simNvsU16.count("snd") && simNvsU16["snd"] != 255 && simNvsU16["sset"] == 1);
   }
+  if (scenario == "updgithub" || scenario == "updupload") {
+    printf("   memory given away: %zu bytes\n", simDonatedN);
+    check("update mode: the picture below the status rows went to the heap", simDonatedN == (size_t)SCR_W * (SCR_H - UPD_ROWS));
+    check("update mode: nothing drew into the memory given away", simDonatedIntact());
+    check("update mode: ends with a restart", simUpdRestart && seen("done - restarting"));
+    if (scenario == "updupload") check("update mode: the uploaded file is taken without asking", simAnswer == 1 && seen("\"Update from a file\" - hold a key = cancel"));
+  }
+  if (scenario == "updask") check("WLAN page: update from a file restarts into the update mode", simUpdReq == UPD_UPLOAD);
   if (scenario == "uploadask") {
     check("upload asked outside the WLAN page", seen("install the firmware"));
     check("the answer reached the web page (no, then yes)", simAnswer == 1);
@@ -4609,7 +4648,7 @@ int main(int argc, char **argv) {
     check("pumpkin editor: the own level is listed and played", seen("GRAVE RUN") && pmbLevelsWon >= 1 && pmSv.stars[PM_LEVELS] >= 1 && seen("OWN LEVEL 1"));
     check("pumpkin editor: in the home WLAN the link has its address and the WLAN stays on", seen("192.168.1.50/maze") && pmeHomeOut == NET_ONLINE);
   }
-  check("sounds played", scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
+  check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }

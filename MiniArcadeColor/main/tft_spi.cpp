@@ -396,14 +396,14 @@ void Gfx::send() {
   int pending = 0;
   uint16_t m = 0;
   bool have = false;                           // m holds row y already
-  while (y < SCR_H) {
+  while (y < liveRows) {
     if (!have) m = rowChanged(fb, y);
     have = false;
     if (!m) { y++; continue; }
     // a run of changed rows; the window spans every changed block in it
     int16_t y0 = y;
     uint16_t span = m;
-    for (y++; y < SCR_H; y++) {
+    for (y++; y < liveRows; y++) {
       m = rowChanged(fb, y);
       if (!m) break;
       span |= m;

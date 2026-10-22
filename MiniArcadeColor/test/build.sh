@@ -7,7 +7,7 @@ rm -f frames/*.ppm
 g++ -std=c++17 -O1 -DARCADE_TRACE -I. -I../main -I../../MiniArcade/test -I../../MiniArcade/main \
     -x c++ sim.cpp ../main/platform.cpp ../main/gfx.cpp -o colorsim
 fail=0
-for s in menu wizard ladder ladder4 ladder5 ladderpair ladderbat uploadask plain2 tilt settings sdcard fps snake snakeover tetris pong flappy breakout invaders rocks shooter lander palace palacecont palacelogic palaceshots pumpkin pumpkinkeys pmeditor pmlogic cave doom mine mine3d mine3dfree mine3dlogic tunnel pacman bomber g2048 g2logic mines mslogic sokoban sklevels sudoku lightsout match3 pzlogic blocks blocksadv blockspz blockslogic fruit fruitlogic dino dinofair racer racerfair frogger frogroll jump jrfair stack boardlogic c4 ttt bship bshipown checkers maumau skat skatlogic minigolf chess chesscpu chesssave chesslogic fxlogic pause tvdecode tvui \
+for s in menu wizard ladder ladder4 ladder5 ladderpair ladderbat uploadask updgithub updupload updask plain2 tilt settings sdcard fps snake snakeover tetris pong flappy breakout invaders rocks shooter lander palace palacecont palacelogic palaceshots pumpkin pumpkinkeys pmeditor pmlogic cave doom mine mine3d mine3dfree mine3dlogic tunnel pacman bomber g2048 g2logic mines mslogic sokoban sklevels sudoku lightsout match3 pzlogic blocks blocksadv blockspz blockslogic fruit fruitlogic dino dinofair racer racerfair frogger frogroll jump jrfair stack boardlogic c4 ttt bship bshipown checkers maumau skat skatlogic minigolf chess chesscpu chesssave chesslogic fxlogic pause tvdecode tvui \
          online mpchess mpc4 mpttt mppong mpsnake mppac mpship mpdame mpmau mpbomb mpchessgame \
          inetc4 inetpong inetfriend inetlost inetall; do
   ./colorsim "$s" || fail=1
