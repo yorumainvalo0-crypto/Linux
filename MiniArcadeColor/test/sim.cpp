@@ -3681,6 +3681,14 @@ int main(int argc, char **argv) {
   } else if (scenario == "updupload") {
     simUpdWhat = UPD_UPLOAD; simEnd = 20000;                     // waits for a file from the web page
     simAt.push_back({ 2500, [] { simJob = JOB_ASKING; } });
+  } else if (scenario == "updfail") {
+    simUpdWhat = UPD_UPLOAD; simEnd = 20000;                     // a file comes in, the install fails
+    simAt.push_back({ 2000, [] { simJob = JOB_UPDATING; } });
+    simAt.push_back({ 3500, [] { simJob = JOB_ERROR; } });
+  } else if (scenario == "updnowlan") {
+    simUpdWhat = UPD_GITHUB; simNoConfig = true; simEnd = 20000; // no network saved
+  } else if (scenario == "updnonet") {
+    simUpdWhat = UPD_GITHUB; simNoNet = true; simEnd = 60000;    // the saved network is not there
   } else if (scenario == "updask") {
     // the WLAN page's "update from a file" restarts into the update mode
     uint32_t t = M;
@@ -4177,7 +4185,7 @@ int main(int argc, char **argv) {
     for (;;) loop();
   } catch (SimEnd &) {}
   if (simDe) {                                                  // German: the screen's edges only, the texts for "sprache"
-    check("frames were drawn", frames > 20);
+    if (scenario.compare(0, 3, "upd")) check("frames were drawn", frames > 20);   // the update mode draws few
     for (const std::string &o : deOver) printf("      off the screen: %s\n", o.c_str());
     check("German: the menus were drawn, no text runs off the screen", deOver.empty() && !deTexts.empty());
     FILE *f = fopen("frames/lang_de.txt", "a");
@@ -4186,7 +4194,7 @@ int main(int argc, char **argv) {
     return failures ? 1 : 0;
   }
 
-  const bool updMode = scenario == "updgithub" || scenario == "updupload";   // a plain status screen, no sound
+  const bool updMode = scenario == "updgithub" || scenario == "updupload" || scenario == "updfail" || scenario == "updnowlan" || scenario == "updnonet";   // a plain status screen, no sound
   if (!updMode) check("frames were drawn", frames > 20);
   if (!updMode) check("the picture uses many colours", colsInFrame() >= 6);
   if (scenario == "menu")      check("menu lists the games", seen("Snake") && seen("Tetris") && seen("Doom"));
@@ -4564,6 +4572,9 @@ int main(int argc, char **argv) {
     check("update mode: ends with a restart", simUpdRestart && seen("done - restarting"));
     if (scenario == "updupload") check("update mode: the uploaded file is taken without asking", simAnswer == 1 && seen("\"Update from a file\" - hold a key = cancel"));
   }
+  if (scenario == "updfail") check("update mode: an error is shown, then a restart", seen("installing... 0%") && seen("restarting - try again") && simUpdRestart && simDonatedIntact());
+  if (scenario == "updnowlan") check("update mode: no network saved, then a restart", seen("no WLAN saved") && simUpdRestart);
+  if (scenario == "updnonet") check("update mode: network not reached, then a restart", seen("WLAN not reached") && simUpdRestart);
   if (scenario == "updask") check("WLAN page: update from a file restarts into the update mode", simUpdReq == UPD_UPLOAD);
   if (scenario == "uploadask") {
     check("upload asked outside the WLAN page", seen("install the firmware"));
