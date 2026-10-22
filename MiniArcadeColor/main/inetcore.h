@@ -104,6 +104,7 @@ public:
     clock = now;
     L->begin(mac, name, send, this, now, rnd);
     L->caps = LK_CAPS | LK_CAP_CHESS;
+    L->caps2 = LK_CAP2_KART;
     me[0] = 0;
     nLob = nFr = 0; haveLists = false;
     inv = invGone = false; out = INO_NONE; frRes = INF_NONE;
@@ -307,10 +308,16 @@ private:
   void queue(const uint8_t *d, uint8_t n) {
     if (!sid || n > IN_PKT || (L->state != LK_PLAYING && L->state != LK_OVER)) return;
     bool sync = n >= sizeof(LkSync) && d[2] == 2;
+    bool kart = n >= LK_KART_LEN && d[2] == 3;
+    if (kart && nOut && outQ[nOut - 1].seq > sentUpTo && outQ[nOut - 1].len >= LK_KART_LEN && outQ[nOut - 1].d[2] == 3) {
+      memcpy(outQ[nOut - 1].d, d, n);                    // Kart GP: only the newest state waits for the poll
+      skipped++;
+      return;
+    }
     /* ACK and BYE again: the relay loses nothing, so a repeat is left out.
        A MOVE is repeated until its ACK comes back: the other console only
        takes it once its game has the one before (linkcore's haveIn).    */
-    if (!sync && n >= sizeof(LkPacket) && (d[3] == LK_ACK || d[3] == LK_BYE)) {
+    if (!sync && !kart && n >= sizeof(LkPacket) && (d[3] == LK_ACK || d[3] == LK_BYE)) {
       uint32_t h = hashOf(d, n);
       for (uint8_t i = 0; i < nRec; i++)
         if (recent[i].h == h && !lkDue(clock, recent[i].t + IN_REPEAT_MS)) { skipped++; return; }
@@ -340,7 +347,7 @@ private:
     uint8_t k = 0;
     for (; src[k] && k < LK_NAME; k++) nm[k] = (src[k] >= ' ' && src[k] <= '~' && src[k] != '"' && src[k] != '\\') ? src[k] : '?';
     nm[k] = 0;
-    uint16_t wait = leaving ? 0 : (sid ? (LinkCore::realtime(L->game) ? IN_WAIT_RT : IN_WAIT_TURN) : IN_WAIT_LOBBY);
+    uint16_t wait = leaving ? 0 : (sid ? (LinkCore::live(L->game) ? IN_WAIT_RT : IN_WAIT_TURN) : IN_WAIT_LOBBY);
     if (!sid && (out == INO_WAIT || inv)) wait = IN_WAIT_TURN;       // a challenge: quicker
     int w = snprintf(b, max, "{\"n\":\"%s\",\"g\":%u,\"l\":%u,\"rtt\":%u,\"sid\":%u,\"got\":%lu,\"wait\":%u,\"m\":[",
                      nm, want, lists ? 1 : 0, rtt ? rtt : 100, sid, (unsigned long)got, wait);

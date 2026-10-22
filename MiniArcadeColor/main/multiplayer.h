@@ -7,7 +7,8 @@
    shared ones (boardgames.h, rtgames.h, the colour games' own), the
    colour games draw the boards. Chess is only between colour consoles:
    game LKG_CHESS, beacon flag LK_CAP_CHESS, and a chess move is two moves
-   on the radio (from, then to | promotion << 6).
+   on the radio (from, then to | promotion << 6). Kart GP too (LKG_KART,
+   LK_CAP2_KART in the beacon's arg): not lockstep, see kart_net.h.
    Everybody who has this page open shows up in the list of the others,
    with a name and a 4 letter code taken from the chip. A challenge waits
    30 s for an answer. The radio is only on while this page is open.
@@ -16,14 +17,15 @@
 #include "link.h"
 
 void inetRun();                                         // inet.h
+static uint8_t mpKart();                                // kart_online.h
 
 #define MP_ACCENT rgb(0, 160, 200)
-#define MP_GAMES_N LKG_CHESS
+#define MP_GAMES_N LKG_KART
 
 static const char *const MP_GAMES[MP_GAMES_N] = { "4 wins", "Tic Tac Toe", "Pong", "Snake", "Pac-Man", "Battleship",
-                                                  "Checkers", "Mau-Mau", "Bomberman", "Chess" };   // LKG_C4 ..
+                                                  "Checkers", "Mau-Mau", "Bomberman", "Chess", "Kart GP" };   // LKG_C4 ..
 static const char *const *const MP_ICON[MP_GAMES_N] = { IC_CONNECT4, IC_TICTACTOE, IC_PONG, IC_SNAKE, IC_PACMAN,
-                                                        IC_BATTLESHIP, IC_CHECKERS, IC_MAUMAU, IC_BOMBER, IC_CHESS };
+                                                        IC_BATTLESHIP, IC_CHECKERS, IC_MAUMAU, IC_BOMBER, IC_CHESS, IC_KART };
 static const char *mpGameName(uint8_t g) { return g >= LKG_C4 && g <= MP_GAMES_N ? MP_GAMES[g - 1] : "?"; }
 
 static const char *const IC_ONLINE[12] = {
@@ -1011,7 +1013,7 @@ static uint8_t mpGame() {
   mpQn = 0;
   mpVs();
   uint8_t g = L.game;
-  uint8_t r = LinkCore::realtime(g) ? mpRealtime() : g == LKG_C4 ? mpC4() : g == LKG_TTT ? mpTTT() :
+  uint8_t r = LinkCore::realtime(g) ? mpRealtime() : g == LKG_KART ? mpKart() : g == LKG_C4 ? mpC4() : g == LKG_TTT ? mpTTT() :
               g == LKG_DAME ? mpCheckers() : g == LKG_MAU ? mpMauMau() : g == LKG_CHESS ? mpChess() : mpBattle();
   barRight = NULL;
   btnClear();
@@ -1032,6 +1034,7 @@ void onlineRun() {
   if (!linkOpen()) { mpNote("radio did not start", NULL); return; }
   LinkCore &L = linkCore();
   L.caps = LK_CAPS | LK_CAP_CHESS;                      // what this console plays
+  L.caps2 = LK_CAP2_KART;
   pollHook = mpHook;
   mpQn = 0;
   char selCode[5] = "";                                 // "" = own row
@@ -1100,10 +1103,11 @@ void onlineRun() {
           for (uint8_t i = 0; i < L.peerCount(); i++)   // the list may have changed meanwhile
             if (!strcmp(L.peer(i).code, selCode)) {
               found = true;
-              uint8_t need = LinkCore::capOf(g + 1);
+              uint8_t need = LinkCore::capOf(g + 1), need2 = LinkCore::cap2Of(g + 1);
               char b[32], c[32];
-              if (need && !(L.peer(i).caps & need)) {
+              if ((need && !(L.peer(i).caps & need)) || (need2 && !(L.peer(i).caps2 & need2))) {
                 if (g + 1 == LKG_CHESS) { snprintf(b, sizeof(b), "%.6s has no Chess", L.peer(i).name); snprintf(c, sizeof(c), "(only colour consoles)"); }
+                else if (g + 1 == LKG_KART && !(L.peer(i).caps & LK_CAP_CHESS)) { snprintf(b, sizeof(b), "%.6s has no Kart GP", L.peer(i).name); snprintf(c, sizeof(c), "(only colour consoles)"); }
                 else { snprintf(b, sizeof(b), "%.6s needs an update", L.peer(i).name); snprintf(c, sizeof(c), "for %s", MP_GAMES[g]); }
                 mpNote(b, c);
               } else if (!L.invite(i, g + 1, linkNow())) {
