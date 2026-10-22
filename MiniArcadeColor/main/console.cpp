@@ -109,6 +109,7 @@ static const char *const IC_SETTINGS[12] = {
 
 #include "multiplayer.h"           // online play: uses the games above and the icons
 #include "tv.h"                    // YouTube through the own server
+#include "inet.h"                  // online play over the internet: the TV's server and pairing
 
 static const Game GAMES[] = {
   { "Snake",       "SNK", snakeRun,       IC_SNAKE,       C::GREEN,         NULL },
@@ -167,7 +168,7 @@ uint8_t     realGames()         { return REAL_GAMES; }
 // the library's words follow the language; the game names stay as they are
 static const char *gameLabel(uint8_t i) { return GAMES[i].run == settingsRun ? TR("Settings", "Einstellungen") : GAMES[i].name; }
 static const char *gameTag(const Game &g) {
-  if (!strcmp(g.tag, "nearby")) return TR("nearby", "nebenan");
+  if (!strcmp(g.tag, "nearby")) return TR("nearby/web", "nah/Netz");   // the radio or the own server
   if (!strcmp(g.tag, "setup"))  return TR("setup", "einrichten");
   return g.tag;
 }

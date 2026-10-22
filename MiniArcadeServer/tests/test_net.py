@@ -256,8 +256,8 @@ async def test_session_and_busy(cli):
 
 async def test_lead(cli):
     assert net.lead_for(20, 20) == 6                                   # near: the least delay
-    assert net.lead_for(60, 60) == 11
-    assert net.lead_for(100, 100) == 17
+    assert net.lead_for(60, 60) == 10
+    assert net.lead_for(100, 100) == 15
     assert net.lead_for(400, 400) == 24                                # far: capped
     a, b, sa, sb = await session(cli, game=3, rtt_a=80, rtt_b=60)
     assert sa['lead'] == sb['lead'] == net.lead_for(80, 60)

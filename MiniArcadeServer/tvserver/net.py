@@ -44,9 +44,10 @@ def clean_name(s):
 
 def lead_for(rtt_a, rtt_b):
     """Input delay for a real-time game in lockstep. One poll at a time per console:
-    a message waits for the next poll (the two round trips together at most) and
-    then needs half of both; plus a tick and some jitter."""
-    ms = 1.5 * (rtt_a + rtt_b) + 40
+    an input waits for the next poll and then needs half of both round trips; in
+    the console tests (MiniArcadeColor/test, inetpong) the game keeps full speed
+    from about 1.1 times both round trips on - a little more for jitter."""
+    ms = 1.25 * (rtt_a + rtt_b) + 40
     return max(LEAD_MIN, min(LEAD_MAX, math.ceil(ms / 20)))
 
 

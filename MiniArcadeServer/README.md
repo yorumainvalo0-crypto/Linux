@@ -1,6 +1,7 @@
-# MiniArcade Server (TV)
+# MiniArcade Server (TV und Mehrspieler)
 
-YouTube für die **MiniArcade Color** (ESP32-C3 / ESP32-S3 mit 320×240-Display).
+YouTube für die **MiniArcade Color** (ESP32-C3 / ESP32-S3 mit 320×240-Display) –
+und der Treffpunkt für **Mehrspieler übers Internet** (siehe unten).
 Der Server sucht und lädt die Videos mit **yt-dlp**, dekodiert sie mit
 **ffmpeg**, rechnet sie auf die 256 Farben der Konsole herunter und schickt
 sie in einem eigenen Kachelformat, das die Konsole direkt in ihren
@@ -236,6 +237,80 @@ zeigt auch die Server-PIN.
   roh. Format: `tvserver/codec.py`, Decoder der Konsole: `MiniArcadeColor/main/tvcodec.h`.
 - ffmpeg wird beendet, wenn eine Konsole 15 s nichts mehr abholt.
 
+## Mehrspieler übers Internet
+
+Die Spiele, die zwei Konsolen sonst per Funk (ESP-NOW) nebeneinander spielen,
+gehen auch übers Internet – über diesen Server. Er vermittelt nur: Lobby,
+Freunde, Herausforderungen, und er reicht die Spielzüge weiter. Gerechnet
+wird weiter auf beiden Konsolen.
+
+**Einrichten:** nichts Zusätzliches. Es gilt dieselbe Kopplung wie beim TV
+(Adresse, `CONSOLE_PIN`, ein Token pro Konsole). Eine fürs TV gekoppelte
+Konsole kann sofort online spielen; eine ungekoppelte führt „Online →
+Internet (server)“ durch dieselbe Adress- und PIN-Eingabe.
+
+**An der Konsole:** Online → *Internet (server)*. Die Lobby zeigt alle
+gekoppelten Konsolen dieses Servers, die gerade online sind (letzte Abfrage
+vor weniger als 30 s), mit Name und dem Spiel, das sie gern spielen würden,
+dazu die Freunde – auch offline. OK auf einer freien Konsole fordert sie
+heraus (30 s Zeit zum Antworten). Eigene Zeile, OK: *my code* (der
+Freundescode), *add a friend by code* (Code-Eingabe am Bildschirm), Name,
+Wunschspiel. RECHTS auf einer Konsole: als Freund hinzufügen / entfernen.
+
+- **Freundescodes:** 6 Zeichen aus `23456789ABCDEFGHJKMNPQRSTUVWXYZ` (kein
+  0/O, 1/I/L), einmal pro Konsole erzeugt und mit der Freundesliste in
+  `state.json` im Volume gespeichert (`fc`, `friends`). Freundschaft gilt in
+  beide Richtungen, höchstens 16 Freunde. Wird eine Konsole auf der
+  Handy-Seite entfernt, verschwindet sie auch aus allen Freundeslisten.
+- **Nur im Speicher:** Anwesenheit, Herausforderungen, laufende Spiele und
+  alle Spielnachrichten. Nichts davon landet auf der Platte; ein Neustart des
+  Containers beendet laufende Spiele.
+
+**API** (alles mit `X-Token` der Konsole, unter `BASE_PATH`):
+
+| Anfrage | Zweck |
+|---|---|
+| `POST /api/net/poll` (JSON) | Die Konsole meldet sich (`n` Name, `g` Wunschspiel, `rtt` ihre Antwortzeit, `l` = Listen mitschicken), schickt ihre Nachrichten (`sid`, `m: [[nr, "hex"], …]`, bis 16 à 32 Byte) und bestätigt die erhaltenen (`got`). Antwort: eigener Code `me`, eine Herausforderung `inv`, Stand der eigenen `out`, das Spiel `ses` (mit `se` = `left`/`gone`/`lost`, wenn es vorbei ist), `ack`, die Nachrichten der Gegenseite `msg`, auf Wunsch `lob` und `fr`. Ist nichts Neues da, hält der Server die Anfrage bis `wait` ms (höchstens 25 s) und antwortet sofort, wenn etwas kommt. |
+| `GET /api/net/me` | eigener Freundescode und Name |
+| `POST /api/net/invite?to=CODE&g=SPIEL` | herausfordern (404 unbekannt, 409 `offline`/`busy`/`self`) |
+| `POST /api/net/answer?iid=…&yes=1` | annehmen (Antwort enthält das Spiel) oder ablehnen |
+| `POST /api/net/cancel?oid=…` | eigene Herausforderung zurücknehmen |
+| `POST /api/net/leave?sid=…` | Spiel verlassen |
+| `POST /api/net/friend?c=CODE&on=1` | Freund hinzufügen (`on=0` entfernen) |
+
+**Zustellung:** Die Nachrichten eines Spiels sind je Richtung durchnummeriert.
+Die Konsole wiederholt unbestätigte, der Server nimmt jede Nummer genau
+einmal und in Reihenfolge; die Gegenseite meldet mit `got`, was sie hat, und
+bekommt Verlorenes einfach noch einmal. So geht weder eine verlorene Anfrage
+noch eine verlorene Antwort verloren.
+
+**Zeitgrenzen:** online 30 s nach der letzten Abfrage; Herausforderung 30 s;
+wer im Spiel 12 s nicht abfragt, ist weg (die andere Konsole erfährt `gone`,
+er selbst später `lost`); verlassene Spiele werden nach 30 s aufgeräumt.
+
+**Grenzen gegen Missbrauch:** pro Konsole 40 Anfragen/s (80 auf einmal), 40
+neue Nachrichten/s (80 auf einmal), höchstens 64 wartende Nachrichten je
+Seite, 1 Herausforderung/s (8 auf einmal), Freundescodes 1 pro 5 s (5 auf
+einmal – Raten lohnt nicht). Darüber: 429.
+
+**Echtzeitspiele** (Pong, Snake, Pac-Man, Bomberman) laufen auf beiden
+Konsolen im Gleichschritt (20 ms pro Takt); eine Eingabe zählt erst einige
+Takte später. Übers Internet wählt der Server diese Verzögerung aus den
+gemeldeten Antwortzeiten beider Konsolen: 1,25 × (beide zusammen) + 40 ms,
+mindestens 6, höchstens 24 Takte (120–480 ms). Bei je 50 ms Antwortzeit sind
+das 180 ms. Bis etwa 200 ms Antwortzeit laufen die Spiele in voller
+Geschwindigkeit, darüber werden sie langsamer. Rundenspiele
+(4 gewinnt, Tic Tac Toe, Schiffe versenken, Dame, Mau-Mau, Schach) merken
+die Verzögerung kaum.
+
+**nginx:** nichts Neues. Es gibt kein WebSocket; die Abfragen sind kurze
+HTTPS-Anfragen auf der vorhandenen Keep-Alive-Verbindung, gehalten höchstens
+25 s – das passt zum vHost oben (`proxy_http_version 1.1`,
+`proxy_set_header Connection ""`, `proxy_buffering off`,
+`proxy_read_timeout 60s`). Die Mehrspieler-Grenzen zählen pro Konsole
+(Token), nicht pro Adresse; `TRUSTED_PROXIES` braucht es wie beim TV nur
+für die PIN-Sperre beim Koppeln.
+
 ## Tests (Entwicklung)
 
 ```sh
@@ -245,4 +320,6 @@ python3 tests/make_golden.py            # nur nach Änderungen am Format
 ```
 
 Die Tests laden nichts von YouTube (yt-dlp wird durch `tests/fake_ytdlp.py`
-ersetzt). `tests/golden.bin` prüft auch der Simulator der Konsole.
+ersetzt). `tests/test_net.py` prüft den Mehrspieler-Teil (Anmeldung, Lobby,
+Freunde, Herausforderungen, Reihenfolge der Nachrichten, Zeitgrenzen und
+Begrenzungen) mit einer verstellbaren Uhr. `tests/golden.bin` prüft auch der Simulator der Konsole.

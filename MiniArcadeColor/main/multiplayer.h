@@ -1,4 +1,5 @@
-// MiniArcade Color: online play with a console nearby (ESP-NOW). Part of
+// MiniArcade Color: online play with a console nearby (ESP-NOW) - and the
+// games of online play over the internet too (inet.h uses them). Part of
 // console.cpp, which includes it - not compiled on its own.
 /* The OLED console's multiplayer page (MiniArcade/main/multiplayer.h) in
    colour, on the same protocol (linkcore.h): an OLED and a colour console
@@ -9,8 +10,12 @@
    on the radio (from, then to | promotion << 6).
    Everybody who has this page open shows up in the list of the others,
    with a name and a 4 letter code taken from the chip. A challenge waits
-   30 s for an answer. The radio is only on while this page is open.   */
+   30 s for an answer. The radio is only on while this page is open.
+   Online first asks: nearby (this radio) or the internet (inet.h, through
+   the own MiniArcade server); the games below are the same for both.  */
 #include "link.h"
+
+void inetRun();                                         // inet.h
 
 #define MP_ACCENT rgb(0, 160, 200)
 #define MP_GAMES_N LKG_CHESS
@@ -51,23 +56,21 @@ static void mpScoreBar(const char *title, uint16_t mine, uint16_t theirs, col ac
   mpBar(title, accent);
 }
 
-static int mpSecondsLeft() {
-  int32_t ms = (int32_t)(linkCore().deadline - linkNow());
-  return ms > 0 ? (int)(ms + 999) / 1000 : 0;
-}
-
 // a short message; OK or 3 s go on
-static void mpNote(const char *l1, const char *l2) {
+static bool mpNoting = false;                           // a message is up (host tests)
+static void mpNote(const char *l1, const char *l2, const char *title = "ONLINE") {
   uint32_t t0 = millis();
   btnClear();
+  mpNoting = true;
   while (millis() - t0 < 3000) {
     if (!poll() || btn(B_OK)) break;
-    wlanTitle("ONLINE", MP_ACCENT);
+    wlanTitle(title, MP_ACCENT);
     panel(24, 76, SCR_W - 48, 96, NULL, MP_ACCENT);
     gfx.center(l2 ? 100 : 114, l1, C::WHITE);
     if (l2) gfx.center(130, l2, C::LTGREY);
     gfx.send();
   }
+  mpNoting = false;
 }
 
 // a banner over the middle of a game
@@ -953,49 +956,78 @@ static void mpBars(int16_t x, int16_t y, int8_t rssi) {   // signal strength, bo
 }
 
 // why a challenge or a game ended, from the state it was in before
-static void mpEnded(LkState before) {
+static void mpEnded(LkState before, const char *title = "ONLINE") {
   LinkCore &L = linkCore();
-  char b[32];
-  const char *n = L.opp.name;
+  char b[40];
+  const char *n = L.opp.name, *l2 = NULL;
   switch (L.why) {
-  case LKE_DECLINED: snprintf(b, sizeof(b), "%.6s said no", n); break;
-  case LKE_BUSY:     snprintf(b, sizeof(b), "%.6s is busy", n); break;
+  case LKE_DECLINED: snprintf(b, sizeof(b), TR("%.6s said no", "%.6s sagt nein"), n); break;
+  case LKE_BUSY:     snprintf(b, sizeof(b), TR("%.6s is busy", "%.6s spielt gerade"), n); break;
   case LKE_TIMEOUT:
-    if (before == LK_INVITING) snprintf(b, sizeof(b), "no answer from %.6s", n);
-    else snprintf(b, sizeof(b), "time is up");
+    if (before == LK_INVITING) snprintf(b, sizeof(b), TR("no answer from %.6s", "keine Antwort von %.6s"), n);
+    else snprintf(b, sizeof(b), TR("time is up", "Zeit um"));
     break;
-  case LKE_GONE:     snprintf(b, sizeof(b), "%.6s is gone", n); break;
+  case LKE_GONE:     snprintf(b, sizeof(b), TR("%.6s is gone", "%.6s ist weg"), n); break;
   case LKE_LEFT:
-    if (before == LK_INVITED) snprintf(b, sizeof(b), "%.6s took it back", n);
-    else snprintf(b, sizeof(b), "%.6s left the game", n);
+    if (before == LK_INVITED) snprintf(b, sizeof(b), TR("%.6s took it back", "%.6s zog zurück"), n);
+    else snprintf(b, sizeof(b), TR("%.6s left the game", "%.6s hat aufgehört"), n);
+    break;
+  case LKE_ERROR:                                         // internet: our connection broke
+    snprintf(b, sizeof(b), TR("connection lost", "Verbindung verloren"));
+    l2 = TR("back to the lobby", "zurück zur Lobby");
     break;
   default: b[0] = 0; break;
   }
-  if (b[0]) mpNote(b, NULL);
+  if (b[0]) mpNote(b, l2, title);
 }
 
 // the challenge screens: who, which game, the time left
-static void mpChallenge(const char *title, const char *line, const char *keys, col accent) {
-  LinkCore &L = linkCore();
+static void mpChallengeOf(const char *title, const char *who, uint8_t game, int32_t ms, const char *line,
+                          const char *keys, col accent) {
   wlanTitle(title, accent);
   char b[32];
-  snprintf(b, sizeof(b), "%ds", mpSecondsLeft());
+  snprintf(b, sizeof(b), "%ds", ms > 0 ? (int)(ms + 999) / 1000 : 0);
   gfx.right(SCR_W - 12, 6, b, C::YELLOW, F_BOLD);
-  snprintf(b, sizeof(b), "%.6s %.4s", L.opp.name, L.opp.code);
-  gfx.center(44, b, C::WHITE, F_BOLD);
+  gfx.center(44, who, C::WHITE, F_BOLD);
   gfx.center(76, line, C::LTGREY);
-  uint8_t g = L.game >= LKG_C4 && L.game <= MP_GAMES_N ? L.game - 1 : 0;
+  uint8_t g = game >= LKG_C4 && game <= MP_GAMES_N ? game - 1 : 0;
   gfx.rbox(SCR_W / 2 - 34, 100, 68, 68, 10, colDark(accent, 2));
   gfx.sprite(SCR_W / 2 - 24, 110, MP_ICON[g], 12, ICON_KEYS, ICON_PAL, 4);
-  gfx.center(174, mpGameName(L.game), C::YELLOW, F_BOLD);
-  int32_t ms = (int32_t)(L.deadline - linkNow());
+  gfx.center(174, mpGameName(game), C::YELLOW, F_BOLD);
   bar(30, 202, SCR_W - 60, (uint8_t)(ms > 0 ? ms * 100 / LK_INVITE_MS : 0), accent);
   gfx.center(SCR_H - 16, keys, C::LIME, F_SMALL);
   gfx.send();
 }
+static void mpChallenge(const char *title, const char *line, const char *keys, col accent) {
+  LinkCore &L = linkCore();
+  char b[32];
+  snprintf(b, sizeof(b), "%.6s %.4s", L.opp.name, L.opp.code);
+  mpChallengeOf(title, b, L.game, (int32_t)(L.deadline - linkNow()), line, keys, accent);
+}
+
+// the game of the session, to its end: 0 = decided or the other one left, 1 = we gave up, 2 = broken
+static uint8_t mpGame() {
+  LinkCore &L = linkCore();
+  mpQn = 0;
+  mpVs();
+  uint8_t g = L.game;
+  uint8_t r = LinkCore::realtime(g) ? mpRealtime() : g == LKG_C4 ? mpC4() : g == LKG_TTT ? mpTTT() :
+              g == LKG_DAME ? mpCheckers() : g == LKG_MAU ? mpMauMau() : g == LKG_CHESS ? mpChess() : mpBattle();
+  barRight = NULL;
+  btnClear();
+  return r;
+}
+
+static bool mpChoosing = false;                         // the "nearby or internet" list is up (host tests)
 
 void onlineRun() {
-  if (runClock < 80) { wlanNeedsClock(); return; }     // the radio needs 80 MHz+
+  if (runClock < 80) { wlanNeedsClock(); return; }     // the radio and the WLAN need 80 MHz+
+  const char *const WAY[2] = { TR("Nearby (radio)", "In der Nähe (Funk)"), TR("Internet (server)", "Internet (Server)") };
+  mpChoosing = true;
+  uint8_t way = chooseMode("ONLINE", WAY, 2, MP_ACCENT);
+  mpChoosing = false;
+  if (way == 1) { inetRun(); return; }
+  if (way != 0) return;
   phoneLinkOff();                                       // the radio is ours now, not the WLAN's
   if (!linkOpen()) { mpNote("radio did not start", NULL); return; }
   LinkCore &L = linkCore();
@@ -1013,7 +1045,7 @@ void onlineRun() {
     LkState st = L.state;
 
     if (st == LK_OVER) {                                // challenge or game is over
-      if (gameEnd == 1) mpNote("you left the game", NULL);
+      if (gameEnd == 1) mpNote(TR("you left the game", "Spiel verlassen"), NULL);
       else if (gameEnd == 0) mpEnded(before);
       gameEnd = 0;
       mpQn = 0;
@@ -1025,13 +1057,7 @@ void onlineRun() {
     before = st;
 
     if (st == LK_PLAYING) {
-      mpQn = 0;
-      mpVs();
-      uint8_t g = L.game;
-      gameEnd = LinkCore::realtime(g) ? mpRealtime() : g == LKG_C4 ? mpC4() : g == LKG_TTT ? mpTTT() :
-                g == LKG_DAME ? mpCheckers() : g == LKG_MAU ? mpMauMau() : g == LKG_CHESS ? mpChess() : mpBattle();
-      barRight = NULL;
-      btnClear();
+      gameEnd = mpGame();
       continue;
     }
 

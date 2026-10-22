@@ -21,6 +21,7 @@ static TaskHandle_t task = NULL;
 
 // short requests
 static char reqPath[256];
+static char reqBody[TV_BODY_MAX];             // "" = none
 static bool reqPost = false;
 static volatile TvReqState reqSt = TVR_IDLE;
 static volatile int reqStatus = 0;
@@ -69,9 +70,9 @@ static void clientDown() {
   cli = NULL;
 }
 
-// sends the request and reads the answer's headers; one more try on a fresh
-// connection (the old one may have been closed by the server)
-static bool openReq(const char *path, bool post) {
+// sends the request (with a JSON body if one is given) and reads the answer's
+// headers; one more try on a fresh connection (the old one may have been closed)
+static bool openReq(const char *path, bool post, const char *body = NULL) {
   static char url[400];
   snprintf(url, sizeof(url), "%s%s", base, path);
   for (int k = 0; k < 2; k++) {
@@ -79,7 +80,11 @@ static bool openReq(const char *path, bool post) {
     esp_http_client_set_url(cli, url);
     esp_http_client_set_method(cli, post ? HTTP_METHOD_POST : HTTP_METHOD_GET);
     if (token[0]) esp_http_client_set_header(cli, "X-Token", token);
-    if (esp_http_client_open(cli, 0) == ESP_OK && esp_http_client_fetch_headers(cli) >= 0) {
+    int bl = body ? (int)strlen(body) : 0;
+    if (bl) esp_http_client_set_header(cli, "Content-Type", "application/json");
+    else esp_http_client_delete_header(cli, "Content-Type");
+    if (esp_http_client_open(cli, bl) == ESP_OK && (!bl || esp_http_client_write(cli, body, bl) == bl) &&
+        esp_http_client_fetch_headers(cli) >= 0) {
       static bool once = false;
       if (!once) { once = true; heapNote("connected"); }
       return true;
@@ -92,7 +97,7 @@ static bool openReq(const char *path, bool post) {
 static void doReq() {
   int st = 0;
   size_t n = 0;
-  if (openReq(reqPath, reqPost)) {
+  if (openReq(reqPath, reqPost, reqBody)) {
     st = esp_http_client_get_status_code(cli);
     for (int k; n < TV_RESP_MAX - 1 && (k = esp_http_client_read(cli, (char *)resp + n, TV_RESP_MAX - 1 - n)) > 0; ) n += k;
     int dummy;
@@ -228,10 +233,12 @@ void tvNetStop() {
 
 void tvNetToken(const char *tok) { snprintf(token, sizeof(token), "%s", tok); }
 
-bool tvReq(const char *path, bool post) {
+bool tvReq(const char *path, bool post, const char *json) {
   if (!running || reqSt == TVR_BUSY) return false;
   snprintf(reqPath, sizeof(reqPath), "%s", path);
-  reqPost = post;
+  if (json && strlen(json) >= sizeof(reqBody)) return false;
+  snprintf(reqBody, sizeof(reqBody), "%s", json ? json : "");
+  reqPost = post || json;
   reqSt = TVR_BUSY;
   if (task) xTaskNotifyGive(task);
   return true;
