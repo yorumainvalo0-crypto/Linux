@@ -3,6 +3,16 @@
 // Part of console.cpp, which includes it - not compiled on its own.
 
 // =========================================================
+//  LANGUAGE
+// =========================================================
+/* The menus, the settings and the setup screens speak English or German;
+   the games keep their English texts. TR("English", "Deutsch") picks one
+   of the two - both stay in flash, nothing is copied. German letters are
+   written as UTF-8 (gfx.cpp has glyphs for ä ö ü ß).                   */
+static uint8_t cfgLang = 0;              // 0 = English, 1 = Deutsch (saved as "lang")
+#define TR(en, de) (cfgLang ? (de) : (en))
+
+// =========================================================
 //  KEYS
 // =========================================================
 /* Four keys: UP, DOWN, LEFT, RIGHT. A key has its own pin, or several
@@ -292,6 +302,7 @@ void saveCfg() {
   prefs.putUShort("dsp", cfgDisp);
   prefs.putUShort("spi", cfgSpi);
   prefs.putUShort("fps", cfgFps);
+  prefs.putUShort("lang", cfgLang);
   prefs.end();
 }
 
@@ -368,6 +379,7 @@ bool loadPins() {
   cfgDisp   = (uint8_t)prefs.getUShort("dsp", 0);
   cfgSpi    = (uint8_t)prefs.getUShort("spi", CONFIG_ARCADE_TFT_MHZ);
   cfgFps    = prefs.getUShort("fps", 0) != 0;
+  cfgLang   = prefs.getUShort("lang", 0) == 1 ? 1 : 0;
   bool ok = prefs.getUShort("pset", 0) == 3;      // version 3 = four keys + optional OK
   ladVs     = prefs.getUShort("lvs", 3300);
   if (ok)
@@ -520,8 +532,8 @@ void sleepCheck() {
   noTone(sndPin);
   batLearnStop();
   gfx.clear(C::NAVY);
-  gfx.center(100, "SLEEPING", C::CYAN, F_BOLD);
-  gfx.center(140, "press a key to wake up", C::LTGREY);
+  gfx.center(100, TR("SLEEPING", "SCHLAFEN"), C::CYAN, F_BOLD);
+  gfx.center(140, TR("press a key to wake up", "eine Taste weckt auf"), C::LTGREY);
   gfx.send();
   delay(1200);
   gfx.sleep(true);
@@ -617,8 +629,8 @@ uint8_t chooseMode(const char *title, const char *const *opts, uint8_t n, col ac
       if (on) gfx.rframe(40, y, SCR_W - 80, 28, 6, C::WHITE);
       gfx.center(y + 5, opts[k], on ? C::WHITE : C::LTGREY);
     }
-    char hint[48];
-    snprintf(hint, sizeof(hint), "UP/DOWN choose   %s = select   hold = back", okKeys());
+    char hint[64];
+    snprintf(hint, sizeof(hint), TR("UP/DOWN choose   %s = select   hold = back", "UP/DOWN wählen   %s = los   halten = zurück"), okKeys());
     gfx.center(SCR_H - 16, hint, C::GREY, F_SMALL);
     gfx.send();
   }
@@ -626,7 +638,8 @@ uint8_t chooseMode(const char *title, const char *const *opts, uint8_t n, col ac
 }
 
 static bool pauseMenu() {
-  static const char *const OPT[4] = { "continue", "restart", "quit to menu", "tilt: level here" };
+  const char *const OPT[4] = { TR("continue", "weiter"), TR("restart", "neu starten"), TR("quit to menu", "zum Menü"),
+                               TR("tilt: level here", "Nulllage hier") };
   const uint8_t n = cfgTilt && gyroReady ? 4 : 3;       // with tilt control: set the level anew
   uint32_t t0 = millis();
   uint8_t sel = 0;

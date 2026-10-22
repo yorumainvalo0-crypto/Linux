@@ -3,7 +3,10 @@
    layer and the real drawing code; only the hardware calls are redirected
    here. The panel driver is replaced: every frame sent lands in a buffer,
    and the frames a scenario asks for are written to frames/ as PPM.
-   Usage: ./colorsim <scenario>       (build.sh runs them all)          */
+   Usage: ./colorsim <scenario>       (build.sh runs them all)
+   SPRACHE=de ./colorsim <scenario>: the same in German - then only checked
+   that no text runs off the screen; what was drawn goes to frames/lang_de.txt
+   for the "sprache" scenario's check over every translation.            */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +19,10 @@
 #include <functional>
 #include <unordered_set>
 #include <queue>
+#include <regex>
+#include <fstream>
+#include <sstream>
+#include <dirent.h>
 
 std::map<std::string, uint16_t>    simNvsU16;
 std::map<std::string, std::string> simNvsBlob;
@@ -62,6 +69,11 @@ static int ladderRmv(uint8_t idx) {
 static int16_t simAcc[3] = { 0, 0, 16384 };      // the gyroscope's accelerometer, lying flat
 struct AccEv { uint32_t t; int16_t x, y; };
 static std::vector<AccEv> accScript;
+static std::vector<std::pair<uint32_t, std::function<void()>>> simAt;   // things that happen at a time (ms)
+static bool simDe = false;                       // SPRACHE=de: the scenario in German
+static const char *framePre = "";                // "de_" before the frame files then
+static std::set<std::string> deTexts;            // the texts drawn while the console spoke German
+static std::set<std::string> deOver;             // ... those that ran off the screen
 
 uint64_t simMicros() { return clockUs; }
 void simGpioConfig(uint64_t mask, int pu, int pd) {
@@ -117,6 +129,7 @@ void simDelayMs(uint32_t ms) {
     uint32_t t = (uint32_t)(clockUs / 1000);
     for (auto &e : script) if (e.t == t) applyMask(e.mask);
     for (auto &e : accScript) if (e.t == t) { simAcc[0] = e.x; simAcc[1] = e.y; }
+    for (auto &e : simAt) if (e.first == t) e.second();
     if (autoplay && t > autoplayFrom && t % 180 == 0) {
       static const uint8_t o[] = { 0, 0, 1, 2, 4, 8, 4, 8 };
       applyMask(o[rand() % 8]);
@@ -133,10 +146,22 @@ void simDelayMs(uint32_t ms) {
 #include "tvnet.h"                 // pretend MiniArcade server for the TV
 #include "../main/console.cpp"
 
+// every text drawn (gfx.cpp); in German also where it lies: nothing may run off the screen
+void arcadeTraceText(int16_t x, int16_t y, const char *s, Font f) {
+  arcadeTraceStr(s);
+  if (!cfgLang || !*s) return;
+  deTexts.insert(s);
+  if (x < 0 || y < 0 || x + Gfx::width(s, f) > SCR_W || y + Gfx::height(f) > SCR_H) {
+    char b[160];
+    snprintf(b, sizeof(b), "'%s' at %d,%d, %d px wide", s, x, y, Gfx::width(s, f));
+    deOver.insert(b);
+  }
+}
+
 // ---------------- the panel ----------------
 static void writeFrame(const uint8_t *fb) {
   char fn[96];
-  snprintf(fn, sizeof(fn), "frames/%s_%05ld.ppm", scenario.c_str(), frames);
+  snprintf(fn, sizeof(fn), "frames/%s%s_%05ld.ppm", framePre, scenario.c_str(), frames);
   FILE *f = fopen(fn, "wb");
   if (!f) return;
   fprintf(f, "P6\n%d %d\n255\n", SCR_W, SCR_H);
@@ -3223,6 +3248,102 @@ static void pmEditorBot(uint32_t t) {
   }
 }
 
+// ---------------- the translations ----------------
+static uint32_t sprSwitch = 0, sprBack = 0;      // "sprache": when the language was switched there and back
+static uint16_t sprLangSaved = 0;
+/* Every TR("English", "Deutsch") in main/: the same placeholders in both,
+   only letters the fonts have, and a German text longer than its English
+   one must have been drawn in German somewhere - by the scenarios run with
+   SPRACHE=de or by "sprache" itself - where it was checked against the
+   screen's edges. Shorter ones fit wherever the English one fits.      */
+struct TrPair { std::string en, de, at; };
+static std::string trUnescape(const std::string &q) {
+  std::string o;
+  for (size_t i = 0; i < q.size(); i++) {
+    if (q[i] == '\\' && i + 1 < q.size()) { i++; o += q[i] == 'n' ? '\n' : q[i]; }
+    else o += q[i];
+  }
+  return o;
+}
+static std::vector<TrPair> trPairs() {
+  std::vector<TrPair> v;
+  static const std::regex re("TR\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*,\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)");
+  DIR *d = opendir("../main");
+  if (!d) return v;
+  std::vector<std::string> files;
+  while (dirent *e = readdir(d)) {
+    std::string n = e->d_name;
+    if (n.size() > 2 && (n.compare(n.size() - 2, 2, ".h") == 0 || (n.size() > 4 && n.compare(n.size() - 4, 4, ".cpp") == 0))) files.push_back(n);
+  }
+  closedir(d);
+  for (const std::string &n : files) {
+    std::ifstream in("../main/" + n);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string src = ss.str();
+    for (std::sregex_iterator it(src.begin(), src.end(), re), end; it != end; ++it)
+      v.push_back({ trUnescape((*it)[1]), trUnescape((*it)[2]), n });
+  }
+  return v;
+}
+static int trLetters(const std::string &s) { int n = 0; for (unsigned char c : s) if ((c & 0xC0) != 0x80) n++; return n; }
+// the placeholders of a format, in order ("%%" is a letter); spec = true: one of them starts at i
+static size_t trSpecEnd(const std::string &s, size_t i) {
+  size_t k = i + 1;
+  while (k < s.size() && strchr("-+ #0123456789.*hlLqjzt", s[k])) k++;
+  return k < s.size() ? k + 1 : k;
+}
+static std::string trSpecs(const std::string &s) {
+  std::string o;
+  for (size_t i = 0; i < s.size(); i++)
+    if (s[i] == '%') { if (i + 1 < s.size() && s[i + 1] == '%') { i++; continue; } size_t k = trSpecEnd(s, i); o += s.substr(i, k - i) + " "; i = k - 1; }
+  return o;
+}
+static bool trGlyphsOk(const std::string &s) {                   // ASCII or ä ö ü Ä Ö Ü ß
+  for (size_t i = 0; i < s.size(); i++) {
+    unsigned char c = (unsigned char)s[i];
+    if (c >= 32 && c <= 126) continue;
+    if (c == 0xC3 && i + 1 < s.size() && strchr("\xA4\xB6\xBC\x84\x96\x9C\x9F", s[i + 1])) { i++; continue; }
+    return false;
+  }
+  return true;
+}
+// the German text as drawn: every placeholder can be anything
+static bool trDrawn(const std::string &de, const std::set<std::string> &drawn) {
+  std::string pat, lit, longest;
+  for (size_t i = 0; i < de.size(); i++) {
+    if (de[i] == '%' && i + 1 < de.size() && de[i + 1] != '%') {
+      size_t k = trSpecEnd(de, i);
+      pat += ".*"; if (lit.size() > longest.size()) longest = lit; lit.clear(); i = k - 1; continue;
+    }
+    if (de[i] == '%') i++;
+    if (strchr("\\^$.|?*+()[]{}", de[i])) pat += '\\';
+    pat += de[i]; lit += de[i];
+  }
+  if (lit.size() > longest.size()) longest = lit;
+  std::regex re(pat);
+  for (const std::string &d : drawn)
+    if (d.find(longest) != std::string::npos && std::regex_search(d, re)) return true;
+  return false;
+}
+static void langTable() {
+  std::vector<TrPair> v = trPairs();
+  std::set<std::string> drawn = deTexts;
+  std::ifstream in("frames/lang_de.txt");
+  for (std::string l; std::getline(in, l); ) drawn.insert(l);
+  int longer = 0, bad = 0, unseen = 0;
+  for (const TrPair &p : v) {
+    if (trSpecs(p.en) != trSpecs(p.de)) { printf("      %s: placeholders differ: '%s' / '%s'\n", p.at.c_str(), p.en.c_str(), p.de.c_str()); bad++; }
+    if (!trGlyphsOk(p.de)) { printf("      %s: a letter the font lacks: '%s'\n", p.at.c_str(), p.de.c_str()); bad++; }
+    if (trLetters(p.de) <= trLetters(p.en)) continue;
+    longer++;
+    if (!trDrawn(p.de, drawn)) { printf("      %s: longer in German, never drawn: '%s'\n", p.at.c_str(), p.de.c_str()); unseen++; }
+  }
+  printf("      %zu translations, %d longer in German, %zu German texts drawn\n", v.size(), longer, drawn.size());
+  check("every translation: same placeholders, letters the font has", v.size() > 200 && !bad);
+  check("every German text longer than its English one was drawn and stayed on the screen", !unseen);
+}
+
 int main(int argc, char **argv) {
   scenario = argc > 1 ? argv[1] : "menu";
   srand(1);
@@ -3239,6 +3360,8 @@ int main(int argc, char **argv) {
   simNvsU16["pset"] = 3; simNvsU16["sset"] = 1; simNvsU16["snd"] = SND; simNvsU16["bat"] = BAT;
   for (int i = 0; i < 4; i++) { simNvsU16["p" + std::to_string(i)] = KEYS[i]; simNvsU16["a" + std::to_string(i)] = 1; }
   simNvsU16["p4"] = 255;
+  simDe = getenv("SPRACHE") && !strcmp(getenv("SPRACHE"), "de");
+  if (simDe) { simNvsU16["lang"] = 1; framePre = "de_"; }
   const uint32_t M = 1600;                                      // the menu is up by then
   if (scenario == "menu") {
     simEnd = 6000; captureAt = { 60 };
@@ -3680,6 +3803,109 @@ int main(int argc, char **argv) {
     printf("== %s\n", scenario.c_str());
     chessProtocol();
     return failures ? 1 : 0;
+  } else if (scenario == "sprache") {
+    // settings -> language Deutsch, at once and saved; every settings line and the setup
+    // screens behind them in German, the library, the pause menu, the Pumpkin Maze list
+    // and the TV's screens too; then back to English
+    simNvsU16["tilt"] = 1; simNvsU16["gax"] = 0x8100;          // tilt control on, but no sensor
+    const char URL[] = "https://tv.example.de";                 // a TV server, not paired yet
+    simNvsBlob["url"] = std::string(URL, sizeof(URL));
+    PmSave sv;                                                   // Pumpkin Maze: three levels played
+    memset(&sv, 0, sizeof(sv)); sv.ver = 1; sv.open = 2;
+    for (int i = 0; i < 3; i++) { sv.stars[i] = 2; sv.best[i] = (uint16_t)(150 + i * 40); }
+    simNvsBlob["PMZsv"] = std::string((const char *)&sv, sizeof(sv));
+    press(M, UP); press(M + 400, OK, 80);                        // settings
+    uint32_t t = M + 900;
+    press(t, UP); press(t + 250, UP); press(t + 500, RT);        // the last line but one: language
+    sprSwitch = t + 500;
+    simAt.push_back({ t + 800, [] { sprLangSaved = simNvsU16.count("lang") ? simNvsU16["lang"] : 0; } });
+    captureMs = { t + 800 };
+    t += 1100;
+    for (int i = 0; i < 21; i++) {                               // every line once, back at the language
+      press(t, DN);
+      if (i == 8 || i == 9) { press(t + 100, RT); press(t + 200, RT); }   // red/blue, colours: changed and back
+      if (i == 12) { press(t + 100, LT); press(t + 200, RT); }            // tilt: weak, normal again
+      t += 300;
+    }
+    captureMs.push_back(t - 300 * 15);                           // the first lines
+    t += 300;
+    press(t, UP); press(t + 250, OK, 80); press(t + 1100, OK, 900);              // firmware version, back
+    t += 2400;
+    press(t, UP); press(t + 250, OK, 80); press(t + 1100, OK, 900);              // tv server: the keyboard, cancelled
+    t += 2400;
+    uint32_t w = t + 250;                                        // wlan and update
+    press(t, UP); press(w, OK, 80);
+    press(w + 500, DN); press(w + 750, DN); press(w + 1000, OK, 80);             // check for update: a newer one
+    captureMs.push_back(w + 1500);
+    simAt.push_back({ w + 1700, [] { simJob = JOB_UPDATING; } });
+    simAt.push_back({ w + 2300, [] { simJob = JOB_IDLE; } });
+    simAt.push_back({ w + 2600, [] { simJob = JOB_ASKING; } });  // a firmware from the web page: no
+    press(w + 3200, LT);
+    simAt.push_back({ w + 3600, [] { simRestoreAsk = true; simJob = JOB_IDLE; } });   // a backup from the phone: no
+    press(w + 4200, LT);
+    press(w + 4600, DN); press(w + 4900, OK, 80);                // the phone hotspot
+    press(w + 5400, RT); press(w + 5800, RT); press(w + 6100, LT); press(w + 6500, OK, 80);
+    simAt.push_back({ w + 6800, [] { simNoNet = true; } });      // joining a network that is not there
+    press(w + 7000, UP); press(w + 7250, UP); press(w + 7500, UP); press(w + 7800, OK, 80);
+    simAt.push_back({ w + 8400, [] { simNet = NET_FAILED; simNoNet = false; } });
+    press(w + 9000, DN); press(w + 9300, OK, 80);                // set up with the phone
+    press(w + 9900, OK, 900);                                    // hold OK: out of the page
+    t = w + 11200;
+    simAt.push_back({ t, [] { runClock = 40; } });               // too slow for the WLAN
+    press(t + 200, OK, 80); press(t + 1000, OK, 900);
+    simAt.push_back({ t + 2200, [] { runClock = 160; } });
+    t += 2400;
+    simAt.push_back({ t, [] { tftPins.miso = -1; } });           // sd card: the display's SDO not wired
+    press(t, UP); press(t + 250, OK, 80);
+    simAt.push_back({ t + 4500, [] { tftPins.miso = 9; simSd = true; } });
+    press(t + 4700, OK, 80);                                     // ... then a card on GPIO20
+    t += 8000;
+    press(t, UP); press(t + 250, OK, 80); press(t + 900, LT); press(t + 1200, DN); press(t + 1500, OK, 900);   // battery
+    t += 2800;
+    press(t, UP); press(t + 250, OK, 80);                        // sound: no pin beeps
+    for (int i = 0; i < 4; i++) press(t + 800 + 300 * i, RT);
+    t += 800 + 300 * 4 + 2000;
+    press(t, UP); press(t + 250, UP); press(t + 500, UP); press(t + 750, OK, 80);   // tilt level: no sensor
+    t += 2950;
+    press(t, UP); press(t + 250, OK, 80);                        // tilt control: set up again, no sensor
+    t += 3600;
+    for (int i = 0; i < 5; i++) press(t + 250 * i, UP);          // screen speed: slower, then faster and kept
+    press(t + 1400, LT); press(t + 1800, RT); press(t + 3000, OK, 80);
+    t += 3600;
+    press(t, OK, 900);                                           // hold OK: the library
+    captureMs.push_back(t + 1400);
+    press(t + 1600, DN); press(t + 2000, OK, 80);                // Snake ...
+    press(t + 3200, OK, 900);                                    // ... paused
+    captureMs.push_back(t + 4600);
+    press(t + 4900, DN); press(t + 5200, DN); press(t + 5500, OK, 80);   // quit to the menu
+    t = openGameNamed("Pumpkin Maze", t + 6300);                // the level list, the own levels
+    captureMs.push_back(t + 800);
+    for (int i = 0; i < 3 + PM_OWN; i++) press(t + 1000 + 250 * i, DN);
+    t += 1000 + 250 * (3 + PM_OWN) + 300;
+    simAt.push_back({ t, [] { runClock = 40; } });               // the phone editor: too slow for the WLAN
+    press(t + 200, OK, 80);
+    simAt.push_back({ t + 4000, [] { runClock = 160; } });
+    press(t + 4200, OK, 900);                                    // hold OK: the library
+    t += 5600;
+    for (int i = 0; i < 3; i++) press(t + 250 * i, DN);          // TV: no WLAN saved
+    simAt.push_back({ t + 700, [] { simNoConfig = true; } });
+    press(t + 900, OK, 80); press(t + 1900, OK, 80);
+    simAt.push_back({ t + 2400, [] { simNoConfig = false; simNoNet = true; } });   // ... the network not there
+    press(t + 2600, OK, 80);
+    simAt.push_back({ t + 3200, [] { simNet = NET_FAILED; simNoNet = false; } });
+    press(t + 3800, OK, 900);
+    simAt.push_back({ t + 5000, [] { simTvDown = true; } });     // ... the server not answering
+    press(t + 5200, OK, 80); press(t + 6400, OK, 900);
+    simAt.push_back({ t + 7600, [] { simTvDown = false; strcpy(tvTok, "TOKEN-1234567890-abcdefghijklmnop"); } });
+    press(t + 7800, OK, 80);                                     // ... paired: the list, then its setup
+    press(t + 9800, LT);
+    captureMs.push_back(t + 10400);
+    press(t + 10800, OK, 900);
+    t += 12200;
+    press(t, DN); press(t + 400, OK, 80);                        // settings again: back to English
+    press(t + 900, UP); press(t + 1150, UP); press(t + 1400, LT);
+    sprBack = t + 1400;
+    simEnd = t + 2400;
   } else if (scenario == "online") {
     // the lobby: rename, a friend, Chess with a console that has none, a "no",
     // 4 wins, ANNA's challenge to Tic Tac Toe accepted, another one declined, back
@@ -3704,6 +3930,15 @@ int main(int argc, char **argv) {
     setup();
     for (;;) loop();
   } catch (SimEnd &) {}
+  if (simDe) {                                                  // German: the screen's edges only, the texts for "sprache"
+    check("frames were drawn", frames > 20);
+    for (const std::string &o : deOver) printf("      off the screen: %s\n", o.c_str());
+    check("German: the menus were drawn, no text runs off the screen", deOver.empty() && !deTexts.empty());
+    FILE *f = fopen("frames/lang_de.txt", "a");
+    if (f) { for (const std::string &x : deTexts) if (!strchr(x.c_str(), '\n')) fprintf(f, "%s\n", x.c_str()); fclose(f); }
+    printf("   %zu German texts, %ld frames, %.1f s simulated\n", deTexts.size(), frames, clockUs / 1e6);
+    return failures ? 1 : 0;
+  }
 
   check("frames were drawn", frames > 20);
   check("the picture uses many colours", colsInFrame() >= 6);
@@ -3955,6 +4190,23 @@ int main(int argc, char **argv) {
     check("palace: the score counts the levels played", overShown && palScore > 300 && palScore < 300 + 450);
   }
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
+  if (scenario == "sprache") {
+    auto after = [](const char *x, uint32_t from) { auto it = textAt.find(x); return it != textAt.end() && it->second > from; };
+    for (const std::string &o : deOver) printf("      off the screen: %s\n", o.c_str());
+    check("language: English first, Deutsch at once, saved", seen("language     English") && after("Sprache      Deutsch", sprSwitch) &&
+          after("EINSTELLUNGEN", sprSwitch) && sprLangSaved == 1);
+    check("German settings and setup screens", seen("Helligkeit   (LED an 3V3)") && seen("Kippstärke   normal") && seen("zurück zu den Spielen") &&
+          seen("WLAN EINRICHTEN") && seen("HANDY-HOTSPOT") && seen("9.3 installieren") && seen("SICHERUNG") && seen("KEINE KARTE") &&
+          seen("AKKU") && seen("KEIN SUMMER") && seen("KIPPEN IST AUS") && seen("KEIN SENSOR") && seen("BILD 40 MHz") &&
+          seen("SD-KARTE BEREIT") && seen("Kippen       an (kein Sensor)"));
+    check("German Pumpkin Maze list and TV screens", seen("Bestzeit 23.0 s") && seen("+ Level-Editor am Handy") && seen("kein WLAN") &&
+          seen("keine Antwort") && seen("< Einrichten >") && seen("PUMPKIN MAZE"));
+    check("German library and pause menu, the game names stay", seen("Einstellungen") && seen("REKORD") && seen("zum Menü") &&
+          seen("Snake") && seen("SNAKE"));
+    check("German: nothing ran off the screen", deOver.empty() && deTexts.size() > 100);
+    check("back to English, saved", after("language     English", sprBack) && after("SETTINGS", sprBack) && simNvsU16["lang"] == 0 && cfgLang == 0);
+    langTable();
+  }
   if (scenario == "tilt") {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);
     check("sensor found on GPIO20 / GPIO7", gyroReady && gyroSda == 20 && gyroScl == 7);

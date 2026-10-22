@@ -1313,7 +1313,7 @@ static uint8_t pmSelect(uint8_t sel) {
     pmListBack(millis());
     char b[64], t[16];
     if (!own) {
-      gfx.right(SCR_W - 10, 12, "levels", C::LTGREY, F_SMALL);
+      gfx.right(SCR_W - 10, 12, TR("levels", "Level"), C::LTGREY, F_SMALL);
       for (uint8_t i = 0; i < PM_LEVELS; i++) {
         int16_t x = (int16_t)(8 + (i % 5) * 62), y = (int16_t)(36 + (i / 5) * 52);
         bool open = i <= pmSv.open, on = i == cur;
@@ -1331,24 +1331,24 @@ static uint8_t pmSelect(uint8_t sel) {
       }
       snprintf(b, sizeof(b), "%u  %s", cur + 1, PM_NAMES[cur]);
       gfx.text(10, 196, b, cur <= pmSv.open ? C::WHITE : C::GREY, F_TEXT);
-      if (pmSv.best[cur]) { pmTime(t, sizeof(t), pmSv.best[cur]); snprintf(b, sizeof(b), "best %s", t); gfx.right(SCR_W - 10, 200, b, C::YELLOW, F_SMALL); }
-      snprintf(b, sizeof(b), "stars %u/%u   DOWN: own levels + phone editor", pmStarSum(), PM_LEVELS * 3);
+      if (pmSv.best[cur]) { pmTime(t, sizeof(t), pmSv.best[cur]); snprintf(b, sizeof(b), TR("best %s", "Bestzeit %s"), t); gfx.right(SCR_W - 10, 200, b, C::YELLOW, F_SMALL); }
+      snprintf(b, sizeof(b), TR("stars %u/%u   DOWN: own levels + phone editor", "Sterne %u/%u   DOWN: eigene Level + Handy-Editor"), pmStarSum(), PM_LEVELS * 3);
       gfx.text(10, 222, b, C::GREY, F_SMALL);
     } else {
-      gfx.right(SCR_W - 10, 12, "own levels", C::LTGREY, F_SMALL);
+      gfx.right(SCR_W - 10, 12, TR("own levels", "eigene Level"), C::LTGREY, F_SMALL);
       for (uint8_t i = 0; i <= PM_OWN; i++) {
         int16_t y = (int16_t)(34 + i * 21);
         bool on = i == cur;
         if (on) gfx.rbox(6, (int16_t)(y - 2), SCR_W - 12, 20, 5, rgb(204, 85, 0));
-        if (i == PM_OWN) { gfx.text(16, y, "+ level editor on the phone", on ? C::WHITE : C::LIME, F_TEXT); continue; }
+        if (i == PM_OWN) { gfx.text(16, y, TR("+ level editor on the phone", "+ Level-Editor am Handy"), on ? C::WHITE : C::LIME, F_TEXT); continue; }
         snprintf(b, sizeof(b), "%u", i + 1);
         gfx.text(14, y, b, on ? C::WHITE : C::GREY, F_TEXT);
-        if (!l.name[i][0]) { gfx.text(40, y + 4, "- empty -", on ? C::WHITE : GREY2, F_SMALL); continue; }
+        if (!l.name[i][0]) { gfx.text(40, y + 4, TR("- empty -", "- leer -"), on ? C::WHITE : GREY2, F_SMALL); continue; }
         gfx.text(40, y, l.name[i], on ? C::WHITE : C::LTGREY, F_TEXT);
         pmCardStars(176, (int16_t)(y + 8), pmSv.stars[PM_LEVELS + i], 5);
         if (pmSv.best[PM_LEVELS + i]) { pmTime(t, sizeof(t), pmSv.best[PM_LEVELS + i]); gfx.right(SCR_W - 12, y + 4, t, on ? C::WHITE : C::YELLOW, F_SMALL); }
       }
-      gfx.text(10, 226, "UP: the 15 levels   OK play / editor", C::GREY, F_SMALL);
+      gfx.text(10, 226, TR("UP: the 15 levels   OK play / editor", "UP: die 15 Level   OK spielen / Editor"), C::GREY, F_SMALL);
     }
     gfx.send();
   }
@@ -1373,9 +1373,9 @@ static void pmEditor() {
     btnClear();
     while (poll() && millis() - t0 < 3000 && !btn(B_OK)) {
       pmListBack(millis());
-      gfx.center(100, "the phone editor needs WLAN:", C::WHITE);
-      gfx.center(126, "CPU clock 80 MHz or more", C::YELLOW);
-      gfx.center(152, "(settings)", C::LTGREY);
+      gfx.center(100, TR("the phone editor needs WLAN:", "der Handy-Editor braucht WLAN:"), C::WHITE);
+      gfx.center(126, TR("CPU clock 80 MHz or more", "CPU-Takt 80 MHz oder mehr"), C::YELLOW);
+      gfx.center(152, TR("(settings)", "(Einstellungen)"), C::LTGREY);
       gfx.send();
     }
     return;
@@ -1415,33 +1415,34 @@ static void pmEditor() {
       sfx(1500, 120);
     }
     pmListBack(millis());
-    gfx.right(SCR_W - 10, 12, "phone editor", C::LTGREY, F_SMALL);
+    gfx.right(SCR_W - 10, 12, TR("phone editor", "Handy-Editor"), C::LTGREY, F_SMALL);
     int16_t y = 40;
     if (st == NET_PLAY) {
-      gfx.text(8, y, "1  join this WLAN", C::LTGREY, F_SMALL);
+      gfx.text(8, y, TR("1  join this WLAN", "1  dieses WLAN wählen"), C::LTGREY, F_SMALL);
       gfx.text(8, y + 12, netApName(), C::YELLOW, F_TEXT);
       const char *pw = netApPass();
-      gfx.text(8, y + 38, pw[0] ? "password" : "no password", C::LTGREY, F_SMALL);
+      gfx.text(8, y + 38, pw[0] ? TR("password", "Passwort") : TR("no password", "kein Passwort"), C::LTGREY, F_SMALL);
       if (pw[0]) gfx.text(8, y + 50, pw, C::YELLOW, strlen(pw) <= 17 ? F_TEXT : F_SMALL);
       y = (int16_t)(y + 78);
     } else if (home) {
-      gfx.text(8, y, "1  phone in the WLAN", C::LTGREY, F_SMALL);
+      gfx.text(8, y, TR("1  phone in the WLAN", "1  Handy im WLAN"), C::LTGREY, F_SMALL);
       gfx.text(8, y + 12, netSsid(), C::YELLOW, strlen(netSsid()) <= 17 ? F_TEXT : F_SMALL);
       y = (int16_t)(y + 40);
     } else {
-      gfx.text(8, y, "starting the hotspot...", C::YELLOW, F_SMALL);
+      gfx.text(8, y, TR("starting the hotspot...", "starte den Hotspot..."), C::YELLOW, F_SMALL);
       y = (int16_t)(y + 40);
     }
-    gfx.text(8, y, "2  open in the browser", C::LTGREY, F_SMALL);
+    gfx.text(8, y, TR("2  open in the browser", "2  im Browser öffnen"), C::LTGREY, F_SMALL);
     const char *shortLink = link + 7;                           // without "http://"
     gfx.text(8, (int16_t)(y + 12), shortLink, C::CYAN, Gfx::width(shortLink) <= 176 ? F_TEXT : F_SMALL);
     if (qn) {
       uint8_t s = qn * 3 + 18 <= 130 ? 3 : 2;
       int16_t w = (int16_t)((qn + 6) * s), qx = (int16_t)(SCR_W - 8 - w);
       qrDraw(qr, qn, qx, 36, s);
-      const char *cap = login ? "QR: join the WLAN" : "QR: open the editor";
+      const char *cap = login ? TR("QR: join the WLAN", "QR: ins WLAN") : TR("QR: open the editor", "QR: Editor öffnen");
+      const char *other = TR("LEFT/RIGHT: other QR", "LEFT/RIGHT: anderer QR");
       gfx.text((int16_t)(qx + (w - Gfx::width(cap, F_SMALL)) / 2), (int16_t)(40 + w), cap, C::LTGREY, F_SMALL);
-      if (st == NET_PLAY) gfx.text((int16_t)(qx + (w - Gfx::width("LEFT/RIGHT: other QR", F_SMALL)) / 2), (int16_t)(52 + w), "LEFT/RIGHT: other QR", C::GREY, F_SMALL);
+      if (st == NET_PLAY) gfx.text((int16_t)(qx + (w - Gfx::width(other, F_SMALL)) / 2), (int16_t)(52 + w), other, C::GREY, F_SMALL);
     }
     if (counted != pmOwnVer) {                                  // read from flash only when a level came in
       counted = pmOwnVer;
@@ -1449,13 +1450,13 @@ static void pmEditor() {
       for (uint8_t i = 0; i < PM_OWN; i++) { PmOwn o; if (pmOwnLoad(i, o)) n++; }
     }
     char b[48];
-    snprintf(b, sizeof(b), "own levels %u/%u", n, PM_OWN);
+    snprintf(b, sizeof(b), TR("own levels %u/%u", "eigene Level %u/%u"), n, PM_OWN);
     gfx.text(8, 186, b, C::WHITE, F_SMALL);
     if (gotAt && millis() - gotAt < 6000) {
-      snprintf(b, sizeof(b), "saved: %s", got);
+      snprintf(b, sizeof(b), TR("saved: %s", "gespeichert: %s"), got);
       gfx.text(8, 200, b, (millis() / 250) % 2 ? C::LIME : C::WHITE, F_TEXT);
     }
-    gfx.text(8, 226, "OK = done (the hotspot goes off)", C::GREY, F_SMALL);
+    gfx.text(8, 226, TR("OK = done (the hotspot goes off)", "OK = fertig (Hotspot geht aus)"), C::GREY, F_SMALL);
     gfx.send();
   }
   free(qr);

@@ -86,7 +86,7 @@ static void arrow(int16_t cx, int16_t cy, uint8_t k, col c, int16_t s = 18) {
 
 static void wizScreen(const char *msg, uint8_t step, int8_t seen, uint8_t act, int8_t secs) {
   gfx.gradient(0, 0, SCR_W, SCR_H, C::DKBLUE, C::BLACK);
-  gfx.center(10, "KEY SETUP", C::WHITE, F_BOLD);
+  gfx.center(10, TR("KEY SETUP", "TASTEN EINRICHTEN"), C::WHITE, F_BOLD);
   gfx.center(48, msg, C::YELLOW);
   if (step < 4) arrow(SCR_W / 2, 110, step, C::CYAN, 26);
   else if (step == 4) gfx.center(96, "OK", C::CYAN, F_BIG);
@@ -98,16 +98,16 @@ static void wizScreen(const char *msg, uint8_t step, int8_t seen, uint8_t act, i
   char b[40];
   if (seen >= 0 && seenMv >= 0) snprintf(b, sizeof(b), "GPIO%u -> %u.%02u V", CAND[seen], seenMv / 1000, seenMv % 1000 / 10);
   else if (seen >= 0) snprintf(b, sizeof(b), "GPIO%u -> %s", CAND[seen], act ? "3V3" : "GND");
-  else if (secs >= 0) snprintf(b, sizeof(b), "no OK key? skipped in %d s", secs);
-  else snprintf(b, sizeof(b), "waiting...");
+  else if (secs >= 0) snprintf(b, sizeof(b), TR("no OK key? skipped in %d s", "keine OK-Taste? weiter in %d s"), secs);
+  else snprintf(b, sizeof(b), TR("waiting...", "warte..."));
   gfx.center(176, b, C::LTGREY);
   if (plainAgain >= 0) {                                     // several keys on a pin that cannot measure
-    snprintf(b, sizeof(b), "GPIO%d has a key already and", plainAgain);
+    snprintf(b, sizeof(b), TR("GPIO%d has a key already and", "GPIO%d hat schon eine Taste und"), plainAgain);
     gfx.center(190, b, C::ORANGE, F_SMALL);
 #if CONFIG_IDF_TARGET_ESP32S3
-    gfx.center(200, "cannot measure volts: ladder on GPIO1..10", C::ORANGE, F_SMALL);
+    gfx.center(200, TR("cannot measure volts: ladder on GPIO1..10", "misst keine Volt: Leiter an GPIO1..10"), C::ORANGE, F_SMALL);
 #else
-    gfx.center(200, "cannot measure volts: ladder on GPIO0..3", C::ORANGE, F_SMALL);
+    gfx.center(200, TR("cannot measure volts: ladder on GPIO0..3", "misst keine Volt: Leiter an GPIO0..3"), C::ORANGE, F_SMALL);
 #endif
   }
   // live pin map
@@ -142,17 +142,17 @@ static void learnPairs() {
   int16_t va = (int16_t)(BTN_MV[a] - 1), vb = (int16_t)(BTN_MV[b] - 1), lo = va < vb ? va : vb, last = -1;
   uint32_t t0 = millis();
   char msg[40];
-  snprintf(msg, sizeof(msg), "hold %s + %s together", BTN_NAME[a], BTN_NAME[b]);
+  snprintf(msg, sizeof(msg), TR("hold %s + %s together", "%s + %s zusammen halten"), BTN_NAME[a], BTN_NAME[b]);
   while (millis() - t0 < 8000) {
     int16_t mv = pinMv(BTN_PIN[a]);
     gfx.gradient(0, 0, SCR_W, SCR_H, C::DKBLUE, C::BLACK);
-    gfx.center(10, "KEY SETUP", C::WHITE, F_BOLD);
+    gfx.center(10, TR("KEY SETUP", "TASTEN EINRICHTEN"), C::WHITE, F_BOLD);
     gfx.center(48, msg, C::YELLOW);
-    gfx.center(80, "so that two keys at once work", C::LTGREY);
+    gfx.center(80, TR("so that two keys at once work", "für zwei Tasten zugleich"), C::LTGREY);
     arrow(SCR_W / 2 - 40, 130, (uint8_t)a, C::CYAN, 22);
     arrow(SCR_W / 2 + 40, 130, (uint8_t)b, C::CYAN, 22);
     char l[40];
-    snprintf(l, sizeof(l), "%u.%02u V   skipped in %lu s", mv / 1000, mv % 1000 / 10, (unsigned long)((8999 - (millis() - t0)) / 1000));
+    snprintf(l, sizeof(l), TR("%u.%02u V   skipped in %lu s", "%u.%02u V   weiter in %lu s"), mv / 1000, mv % 1000 / 10, (unsigned long)((8999 - (millis() - t0)) / 1000));
     gfx.center(176, l, C::LTGREY);
     gfx.send();
     if (mv < lo - 30 && mv > 30) {                           // lower than either key alone: both are down
@@ -178,19 +178,19 @@ void learnKeys() {
   memset(mvNoisy, 1, sizeof(mvNoisy));
   for (uint8_t b = 0; b < B_COUNT; b++) { BTN_PIN[b] = 255; BTN_MV[b] = 0; }
   for (uint8_t i = 0; i < CAND_N; i++) if (candAdc(i)) analogReadMilliVolts(CAND[i]);   // ADC set up before the pulls
-  for (uint8_t i = 0; i < 40; i++) { wizScreen("release all keys", 0, -1, 0, -1); delay(25); }
+  for (uint8_t i = 0; i < 40; i++) { wizScreen(TR("release all keys", "alle Tasten loslassen"), 0, -1, 0, -1); delay(25); }
   calibrate();
   uint8_t quiet = 0;
   uint32_t t0 = millis();
   while (quiet < 8) {
     int8_t s = scanKey(used, &act);
     quiet = s < 0 ? quiet + 1 : 0;
-    wizScreen("release all keys", 0, s, act, -1);
+    wizScreen(TR("release all keys", "alle Tasten loslassen"), 0, s, act, -1);
     if (millis() - t0 > 6000) { calibrate(); t0 = millis(); }
   }
   for (uint8_t b = 0; b < B_COUNT; b++) {
     char msg[32];
-    snprintf(msg, sizeof(msg), b < 4 ? "press  %s" : "OK key - or two keys together", BTN_NAME[b]);
+    snprintf(msg, sizeof(msg), b < 4 ? TR("press  %s", "drücke  %s") : TR("OK key - or two keys together", "OK-Taste - oder zwei zugleich"), BTN_NAME[b]);
     int8_t hit;
     uint32_t start = millis();
     bool skipped = false;
@@ -232,10 +232,10 @@ void learnKeys() {
   applyPinModes();
 
   gfx.gradient(0, 0, SCR_W, SCR_H, C::DKGRN, C::BLACK);
-  gfx.center(14, "SAVED", C::WHITE, F_BOLD);
+  gfx.center(14, TR("SAVED", "GESPEICHERT"), C::WHITE, F_BOLD);
   for (uint8_t i = 0; i < B_COUNT; i++) {
     char l[40];
-    if (BTN_PIN[i] == 255) snprintf(l, sizeof(l), "%-5s  = UP+DOWN or LEFT+RIGHT", BTN_NAME[i]);
+    if (BTN_PIN[i] == 255) snprintf(l, sizeof(l), TR("%-5s  = UP+DOWN or LEFT+RIGHT", "%-5s  = UP+DOWN / LEFT+RIGHT"), BTN_NAME[i]);
     else if (BTN_MV[i]) snprintf(l, sizeof(l), "%-5s  GPIO %-2u  %u.%02u V", BTN_NAME[i], BTN_PIN[i], (BTN_MV[i] - 1) / 1000, (BTN_MV[i] - 1) % 1000 / 10);
     else snprintf(l, sizeof(l), "%-5s  GPIO %-2u  %s", BTN_NAME[i], BTN_PIN[i], BTN_ACT[i] ? "3V3" : "GND");
     gfx.text(30, 60 + i * 26, l, C::LTGREY);
@@ -264,8 +264,8 @@ void soundSetup() {
     if (idx >= n) {
       sndPin = 255;
       saveSound();
-      gfx.center(100, "NO BUZZER", C::ORANGE, F_BOLD);
-      gfx.center(140, "sound stays off", C::LTGREY);
+      gfx.center(100, TR("NO BUZZER", "KEIN SUMMER"), C::ORANGE, F_BOLD);
+      gfx.center(140, TR("sound stays off", "Ton bleibt aus"), C::LTGREY);
       gfx.send();
       delay(1500);
       return;
@@ -273,14 +273,14 @@ void soundSetup() {
     sndPin = list[idx];
     if (!sndOn) sfx(1500, 250);
     gfx.gradient(0, 0, SCR_W, SCR_H, C::PURPLE, C::BLACK);
-    gfx.center(14, "SOUND", C::WHITE, F_BOLD);
+    gfx.center(14, TR("SOUND", "TON"), C::WHITE, F_BOLD);
     char b[32];
-    snprintf(b, sizeof(b), "testing GPIO%u", list[idx]);
+    snprintf(b, sizeof(b), TR("testing GPIO%u", "teste GPIO%u"), list[idx]);
     gfx.center(70, b, C::YELLOW);
-    gfx.center(104, "do you hear a beep?", C::WHITE);
-    snprintf(b, sizeof(b), "%s = yes", okKeys());
+    gfx.center(104, TR("do you hear a beep?", "hörst du einen Piep?"), C::WHITE);
+    snprintf(b, sizeof(b), TR("%s = yes", "%s = ja"), okKeys());
     gfx.center(150, b, C::LIME);
-    gfx.center(176, "RIGHT = try the next pin", C::LTGREY);
+    gfx.center(176, TR("RIGHT = try the next pin", "RIGHT = nächster Pin"), C::LTGREY);
     gfx.send();
     if (btn(B_OK))    { saveSound(); sfx(1200, 120); delay(300); return; }
     if (btn(B_RIGHT)) { noTone(sndPin); sndOn = false; idx++; delay(150); }
@@ -373,18 +373,18 @@ void batterySetup() {
     }
     if (btn(B_LEFT)) { batLearnForget(); sfx(900, 80); }
     gfx.gradient(0, 0, SCR_W, SCR_H, C::DKGRN, C::BLACK);
-    gfx.text(8, 6, "BATTERY", C::WHITE, F_BOLD);
-    gfx.right(SCR_W - 8, 4, "RIGHT find", C::LTGREY, F_SMALL);
-    gfx.right(SCR_W - 8, 15, "LEFT new cell", C::LTGREY, F_SMALL);
+    gfx.text(8, 6, TR("BATTERY", "AKKU"), C::WHITE, F_BOLD);
+    gfx.right(SCR_W - 8, 4, TR("RIGHT find", "RIGHT suchen"), C::LTGREY, F_SMALL);
+    gfx.right(SCR_W - 8, 15, TR("LEFT new cell", "LEFT neuer Akku"), C::LTGREY, F_SMALL);
     uint8_t vis = n < 8 ? n : 8, top = sel >= vis ? sel - vis + 1 : 0;
     for (uint8_t i = 0; i < vis; i++) {
       uint8_t k = top + i, p = pins[k];
       int16_t y = 36 + i * 24;
       char line[40];
-      if (p == BAT_NONE_SET) snprintf(line, sizeof(line), "no battery (show USB)");
-      else if (res[k] == BP_USED) snprintf(line, sizeof(line), "GPIO%-2u used", p);
+      if (p == BAT_NONE_SET) snprintf(line, sizeof(line), TR("no battery (show USB)", "kein Akku (USB zeigen)"));
+      else if (res[k] == BP_USED) snprintf(line, sizeof(line), TR("GPIO%-2u used", "GPIO%-2u belegt"), p);
       else snprintf(line, sizeof(line), "GPIO%-2u %u.%02u V%s", p, mv[k] * 2 / 1000, (mv[k] * 2 % 1000) / 10,
-                    res[k] == BP_BAT ? "  bat" : res[k] == BP_HIGH ? "  high" : "");
+                    res[k] == BP_BAT ? TR("  bat", "  Akku") : res[k] == BP_HIGH ? TR("  high", "  hoch") : "");
       if (k == sel) gfx.rbox(4, y - 2, SCR_W - 8, 22, 4, C::GREEN);
       gfx.text(12, y + 1, line, k == sel ? C::BLACK : (p == batPin ? C::LIME : C::WHITE));
     }

@@ -11,5 +11,12 @@ for s in menu wizard ladder ladder4 ladder5 ladderpair plain2 tilt settings sdca
          online mpchess mpc4 mpttt mppong mpsnake mppac mpship mpdame mpmau mpbomb mpchessgame; do
   ./colorsim "$s" || fail=1
 done
+# the menus and setup screens again in German: nothing may run off the screen; then
+# "sprache" switches the language in the settings and checks every translation
+rm -f frames/lang_de.txt
+for s in menu settings pause wizard ladder ladder5 ladderpair plain2 tilt sdcard fps frogger tvui pumpkin pumpkinkeys pmeditor; do
+  SPRACHE=de ./colorsim "$s" || fail=1
+done
+./colorsim sprache || fail=1
 [ $fail -eq 0 ] && echo "ALL SCENARIOS PASSED"
 exit $fail

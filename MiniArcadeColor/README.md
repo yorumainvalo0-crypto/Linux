@@ -216,6 +216,9 @@ it later). The card is mounted as FAT at /sd and never formatted.
 Settings -> "screen" sets how the picture sits: normal, turned round,
 mirrored top/bottom or mirrored left/right (LEFT/RIGHT or OK steps through).
 
+Settings -> "language" switches the menus, settings and setup screens between
+English and Deutsch at once (saved; the games and the phone page stay English).
+
 Speed: only the parts of the picture that changed go to the display (blocks
 of 32 x 1 pixels), so most games run at the 60 fps limit. Games that redraw
 the whole screen (Doom, Tunnel 3D, Racer) depend on the SPI clock: about

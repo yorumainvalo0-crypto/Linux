@@ -10,8 +10,8 @@ static bool tiltFixKnown() {                     // a level was saved once
 static void tiltLevelScreen() {
   if (!cfgTilt || !gyroReady) {
     gfx.clear(C::NAVY);
-    gfx.center(100, "TILT IS OFF", C::ORANGE, F_BOLD);
-    gfx.center(140, "switch tilt control on first", C::LTGREY);
+    gfx.center(100, TR("TILT IS OFF", "KIPPEN IST AUS"), C::ORANGE, F_BOLD);
+    gfx.center(140, TR("switch tilt control on first", "erst Kippen einschalten"), C::LTGREY);
     gfx.send();
     delay(1800);
     btnClear();
@@ -19,9 +19,9 @@ static void tiltLevelScreen() {
   }
   for (int8_t s = 3; s > 0; s--) {                 // three seconds to hold it right
     gfx.gradient(0, 0, SCR_W, SCR_H, C::DKGRN, C::BLACK);
-    gfx.center(14, "TILT LEVEL", C::WHITE, F_BOLD);
-    gfx.center(70, "hold the console the way", C::LTGREY);
-    gfx.center(94, "you want to play", C::LTGREY);
+    gfx.center(14, TR("TILT LEVEL", "NULLLAGE"), C::WHITE, F_BOLD);
+    gfx.center(70, TR("hold the console the way", "halte die Konsole so,"), C::LTGREY);
+    gfx.center(94, TR("you want to play", "wie du spielen willst"), C::LTGREY);
     char b[4];
     snprintf(b, sizeof(b), "%d", s);
     gfx.center(130, b, C::YELLOW, F_BIG);
@@ -32,8 +32,8 @@ static void tiltLevelScreen() {
   tiltSaveLevel();
   sfx(1500, 120);
   gfx.gradient(0, 0, SCR_W, SCR_H, C::DKGRN, C::BLACK);
-  gfx.center(100, "LEVEL SAVED", C::LIME, F_BOLD);
-  gfx.center(140, "games use this position", C::LTGREY);
+  gfx.center(100, TR("LEVEL SAVED", "GESPEICHERT"), C::LIME, F_BOLD);
+  gfx.center(140, TR("games use this position", "Spiele nutzen diese Lage"), C::LTGREY);
   gfx.send();
   delay(1500);
   btnClear();
@@ -63,12 +63,12 @@ static void screenSpeed(uint8_t mhz) {
       gfx.fill(0, y, SCR_W, 8, colLerp(C::DKBLUE, C::PURPLE, (uint8_t)((y * 2 + t / 8) & 0xFF)));
     gfx.rbox(20, 50, SCR_W - 40, 140, 10, C::BLACK);
     char b[32];
-    snprintf(b, sizeof(b), "SCREEN %u MHz", mhz);
+    snprintf(b, sizeof(b), TR("SCREEN %u MHz", "BILD %u MHz"), mhz);
     gfx.center(62, b, C::WHITE, F_BOLD);
-    gfx.center(100, "picture clean? press OK", C::YELLOW);
-    snprintf(b, sizeof(b), "back to %u MHz in %lu s", old, (unsigned long)((10999 - t) / 1000));
+    gfx.center(100, TR("picture clean? press OK", "Bild sauber? OK drücken"), C::YELLOW);
+    snprintf(b, sizeof(b), TR("back to %u MHz in %lu s", "zurück auf %u MHz in %lu s"), old, (unsigned long)((10999 - t) / 1000));
     gfx.center(130, b, C::LTGREY);
-    gfx.center(166, "a key held while switching on resets it", C::GREY, F_SMALL);
+    gfx.center(166, TR("a key held while switching on resets it", "Taste beim Einschalten halten setzt zurück"), C::GREY, F_SMALL);
     gfx.send();
   }
   if (!ok) gfx.setSpeed(mhz = old);
@@ -95,7 +95,7 @@ void settingsRun() {
 #endif
   static const uint8_t MINS[5] = { 0, 1, 5, 15, 30 };
   static const uint8_t SPEEDS[3] = { 20, 27, 40 };
-  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_SPEED, L_FPS, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_TLEVEL, L_TSENS, L_KEYS, L_BUZZER, L_BAT, L_SD, L_WLAN, L_TV, L_VERSION, L_BACK, L_N };
+  enum { L_BRIGHT, L_CLOCK, L_SLEEP, L_SOUND, L_SPEED, L_FPS, L_FLIP, L_SWAP, L_INVERT, L_TILT, L_TLEVEL, L_TSENS, L_KEYS, L_BUZZER, L_BAT, L_SD, L_WLAN, L_TV, L_VERSION, L_LANG, L_BACK, L_N };
   uint8_t sel = 0, top = 0;
   const uint8_t ROWS = 7;
   btnClear();
@@ -138,6 +138,7 @@ void settingsRun() {
       else if (sel == L_TILT)   tiltToggle();
       else if (sel == L_TLEVEL) { cfgTiltFix = !cfgTiltFix && tiltFixKnown(); tiltSave(); }
       else if (sel == L_TSENS)  { cfgTiltSens = (uint8_t)((cfgTiltSens + (right ? 1 : 2)) % 3); tiltSave(); }
+      else if (sel == L_LANG)   { cfgLang ^= 1; sdLast[0] = 0; }       // at once, the card line too
       saveCfg();
     }
     if (btn(B_OK)) {
@@ -153,6 +154,7 @@ void settingsRun() {
       else if (sel == L_TLEVEL)  tiltLevelScreen();
       else if (sel == L_BACK)    return;
       else if (sel == L_SOUND)   { cfgMute = !cfgMute; saveCfg(); }
+      else if (sel == L_LANG)    { cfgLang ^= 1; sdLast[0] = 0; saveCfg(); }
       else if (sel == L_FPS)     { cfgFps = !cfgFps; saveCfg(); applyDisplay(); }
       else if (sel == L_FLIP)    { screenTurn(true); saveCfg(); applyDisplay(); }
       else if (sel >= L_SWAP && sel <= L_INVERT) { cfgDisp ^= (uint8_t)(1 << (sel - L_FLIP)); saveCfg(); applyDisplay(); }
@@ -160,50 +162,53 @@ void settingsRun() {
     }
 
     char line[L_N][36];
-    if (CONFIG_ARCADE_TFT_BL >= 0) snprintf(line[L_BRIGHT], 36, "brightness   %u %%", cfgBright);
-    else snprintf(line[L_BRIGHT], 36, "brightness   (LED on 3V3)");
-    snprintf(line[L_CLOCK], 36, "cpu clock    %u MHz%s", cfgClock, cfgClock == runClock ? "" : " *");
-    if (cfgSleep) snprintf(line[L_SLEEP], 36, "sleep after  %u min", cfgSleep);
-    else snprintf(line[L_SLEEP], 36, "sleep after  never");
-    snprintf(line[L_SOUND], 36, "sound        %s", cfgMute ? "off" : "on");
-    snprintf(line[L_SPEED], 36, "screen speed %u MHz", cfgSpi);
-    snprintf(line[L_FPS], 36, "show fps     %s", cfgFps ? "on" : "off");
-    static const char *const ORIENT[4] = { "normal", "turned round", "mirror up/down", "mirror left/right" };
-    snprintf(line[L_FLIP], 36, "screen       %s", ORIENT[dispOrient()]);
-    snprintf(line[L_SWAP], 36, "red/blue     %s", cfgDisp & 2 ? "swapped" : "normal");
-    snprintf(line[L_INVERT], 36, "colours      %s", cfgDisp & 4 ? "inverted" : "normal");
-    snprintf(line[L_TILT], 36, "tilt control %s", !cfgTilt ? "off" : gyroReady ? "on" : "on (no sensor)");
-    snprintf(line[L_TLEVEL], 36, "tilt level   %s", cfgTiltFix ? "saved" : "game start");
-    static const char *const SENS[3] = { "weak", "normal", "strong" };
-    snprintf(line[L_TSENS], 36, "tilt         %s", SENS[cfgTiltSens % 3]);
-    snprintf(line[L_KEYS], 36, "set up keys...");
-    snprintf(line[L_BUZZER], 36, "set up sound...");
-    snprintf(line[L_BAT], 36, "set up battery...");
+    const char *on = TR("on", "an"), *off = TR("off", "aus"), *normal = TR("normal", "normal");
+    if (CONFIG_ARCADE_TFT_BL >= 0) snprintf(line[L_BRIGHT], 36, TR("brightness   %u %%", "Helligkeit   %u %%"), cfgBright);
+    else snprintf(line[L_BRIGHT], 36, TR("brightness   (LED on 3V3)", "Helligkeit   (LED an 3V3)"));
+    snprintf(line[L_CLOCK], 36, TR("cpu clock    %u MHz%s", "CPU-Takt     %u MHz%s"), cfgClock, cfgClock == runClock ? "" : " *");
+    if (cfgSleep) snprintf(line[L_SLEEP], 36, TR("sleep after  %u min", "Ruhe nach    %u Min"), cfgSleep);
+    else snprintf(line[L_SLEEP], 36, TR("sleep after  never", "Ruhe nach    nie"));
+    snprintf(line[L_SOUND], 36, TR("sound        %s", "Ton          %s"), cfgMute ? off : on);
+    snprintf(line[L_SPEED], 36, TR("screen speed %u MHz", "Bildtakt     %u MHz"), cfgSpi);
+    snprintf(line[L_FPS], 36, TR("show fps     %s", "fps zeigen   %s"), cfgFps ? on : off);
+    const char *const ORIENT[4] = { normal, TR("turned round", "gedreht"), TR("mirror up/down", "gespiegelt o/u"),
+                                    TR("mirror left/right", "gespiegelt l/r") };
+    snprintf(line[L_FLIP], 36, TR("screen       %s", "Bild         %s"), ORIENT[dispOrient()]);
+    snprintf(line[L_SWAP], 36, TR("red/blue     %s", "Rot/Blau     %s"), cfgDisp & 2 ? TR("swapped", "getauscht") : normal);
+    snprintf(line[L_INVERT], 36, TR("colours      %s", "Farben       %s"), cfgDisp & 4 ? TR("inverted", "invertiert") : normal);
+    snprintf(line[L_TILT], 36, TR("tilt control %s", "Kippen       %s"), !cfgTilt ? off : gyroReady ? on : TR("on (no sensor)", "an (kein Sensor)"));
+    snprintf(line[L_TLEVEL], 36, TR("tilt level   %s", "Nulllage     %s"), cfgTiltFix ? TR("saved", "gespeichert") : TR("game start", "Spielstart"));
+    const char *const SENS[3] = { TR("weak", "schwach"), normal, TR("strong", "stark") };
+    snprintf(line[L_TSENS], 36, TR("tilt         %s", "Kippstärke   %s"), SENS[cfgTiltSens % 3]);
+    snprintf(line[L_KEYS], 36, TR("set up keys...", "Tasten einrichten..."));
+    snprintf(line[L_BUZZER], 36, TR("set up sound...", "Ton einrichten..."));
+    snprintf(line[L_BAT], 36, TR("set up battery...", "Akku einrichten..."));
     if (sel >= L_BAT && sel <= L_WLAN) sdLine(line[L_SD], 36);      // only when in view: it asks the card
-    else snprintf(line[L_SD], 36, "sd card...");
-    snprintf(line[L_WLAN], 36, "wlan and update...");
+    else snprintf(line[L_SD], 36, TR("sd card...", "SD-Karte..."));
+    snprintf(line[L_WLAN], 36, TR("wlan and update...", "WLAN und Update..."));
     tvSettingsLine(line[L_TV], 36);
-    snprintf(line[L_VERSION], 36, "firmware version...");
-    snprintf(line[L_BACK], 36, "back to the games");
+    snprintf(line[L_VERSION], 36, TR("firmware version...", "Firmware-Version..."));
+    snprintf(line[L_LANG], 36, TR("language     English", "Sprache      Deutsch"));
+    snprintf(line[L_BACK], 36, TR("back to the games", "zurück zu den Spielen"));
 
     if (sel < top) top = sel;
     if (sel >= top + ROWS) top = sel - ROWS + 1;
     gfx.gradient(0, 0, SCR_W, SCR_H, C::NAVY, C::BLACK);
     gfx.gradient(0, 0, SCR_W, 32, C::BLUE, C::DKBLUE);
-    gfx.textShadow(10, 4, "SETTINGS", C::WHITE, C::BLACK, F_BOLD);
+    gfx.textShadow(10, 4, TR("SETTINGS", "EINSTELLUNGEN"), C::WHITE, C::BLACK, F_BOLD);
     batIcon(SCR_W - 30, 11);
     for (uint8_t i = 0; i < ROWS && top + i < L_N; i++) {
       uint8_t k = top + i;
       int16_t y = 40 + i * 25;
-      bool on = k == sel;
-      if (on) gfx.rbox(6, y - 3, SCR_W - 12, 23, 5, C::CYAN);
-      gfx.text(16, y + 1, line[k], on ? C::BLACK : C::WHITE);
+      bool cur = k == sel;
+      if (cur) gfx.rbox(6, y - 3, SCR_W - 12, 23, 5, C::CYAN);
+      gfx.text(16, y + 1, line[k], cur ? C::BLACK : C::WHITE);
     }
-    if (sel == L_TILT) gfx.center(SCR_H - 14, "LEFT / RIGHT on/off - OK set up again", C::GREY, F_SMALL);
-    else if (sel == L_TLEVEL) gfx.center(SCR_H - 14, "OK = save how you hold it now as level", C::GREY, F_SMALL);
-    else if (sel == L_TSENS) gfx.center(SCR_H - 14, "LEFT / RIGHT: how far to tilt", C::GREY, F_SMALL);
-    else if (sel == L_SPEED) gfx.center(SCR_H - 14, "faster = more fps; long wires may not take it", C::GREY, F_SMALL);
-    else if (sel <= L_INVERT) gfx.center(SCR_H - 14, "LEFT / RIGHT change", C::GREY, F_SMALL);
+    if (sel == L_TILT) gfx.center(SCR_H - 14, TR("LEFT / RIGHT on/off - OK set up again", "LEFT / RIGHT an/aus - OK neu einrichten"), C::GREY, F_SMALL);
+    else if (sel == L_TLEVEL) gfx.center(SCR_H - 14, TR("OK = save how you hold it now as level", "OK = wie jetzt gehalten als Nulllage"), C::GREY, F_SMALL);
+    else if (sel == L_TSENS) gfx.center(SCR_H - 14, TR("LEFT / RIGHT: how far to tilt", "LEFT / RIGHT: wie weit kippen"), C::GREY, F_SMALL);
+    else if (sel == L_SPEED) gfx.center(SCR_H - 14, TR("faster = more fps; long wires may not take it", "schneller = mehr fps; lange Kabel evtl. nicht"), C::GREY, F_SMALL);
+    else if (sel <= L_INVERT || sel == L_LANG) gfx.center(SCR_H - 14, TR("LEFT / RIGHT change", "LEFT / RIGHT ändern"), C::GREY, F_SMALL);
     gfx.send();
   }
 }

@@ -111,10 +111,10 @@ void tiltStart() {                              // at the start and when switche
 
 static void tiltScreen(const char *l1, const char *l2, col c) {
   gfx.gradient(0, 0, SCR_W, SCR_H, C::DKGRN, C::BLACK);
-  gfx.center(10, "TILT SETUP", C::WHITE, F_BOLD);
+  gfx.center(10, TR("TILT SETUP", "KIPPEN EINRICHTEN"), C::WHITE, F_BOLD);
   gfx.center(90, l1, c, F_BOLD);
   gfx.center(130, l2, C::LTGREY);
-  gfx.center(214, "hold OK = cancel", C::GREY, F_SMALL);
+  gfx.center(214, TR("hold OK = cancel", "OK halten = abbrechen"), C::GREY, F_SMALL);
   gfx.send();
 }
 
@@ -125,7 +125,7 @@ static uint8_t tiltLearnAxis(const char *what, uint8_t skip) {
   uint32_t t0 = millis();
   uint8_t held = 0, last = 0xFF;
   while (poll() && millis() - t0 < 20000) {
-    tiltScreen(what, "and hold it there", C::YELLOW);
+    tiltScreen(what, TR("and hold it there", "und so halten"), C::YELLOW);
     if (!gyroAccel(a)) continue;
     uint8_t best = 0xFF;
     int16_t big = 6000;                                       // a good 20 degrees
@@ -143,27 +143,27 @@ static uint8_t tiltLearnAxis(const char *what, uint8_t skip) {
 
 // finds the sensor and learns the two axes; false = no sensor or cancelled
 bool tiltSetup() {
-  tiltScreen("searching...", "MPU6050 on any two free pins", C::WHITE);
+  tiltScreen(TR("searching...", "suche..."), TR("MPU6050 on any two free pins", "MPU6050 an zwei freien Pins"), C::WHITE);
   if (!gyroFind()) {
-    tiltScreen("NO SENSOR", "wire SDA and SCL to free pins", C::ORANGE);
+    tiltScreen(TR("NO SENSOR", "KEIN SENSOR"), TR("wire SDA and SCL to free pins", "SDA und SCL an freie Pins"), C::ORANGE);
     delay(2500);
     return false;
   }
   gyroReady = true;
-  tiltScreen("hold it level", "", C::WHITE);
+  tiltScreen(TR("hold it level", "gerade halten"), "", C::WHITE);
   delay(1500);
-  uint8_t x = tiltLearnAxis("tilt RIGHT", 0xFF);
+  uint8_t x = tiltLearnAxis(TR("tilt RIGHT", "nach RECHTS kippen"), 0xFF);
   if (x == 0xFF) return false;
-  tiltScreen("back to level", "", C::WHITE);
+  tiltScreen(TR("back to level", "wieder gerade"), "", C::WHITE);
   delay(1500);
-  uint8_t y = tiltLearnAxis("tilt AWAY (up)", x);
+  uint8_t y = tiltLearnAxis(TR("tilt AWAY (up)", "oben WEG kippen"), x);
   if (y == 0xFF) return false;
   tiltAx[0] = x;
   tiltAx[1] = y;
   tiltSave();
   char b[40];
   snprintf(b, sizeof(b), "SDA GPIO%d  SCL GPIO%d", gyroSda, gyroScl);
-  tiltScreen("READY", b, C::LIME);
+  tiltScreen(TR("READY", "FERTIG"), b, C::LIME);
   delay(1500);
   return true;
 }
