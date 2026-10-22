@@ -443,13 +443,22 @@ def trophy():
     for y in range(4, 10): im[y, 10] = 9
     return outline(im, 1), (15, 35)
 
-def logo():
-    font = ImageFont.truetype('/usr/share/fonts/truetype/freefont/FreeSansBoldOblique.ttf', 50)
-    bb = font.getbbox("KART GP")
-    W, H = bb[2] - bb[0] + 24, bb[3] - bb[1] + 16
+FONT = '/usr/share/fonts/truetype/freefont/FreeSansBoldOblique.ttf'
+
+def styled(parts, outline_w=2, shadow=4):
+    """Text in the style of the logo: a gradient (2..7) from top to bottom, a light edge
+    on top (8), a dark outline (1) and a shadow down right (9). parts: (text, size), ..."""
+    fonts = [(t, ImageFont.truetype(FONT, sz)) for t, sz in parts]
+    boxes = [f.getbbox(t) for t, f in fonts]
+    W = sum(b[2] - b[0] for b in boxes) + 8 + 2 * outline_w + shadow + 4 * (len(parts) - 1)
+    H = max(b[3] for b in boxes) - min(b[1] for b in boxes) + 6 + 2 * outline_w + shadow
+    top0 = min(b[1] for b in boxes)
     m = Image.new('L', (W, H), 0)
     d = ImageDraw.Draw(m)
-    d.text((8 - bb[0], 6 - bb[1]), "KART GP", font=font, fill=255)
+    x = 3 + outline_w
+    for (t, f), bb in zip(fonts, boxes):
+        d.text((x - bb[0], 3 + outline_w - top0), t, font=f, fill=255)
+        x += bb[2] - bb[0] + 4
     a = np.array(m) > 110
     img = np.zeros((H, W), np.uint8)
     ys = np.nonzero(a.any(1))[0]
@@ -458,30 +467,40 @@ def logo():
         for x in range(W):
             if a[y, x]:
                 f = (y - top) / max(1, bot - top)
-                img[y, x] = 2 + min(5, int(f * 6))                  # 2..7: yellow to red
-    # a light edge on top of each letter
+                img[y, x] = 2 + min(5, int(f * 6))
     for y in range(1, H):
         for x in range(W):
             if a[y, x] and not a[y - 1, x]: img[y, x] = 8
-    # outline (2 px) and a shadow down right
     o = img.copy()
+    r = outline_w
     for y in range(H):
         for x in range(W):
             if img[y, x]: continue
             near = False
-            for dx in (-2, -1, 0, 1, 2):
-                for dy in (-2, -1, 0, 1, 2):
-                    if abs(dx) + abs(dy) > 3: continue
+            for dx in range(-r, r + 1):
+                for dy in range(-r, r + 1):
+                    if abs(dx) + abs(dy) > r + 1: continue
                     xx, yy = x + dx, y + dy
                     if 0 <= xx < W and 0 <= yy < H and img[yy, xx] and img[yy, xx] != 1: near = True
             if near: o[y, x] = 1
-    s = o.copy()
-    for y in range(H):
-        for x in range(W):
-            if not o[y, x]:
-                xx, yy = x - 4, y - 4
-                if 0 <= xx < W and 0 <= yy < H and o[yy, xx]: s[y, x] = 9
-    return s, None
+    out = o.copy()
+    if shadow:
+        for y in range(H):
+            for x in range(W):
+                if not o[y, x]:
+                    xx, yy = x - shadow, y - shadow
+                    if 0 <= xx < W and 0 <= yy < H and o[yy, xx]: out[y, x] = 9
+    return out
+
+def logo():
+    return styled([("KART GP", 50)], 2, 4), None
+
+def place(n):
+    suf = {1: 'st', 2: 'nd', 3: 'rd'}.get(n, 'th')
+    return styled([(str(n), 34), (suf, 17)], 2, 2), None
+
+def bigword(t, size=44):
+    return styled([(t, size)], 2, 3), None
 
 # ---------------------------------------------------------------- palettes (rgb)
 PALS = {
@@ -508,6 +527,12 @@ PALS = {
  'BOX':     [(255, 0, 0), (255, 0, 0), (255, 0, 0), (255, 0, 0), (255, 255, 255), (255, 255, 255), (200, 200, 220)],
  'ROCKET':  [(255, 120, 120), (230, 30, 30), (140, 0, 0), (250, 250, 250), (180, 180, 190), (255, 200, 0)],
  'LOGO':    [(20, 10, 40), (255, 250, 120), (255, 220, 40), (255, 180, 20), (255, 130, 0), (240, 80, 0), (210, 30, 10), (255, 255, 230), (60, 20, 80)],
+ 'TGOLD':   [(40, 20, 0), (255, 255, 170), (255, 235, 90), (255, 210, 40), (240, 170, 0), (210, 130, 0), (170, 90, 0), (255, 255, 255), (0, 0, 0)],
+ 'TSILVER': [(20, 20, 40), (255, 255, 255), (230, 235, 245), (200, 205, 220), (170, 175, 195), (140, 145, 165), (110, 115, 135), (255, 255, 255), (0, 0, 0)],
+ 'TBRONZE': [(40, 15, 0), (255, 220, 170), (240, 180, 120), (220, 145, 90), (200, 115, 60), (170, 90, 40), (130, 65, 25), (255, 240, 220), (0, 0, 0)],
+ 'TWHITE':  [(0, 10, 40), (255, 255, 255), (230, 240, 255), (200, 220, 255), (170, 200, 255), (140, 175, 245), (110, 150, 230), (255, 255, 255), (0, 0, 0)],
+ 'TGREEN':  [(0, 30, 0), (220, 255, 160), (170, 255, 90), (110, 240, 60), (60, 220, 40), (30, 190, 30), (0, 150, 20), (255, 255, 230), (0, 0, 0)],
+ 'TRED':    [(40, 0, 0), (255, 220, 200), (255, 160, 120), (255, 110, 70), (240, 60, 40), (210, 30, 20), (170, 10, 10), (255, 240, 230), (0, 0, 0)],
 }
 
 # ---------------------------------------------------------------- output
@@ -571,6 +596,19 @@ def main():
                    ('ITURBO', icon_turbo), ('IROCKET', icon_rocket), ('ISHIELD', icon_shield), ('TROPHY', trophy), ('LOGO', logo)):
         img, anc = fn()
         out.append('static const KgSpr KG_%s = %s;\n' % (nm, emit(nm, img, anc)))
+    # the place in the HUD, the countdown, the finish
+    ent = []
+    for n in range(1, 7):
+        img, anc = place(n)
+        ent.append(emit('PLACE%d' % n, img, anc))
+    out.append('static const KgSpr KG_PLACE[6] = {\n  ' + ',\n  '.join(ent) + ' };\n')
+    ent = []
+    for k, t in enumerate(('3', '2', '1', 'GO!')):
+        img, anc = bigword(t, 52 if k < 3 else 46)
+        ent.append(emit('COUNT%d' % k, img, anc))
+    out.append('static const KgSpr KG_COUNT[4] = {\n  ' + ',\n  '.join(ent) + ' };\n')
+    img, anc = bigword('FINISH!', 40)
+    out.append('static const KgSpr KG_FINISH = %s;\n' % emit('FINISH', img, anc))
     for nm, pal in PALS.items():
         out.append('static const col KP_%s[16] = { 0, %s };' % (nm, ', '.join('rgb(%d, %d, %d)' % c for c in pal)))
     out.append('')

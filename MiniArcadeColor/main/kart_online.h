@@ -101,6 +101,7 @@ static uint8_t mpKart() {
     if (!host && D.result < 0 && D.myTime && (gone || (D.theirDone && ms - D.doneAt > 6000))) D.result = (int8_t)((!D.theirDone || D.myTime <= D.theirTime) ? 0 : 1);
     if (D.result >= 0 && !resultAt) { resultAt = ms; if (D.result == 0) kgPlay(KG_T_WIN); else sfx(200, 300); }
     kgEvents(R, G.cam, now);
+    kgBangs(R, G.cam);
     kgTuneTick();
     fxUpdate();
     if (R.phase == KS_RACE) kgPlayerFx(R, now);
@@ -113,14 +114,8 @@ static uint8_t mpKart() {
       gfx.textShadow(SCR_W - 12 - Gfx::width(b, F_TEXT), 172, b, C::YELLOW, C::BLACK, F_TEXT);
       if (ms - t0 > 2500) mpBanner(host ? "waiting..." : "waiting for the start", C::YELLOW);
     }
-    if (R.phase == KS_COUNT) {
-      kgLights(lit, false);
-      if (lit) { char b[4] = { (char)('0' + 4 - lit), 0 }; gfx.textShadow((SCR_W - Gfx::width(b, F_BIG)) / 2, 100, b, C::WHITE, C::BLACK, F_BIG); }
-    }
-    if (R.phase == KS_RACE && D.countAt && ms - D.countAt < 4100) {
-      kgLights(3, true);
-      gfx.textShadow((SCR_W - Gfx::width("GO!", F_BIG)) / 2, 100, "GO!", C::LIME, C::BLACK, F_BIG);
-    }
+    if (R.phase == KS_COUNT) kgCountdown(lit, (uint32_t)(ms - D.countAt - lit * 800) % 800, false);
+    if (R.phase == KS_RACE && D.countAt && ms - D.countAt < 4100) kgCountdown(3, ms - D.countAt - 3200, true);
     if (gone && ms - goneAt < 3000 && note[0]) mpBanner(note, C::ORANGE);
     else if (!gone && D.seen && R.phase == KS_RACE && ms - D.inAt > 2000) mpBanner("waiting...", C::YELLOW);
     if (R.phase == KS_OVER) {
@@ -134,7 +129,7 @@ static uint8_t mpKart() {
         kgBanner(146, b, C::WHITE, C::BLUE, F_SMALL);
         if (ms - resultAt > 4000 && (!D.qn || ms - resultAt > 7000 || gone)) break;
         if (btn(B_OK) && ms - resultAt > 1500 && !D.qn) break;
-      } else if (ms - finishAt < 2500 || (ms / 400) % 2) kgBanner(96, "FINISH!", C::YELLOW, C::WHITE, F_BIG);
+      } else if (ms - finishAt < 2500 || (ms / 400) % 2) kgBig(KG_FINISH, SCR_W / 2, 112, KP_TGOLD);
       else mpBanner(gone ? "the race is yours" : "waiting for the other kart", C::YELLOW);
     }
     gfx.send();

@@ -9,7 +9,7 @@
 //                the Star Cup opens with a trophy in the Sun Cup
 //   Single race  any open track
 //   Time trial   alone, three turbos; the best lap comes back as a ghost
-//                (kept in flash, about 600 bytes a track)
+//                (kept in flash, about 500 bytes a track)
 // Items from the boxes: turbo, peel (dropped behind), rocket (flies to the
 // kart ahead), shield. Coins: 1 % top speed each, ten at most; a hit
 // loses some. Drift: hold DOWN while steering - the sparks go blue, then
@@ -102,10 +102,12 @@ struct KgGame {
   const uint16_t *tune;                // a few notes after each other
   uint32_t tuneAt;
   uint8_t  roulTick;
+  uint16_t hitsShown;                  // R.hits already shown as a bang
+  const char *say;                     // a banner for a moment ("FINAL LAP!")
+  uint32_t sayUntil;
   uint8_t  mode;                       // KG_GP, KG_SINGLE, KG_TT, KG_NET
   uint32_t lastFrame;
   uint32_t raceShown;                  // millis() of the last picture of a race (the host tests)
-  uint16_t frames;
   KgDuel   duel;                       // a race of two (kart_online.h)
 };
 enum { KG_GP, KG_SINGLE, KG_TT, KG_NET, KG_ATTRACT };
@@ -170,6 +172,15 @@ static void kgLights(uint8_t lit, bool go) {
   }
 }
 
+// the countdown: the lights, the number popping up big and settling (a = ms since it came)
+static void kgCountdown(uint8_t lit, uint32_t a, bool go) {
+  kgLights(go ? 3 : lit, go);
+  if (!go && !lit) return;
+  int32_t sc = a < 200 ? 256 + (int32_t)(200 - a) * 2 : 256;
+  if (go) kgBig(KG_COUNT[3], SCR_W / 2, 112, KP_TGREEN, sc);
+  else kgBig(KG_COUNT[3 - lit], SCR_W / 2, 112, lit == 3 ? KP_TRED : KP_TWHITE, sc);
+}
+
 // ---------------- one race ----------------
 /* The player's keys as this frame has them: steering stepless (keys or
    tilt), DOWN held for a drift or the brake, the item on UP or OK. Tilting
@@ -203,14 +214,31 @@ static void kgEvents(KgRace &R, const KgCam &c, uint32_t ms) {
   if (e & KE_SHIELD) { sfx(1900, 80); fxRing(sx, sy - 14, 30, C::WHITE, C::CYAN, 300); }
   if (e & KE_BUMP) { sfx(220, 30); fxShake(2, 120); }
   if (e & KE_WALL) { sfx(150, 50); fxShake(3, 150); fxBurst(sx, sy, 5, C::WHITE, GREY3, 90, 200, 0, 1, FX_STREAK); }
-  if (e & KE_FALL) kgPlay(KG_T_FALL);
+  if (e & KE_FALL) {                                              // a splash (or a burst of embers)
+    kgPlay(KG_T_FALL);
+    bool lava = R.T->theme == KW_VOLCANO;
+    fxBurst(sx, sy - 6, 16, lava ? C::YELLOW : C::WHITE, lava ? C::RED : C::CYAN, 150, 600, 40, 2);
+    fxRing(sx, sy - 2, 26, C::WHITE, lava ? C::ORANGE : C::BLUE, 400);
+  }
   if (e & KE_FIRE) sfx(700, 120);
   if (e & KE_LAP) {
-    if (k.lap == KG_LAPS - 1) { kgPlay(KG_T_FINAL); fxText(sx, 120, "FINAL LAP!", C::YELLOW, F_BOLD); }
-    else if (k.lap < KG_LAPS) kgPlay(KG_T_LAP);
+    if (k.lap == KG_LAPS - 1) { kgPlay(KG_T_FINAL); kg->say = "FINAL LAP!"; kg->sayUntil = millis() + 1800; }
+    else if (k.lap < KG_LAPS) { kgPlay(KG_T_LAP); kg->say = k.lap == 1 ? "LAP 2" : NULL; kg->sayUntil = millis() + 1200; }
   }
   if (e & KE_FINISH) kgPlay(KG_T_FINISH);
-  (void)c; (void)ms;
+  (void)ms;
+}
+
+// a hit somewhere in sight (another kart thrown, a rocket into a wall): a bang where it is
+static void kgBangs(KgRace &R, const KgCam &c) {
+  if (R.hits == kg->hitsShown) return;
+  kg->hitsShown = R.hits;
+  if (R.hitKart == R.me) return;                                  // ours: kgEvents
+  int16_t x, y; int32_t z;
+  if (!kgProj(c, (int32_t)R.hitX << 8, (int32_t)R.hitY << 8, 512, x, y, z) || z > 260 * 256 || x < -20 || x > SCR_W + 20) return;
+  uint8_t p = z < 80 * 256 ? 2 : 1;
+  fxExplode(x, (int16_t)(y - 4), p);
+  sfx(160, 120);
 }
 
 // effects that keep going: dust and drift sparks of the player's kart as particles
@@ -245,6 +273,7 @@ static void kgDrawRace(KgGame &G, uint32_t ms, bool hud, const char *tag = NULL)
   fxDraw(0, 0, KG_HZ - 30, SCR_H);
   if (R.k[R.me].boost && R.phase == KS_RACE) kgSpeedLines(ms);
   if (hud) kgHud(R, ms, G.mode == KG_TT);
+  if (G.say && (int32_t)(millis() - G.sayUntil) < 0 && (millis() / 150) % 4) kgBanner(70, G.say, C::YELLOW, C::ORANGE, F_BOLD);
   fxShakeApply(0, SCR_H);
   fxFlashApply(0, 0, SCR_W, SCR_H);
 }
@@ -304,8 +333,9 @@ static void kgResults(KgGame &G, bool wait) {
       char b[24];
       snprintf(b, sizeof(b), "%u%s", p + 1, kgOrd((uint8_t)(p + 1)));
       gfx.text(44, y, b, p == 0 ? C::YELLOW : C::WHITE);
-      gfx.fill(86, y + 2, 12, 12, KG_DRV[k.drv].body[1]);
-      gfx.disc(92, y + 8, 3, KG_DRV[k.drv].helm[0]);
+      col pal[16];
+      kgKartPal(k.drv, pal);
+      kgBlit(KG_KART[8], 92, (int16_t)(y + 16), 150, pal);
       gfx.text(104, y, KG_DRV[k.drv].name, me ? C::YELLOW : C::WHITE);
       if (k.finish) { kgTime(b, sizeof(b), k.finish); gfx.text(176, y + 4, b, C::LTGREY, F_SMALL); }
       else gfx.text(176, y + 4, "--", C::GREY, F_SMALL);
@@ -404,23 +434,18 @@ static uint8_t kgRace(KgGame &G, uint8_t track) {
     // the item roulette ticks
     if (me.roul && (++G.roulTick & 3) == 0) sfx((uint16_t)(900 + (me.roul % 5) * 120), 12);
     kgEvents(R, G.cam, now);
+    kgBangs(R, G.cam);
     kgTuneTick();
     fxUpdate();
     if (R.phase == KS_RACE) kgPlayerFx(R, now);
     // ---- the picture ----
     kgDrawRace(G, now, R.phase != KS_INTRO);
     if (R.phase == KS_INTRO) kgTitleCard(G, pa);
-    if (R.phase == KS_COUNT) {
-      kgLights(lit, false);
-      if (lit) { char b[4] = { (char)('0' + 4 - lit), 0 }; gfx.textShadow((SCR_W - Gfx::width(b, F_BIG)) / 2, 100, b, C::WHITE, C::BLACK, F_BIG); }
-    }
-    if (R.phase == KS_RACE && pa < 900) {
-      kgLights(3, true);
-      if ((pa / 120) % 2 == 0 || pa < 300) gfx.textShadow((SCR_W - Gfx::width("GO!", F_BIG)) / 2, 100, "GO!", C::LIME, C::BLACK, F_BIG);
-    }
+    if (R.phase == KS_COUNT) kgCountdown(lit, (pa - lit * 800) % 800, false);
+    if (R.phase == KS_RACE && pa < 900) kgCountdown(3, pa, true);
     if (R.phase == KS_OVER) {
       uint32_t a = now - finishAt;
-      if (a < 2500 || (a / 400) % 2) kgBanner(96, "FINISH!", C::YELLOW, C::WHITE, F_BIG);
+      if (a < 2500 || (a / 400) % 2) kgBig(KG_FINISH, SCR_W / 2, 112, KP_TGOLD, a < 250 ? 256 + (int32_t)(250 - a) : 256);
       bool all = true;
       for (uint8_t i = 0; i < R.nk; i++) if (!R.k[i].finish) all = false;
       if (a > 3500 && (all || a > (tt ? 3500u : 15000u) || (btn(B_OK) && a > 1200))) break;
@@ -605,7 +630,7 @@ static uint8_t kgCupRun(KgGame &G, uint8_t cup) {
 static void kgAttract(KgGame &G, uint32_t ms) {
   KgRace &R = G.R;
   if (R.T != &G.T || G.mode != KG_ATTRACT) {
-    if (G.T.id != 0 || !G.T.tdat) kgBuild(G.T, 0);
+    if ((G.T.id != 0 || !G.T.tdat) && !kgBuild(G.T, 0)) { gfx.gradient(0, 0, SCR_W, SCR_H, rgb(30, 80, 210), rgb(0, 0, 40)); return; }
     G.mode = KG_ATTRACT;
     kgRaceInit(R, &G.T, 1, 12345);
     for (uint8_t d = 0; d < KG_KARTS; d++) G.grid[d] = d;
@@ -717,17 +742,23 @@ static bool kgPickDriver() {
   return false;
 }
 
-// a track's outline from its points (no map needed): the menus' preview
-static void kgOutline(uint8_t t, int16_t cx, int16_t cy, int16_t size, col c) {
+// a track from above, from its points (no map needed): the menus' preview - its ground, the road
+// with an edge in the kerbs' colour, the start line
+static void kgOutline(uint8_t t, int16_t cx, int16_t cy, int16_t size) {
   const KgTrackDef &d = KG_TRACK[t];
-  int16_t px = 0, py = 0;
-  for (int i = 0; i <= d.n * 6; i++) {
-    float x, y;
-    kgCurve(d, i / 6, (i % 6) / 6.f, x, y);
-    int16_t sx = (int16_t)(cx + (x - 512) * size / 1024), sy = (int16_t)(cy + (y - 512) * size / 1024);
-    if (i) { gfx.line(px, py, sx, sy, c); gfx.line(px + 1, py, sx + 1, sy, c); gfx.line(px, py + 1, sx, sy + 1, colDark(c)); }
-    px = sx; py = sy;
-  }
+  const KgTheme &th = KG_THEME[d.theme];
+  int16_t n = (int16_t)(d.n * 8);
+  for (uint8_t pass = 0; pass < 2; pass++)
+    for (int16_t i = 0; i < n; i++) {
+      float x, y;
+      kgCurve(d, i / 8, (i % 8) / 8.f, x, y);
+      int16_t sx = (int16_t)(cx + (x - 512) * size / 1024), sy = (int16_t)(cy + (y - 512) * size / 1024);
+      if (pass == 0) gfx.disc(sx, sy, 4, th.mat[KM_KERBA][0]);
+      else gfx.disc(sx, sy, 2, th.mat[KM_ROAD][2]);
+    }
+  float x, y;
+  kgCurve(d, 0, 0, x, y);
+  gfx.fill((int16_t)(cx + (x - 512) * size / 1024) - 1, (int16_t)(cy + (y - 512) * size / 1024) - 4, 3, 9, C::WHITE);
 }
 
 // a track for a single race or the time trial; 255 = back
@@ -752,10 +783,12 @@ static uint8_t kgPickTrack(bool tt) {
       if (on) gfx.rframe(6, y, 150, 28, 6, C::YELLOW);
       gfx.text(14, y + 6, open ? KG_TRACK[i].name : "? ? ?", open ? C::WHITE : C::GREY, F_TEXT);
     }
-    gfx.rbox(166, 36, 148, 188, 8, rgb(0, 0, 30));
+    bool open = kgTrackOpen(sel);
+    gfx.rbox(166, 36, 148, 188, 8, open ? th.mat[KM_OUTA][th.outside == KM_PIT ? 0 : 1] : rgb(0, 0, 30));
     gfx.rframe(166, 36, 148, 188, 8, GREY3);
-    if (kgTrackOpen(sel)) {
-      kgOutline(sel, 240, 108, 130, th.mat[KM_ROAD][2]);
+    if (open) {
+      gfx.fill(170, 168, 140, 52, rgb(0, 0, 30));
+      kgOutline(sel, 240, 104, 128);
       char b[32], c[20];
       gfx.text(176, 178, th.name, th.mat[KM_KERBA][0], F_SMALL);
       if (kgSv.best[sel]) { kgTime(c, sizeof(c), (uint32_t)kgSv.best[sel] * 10); snprintf(b, sizeof(b), "best %s", c); }

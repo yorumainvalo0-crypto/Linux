@@ -8,10 +8,10 @@
    sea or lava - the nearer stamp wins where two parts of the track come
    close. Only the 32 x 32 px tiles near the track are kept (8 x 8 cells
    of 4 px, half a byte each); the rest of the world is one of two plain
-   tiles. About 15 kB for a track, on the heap while the game runs.
+   tiles. 14 to 22 kB for a track, on the heap while the game runs.
    Positions are in 1/256 px, speeds in 1/256 px per 10 ms step.      */
 
-#define KG_PTMAX 600                   // centre line points (4800 px)
+#define KG_PTMAX 520                   // centre line points (4160 px)
 
 struct KgPt { int16_t x, y; uint16_t a; int8_t line, curv; };   // x, y in 1/4 px; a = heading; line = racing line (px)
 struct KgDecor { int16_t x, y; uint8_t kind, flip; };
@@ -390,7 +390,7 @@ struct KgKart {
 struct KgPeel { int16_t x, y; uint8_t id, owner; bool on; };
 struct KgRocket { int32_t x, y; uint16_t a, idx, life; uint8_t id, owner, target; bool on; };
 struct KgObj { int32_t z; int16_t sx, sy; uint8_t kind, i; };   // a thing to draw, its distance
-#define KG_OBJS 112
+#define KG_OBJS 80
 
 enum { KS_INTRO, KS_COUNT, KS_RACE, KS_OVER };
 // what happened in a race, counted (the results, the host tests)
@@ -420,6 +420,7 @@ struct KgRace {
   void   (*net)(uint8_t type, uint8_t a, uint8_t b, uint8_t c);
   int16_t  hitX, hitY;                 // where the last hit was (effects)
   uint8_t  hitKart;
+  uint16_t hits;                       // counts them: the picture shows each once
   KgStats  st;
   KgObj    obj[KG_OBJS];               // the drawing's list (kart_draw.h)
 };
@@ -633,6 +634,7 @@ static void kgHitBy(KgRace &R, KgKart &k, bool rocket) {
   k.drift = 0; k.charge = 0; k.boost = 0;
   k.coins = k.coins > (rocket ? 3 : 2) ? (uint8_t)(k.coins - (rocket ? 3 : 2)) : 0;
   R.hitX = (int16_t)(k.x >> 8); R.hitY = (int16_t)(k.y >> 8); R.hitKart = (uint8_t)(&k - R.k);
+  R.hits++;
   if (me) R.ev |= rocket ? KE_HIT : KE_SPIN;
 }
 
@@ -702,14 +704,14 @@ static void kgRockets(KgRace &R) {
     kgTrackPos(T, dummy);
     q.idx = dummy.idx;
     uint8_t m = kgMat(T, q.x >> 8, q.y >> 8);
-    if (m == KM_WALL) { q.on = false; R.hitX = (int16_t)(q.x >> 8); R.hitY = (int16_t)(q.y >> 8); R.hitKart = 255; continue; }
+    if (m == KM_WALL) { q.on = false; R.hitX = (int16_t)(q.x >> 8); R.hitY = (int16_t)(q.y >> 8); R.hitKart = 255; R.hits++; continue; }
     for (uint8_t i = 0; i < R.nk; i++) {
       KgKart &k = R.k[i];
       if ((i == q.owner && q.life > 560) || k.fall || (k.flags & KK_GONE)) continue;
       int32_t dx = (k.x - q.x) >> 8, dy = (k.y - q.y) >> 8;
       if (dx * dx + dy * dy > 36) continue;
       q.on = false;
-      if (k.flags & KK_REMOTE) { R.hitX = (int16_t)(k.x >> 8); R.hitY = (int16_t)(k.y >> 8); R.hitKart = i; break; }   // its console says what happens
+      if (k.flags & KK_REMOTE) { R.hitX = (int16_t)(k.x >> 8); R.hitY = (int16_t)(k.y >> 8); R.hitKart = i; R.hits++; break; }   // its console says what happens
       kgHitBy(R, k, true);
       if (i == R.me && R.net) R.net(KN_ROCKETHIT, q.id, q.owner == R.me ? 1 : 0, 0);
       break;

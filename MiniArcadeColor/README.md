@@ -13,6 +13,7 @@ Checkers, Mau-Mau, Bomberman, Cave, Stack, Minigolf and Lander - against
 the CPU or two players on one console (and online, see below). Plus
 Mine 3D, a block world in first person, Palace, a platformer, Block Puzzle,
 Fruit Pot, Pumpkin Maze, a tilt labyrinth with a level editor on the phone,
+Kart GP, a kart racer in the style of the 16-bit consoles,
 Skat against two CPU players (all below), and Chess with all
 rules (castling, en passant, promotion, check, mate, stalemate, 50 moves),
 against the CPU, for two players on one console or online (the board can
@@ -186,6 +187,91 @@ Physics in whole numbers (1/256 px) in 10 ms steps. The board is drawn once;
 a frame redraws only the tiles that changed or had something over them, so
 about 1-2 % of the picture goes to the display while rolling.
 
+## Kart GP
+
+![Kart GP](docs/kart.png)
+
+A kart race seen from behind the kart, the track a floor in perspective
+("mode 7") - six karts, three laps, six tracks in their own worlds:
+
+| Cup | Track | World |
+|-----|-------|-------|
+| Sun Cup | Meadow Ring | grass, sand traps in the bends, trees |
+| Sun Cup | Dune Dash | the desert: soft sand beside the road, mesas, boost pads |
+| Sun Cup | Coral Bay | a promenade on a sand bank in the sea - off the sand you swim |
+| Star Cup | Frost Peak | an ice road (little grip), deep snow, pines, the Alps |
+| Star Cup | Neon City | at night: barriers on both sides, street lamps, the skyline |
+| Star Cup | Magma Core | a basalt road over lava, a volcano smoking on the horizon |
+
+- **Grand Prix**: a cup of three races against five CPU drivers, 50, 100 or
+  150cc. Points 9-6-4-3-2-1, the next grid by the standings; the top three
+  stand on the podium, a trophy is kept (gold, silver, bronze per cup and
+  class). A trophy in the Sun Cup opens the Star Cup. Best in the library:
+  the trophies (gold 3, silver 2, bronze 1).
+- **Single race**: any open track.
+- **Time trial**: alone with three turbos. The best lap is kept for each
+  track (time and a ghost: a sample every 200 ms, about 500 bytes in flash)
+  and drives along as a see-through kart the next time; OK on the time box
+  starts again.
+- **Online** (the "Online" page, nearby or over the internet): a race of
+  two, below.
+
+Six drivers (Blaze, Mint, Bolt, Nova, Tank, Pixie) differ in top speed,
+acceleration, handling and weight; the CPU drivers follow a racing line,
+drift through the long bends, brake for the sharp ones, go round peels and
+use their items; a mild rubber band keeps them near.
+
+    LEFT/RIGHT or tilt    steer (tilting: the further, the sharper)
+    DOWN held             in a bend: a hop into a drift; otherwise brake
+                          (and backwards when stopped)
+    UP (or OK)            use the item
+    hold OK               pause
+
+The gas is automatic; "GAS: HOLD UP" in the menu gives the gas to UP (then
+OK uses the item). A drift charges a mini turbo - the sparks at the wheels
+go blue, then orange - let go of DOWN for the boost. Items come out of the
+spinning boxes (a roulette, by place: the last ones get more turbos and
+rockets): **turbo**, **peel** (dropped behind, spins whoever runs over it),
+**rocket** (follows the track to the kart ahead and throws it) and
+**shield** (stops one hit). Coins: 1 % top speed each, ten at most; a hit
+costs some. Off the road the kart is slow, walls stop it, water and lava
+put it back on the track a moment later. Boost pads (the flashing
+chevrons) give a short turbo.
+
+How it is drawn: every row below the horizon is a line through the world
+at the distance it looks at (camera 22 px above the track), sampled in
+16.16 fixed point - 32 px map tiles, 4 px cells of 16 materials, 16 x 16
+texels each; the near rows sample every second pixel (a texel is wider than
+two pixels there), the far ones take on the haze in seven steps and then
+one colour per material. The map is built when a track loads, from the
+track's centre line (a closed curve through 17 to 49 points): only the
+tiles near the road are kept, 14 to 22 kB, plus 16 kB for the rest of the
+game - all on the heap while the game runs, the tracks themselves are a
+few hundred bytes in flash. The karts are ray traced from 16 sides by
+`tools/kart_art.py` (also the boxes, coins, rockets, trees and the logo,
+4 bits a pixel, 27 kB in flash) and scaled to their distance. The sky
+(gradient, sun or moon, clouds, a far and a near layer of hills, mountains,
+dunes, the sea, pines, a skyline or a volcano) turns with the camera, the
+near layer a little faster. Frame rate on the C3 (the host tests' model:
+the drawing as counted, plus the changed 32 px blocks on the SPI): about
+29 fps at 40 MHz, 17 fps at 20 MHz; the floor changes every frame, so
+"screen speed" 40 MHz is worth it.
+
+**A race of two** (online, colour consoles only): the track comes from the
+session, 100cc, all items, no CPU drivers. Not lockstep: each console
+drives its own kart and sends its state 20 times a second (24 bytes: place,
+speed, heading, drift / boost / shield / spin, how far it got, and the
+sender's clock); the other kart is shown where that state says it is by
+now, moved on by its speed for the packet's age and eased there. What must
+arrive goes along as events - the start, an item box taken, a peel dropped,
+a rocket fired, a hit, the finish - each repeated in the packets until the
+other side acknowledges it. The console that challenged (or the server's
+coin toss) gives the start and says who won; each console decides what
+hits its own kart. A lost packet is covered by the next one; if the other
+one leaves or the connection goes, its kart vanishes and the race runs on
+to the line. Over the internet only the newest state waits for the next
+poll.
+
 ## Boards
 
 ESP32-C3 SuperMini or ESP32-S3 WROOM-1. The firmware is built for both.
@@ -221,7 +307,7 @@ English and Deutsch at once (saved; the games and the phone page stay English).
 
 Speed: only the parts of the picture that changed go to the display (blocks
 of 32 x 1 pixels), so most games run at the 60 fps limit. Games that redraw
-the whole screen (Doom, Tunnel 3D, Racer) depend on the SPI clock: about
+the whole screen (Doom, Tunnel 3D, Racer, Kart GP) depend on the SPI clock: about
 15 fps at 20 MHz, 28 fps at 40 MHz. Settings -> "screen speed" tries a faster
 clock and keeps it only if OK is pressed within 10 s; a key held while
 switching on goes back to the safe default. "show fps" puts the frame rate in
@@ -234,7 +320,7 @@ left, away from you and towards you (a way that does not fit the one before -
 LEFT not the opposite of RIGHT, say - is asked again). How far each side went
 is kept, so a side that reads less (a sensor off the middle) answers as much
 as the others. In a game, tilting works like the arrow keys; in Pong,
-Breakout, Racer, Rocks, Tunnel 3D and Doom it steers without steps - the
+Breakout, Racer, Kart GP, Rocks, Tunnel 3D and Doom it steers without steps - the
 further you tilt, the faster it goes. "tilt level"
 chooses what counts as level: the way the console is held when a game starts,
 or a position saved once (OK, hold it, 3 s); "tilt" sets how far to tilt
@@ -293,9 +379,10 @@ chip; the radio is only on while the page is open.
     hold OK              in a game: give up; in the list: back to the games
 
 The games: 4 wins, Tic Tac Toe, Pong, Snake, Pac-Man, Battleship, Checkers,
-Mau-Mau and Bomberman with either console, Chess only between two colour
-consoles (an OLED console is marked "OLED" in the list). Real-time games run
-in lockstep on both consoles; only the keys go over the radio.
+Mau-Mau and Bomberman with either console, Chess and Kart GP only between two
+colour consoles (an OLED console is marked "OLED" in the list). Real-time
+games run in lockstep on both consoles; only the keys go over the radio
+(Kart GP sends the karts' states instead, see Kart GP).
 
 **Internet** plays through your own MiniArcade server - the TV's server, with
 the TV's pairing: a console paired for TV is ready, one that is not goes
@@ -304,7 +391,7 @@ online on that server and your friends (online or not, a `*` in front);
 friends are added once with their 6 character **friend code** (no 0/O or
 1/I/L), shown under OK on your own row ("my code"; "add a friend by code" is
 an on-screen code entry), or with RIGHT on a console in the list. OK on a
-free console challenges it like nearby; all ten games work, Chess included.
+free console challenges it like nearby; all eleven games work, Chess and Kart GP included.
 The packets of the same protocol (`linkcore.h`) go over the server's relay
 instead of the radio (`main/inetcore.h`, polls on the TV's one HTTPS
 connection, no WebSocket). Real-time games get a longer input delay there,

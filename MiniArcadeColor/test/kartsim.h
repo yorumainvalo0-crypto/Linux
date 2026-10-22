@@ -78,6 +78,7 @@ static void kcLook(const uint8_t *fb, bool drawn) {
   if (kg->R.T != &kg->T || kg->mode == KG_ATTRACT || !drawn) {
     static uint32_t resAt = 0;
     if (recent("RESULTS")) { if (!resAt) resAt = millis(); if (millis() - resAt > 1600) kcSnap("results", fb); }
+    else resAt = 0;
     if (recent("GOLD TROPHY!") || recent("SILVER TROPHY!") || recent("BRONZE TROPHY!") || recent("NO TROPHY THIS TIME")) {
       static uint32_t podAt = 0;
       if (!podAt) podAt = millis();
@@ -106,7 +107,7 @@ static void kcLook(const uint8_t *fb, bool drawn) {
     if (kg->mode == KG_TT && (R.k[KG_KARTS].flags & KK_GHOST)) {
       int16_t sx, sy; int32_t z;
       const KgKart &g = R.k[KG_KARTS];
-      if (kgProj(kg->cam, g.x, g.y, 0, sx, sy, z) && z < 100 * 256 && sx > 40 && sx < 280) { kcGhostSeen++; kcSnap("ghost", fb); }
+      if (kgProj(kg->cam, g.x, g.y, 0, sx, sy, z) && z < 100 * 256 && sx > 40 && sx < 280) { kcGhostSeen++; if (z > 45 * 256) kcSnap("ghost", fb); }
     }
     if (kg->mode == KG_NET && !(R.k[1].flags & KK_GONE) && kcp && kcp->on && kcp->started) {
       // where we show ANNA's kart, against where her console has it
@@ -118,8 +119,19 @@ static void kcLook(const uint8_t *fb, bool drawn) {
       if (kgProj(kg->cam, R.k[1].x, R.k[1].y, 0, sx, sy, z) && z < 160 * 256 && sx > 30 && sx < 290) { kcRemoteSeen++; kcSnap("online", fb); }
     }
     if (kbTilt && R.t > 20000 && me.steer > 100) kcSnap("tilt", fb);
+    static uint16_t turbos = 0;                                 // a turbo just fired: the flame, the lines rushing past
+    if (R.st.used[KI_TURBO] != turbos) { if (R.st.used[KI_TURBO] > turbos && me.boost > 100 && R.t > 3000) kcSnap("turbo", fb); turbos = R.st.used[KI_TURBO]; }
+    for (const KgRocket &q : R.rk) {                            // a rocket on its way, well in sight
+      int16_t sx, sy; int32_t z;
+      if (q.on && kgProj(kg->cam, q.x, q.y, 0, sx, sy, z) && z > 40 * 256 && z < 90 * 256 && sx > 80 && sx < 240) kcSnap("rocket", fb);
+    }
+    static uint16_t bangSeen = 0;                               // a bang in sight: a picture a few frames later
+    static int bangIn = -1;
+    if (kg->hitsShown != bangSeen) { bangSeen = kg->hitsShown; if (fxCount() > 12) bangIn = 4; }
+    if (bangIn >= 0 && bangIn-- == 0) kcSnap("bang", fb);
   }
-  if (R.phase == KS_OVER && R.t > 0) kcSnap("finish", fb);
+  static int overFrames = 0;
+  if (R.phase == KS_OVER && R.t > 0 && ++overFrames == 25) kcSnap("finish", fb);
 }
 
 static void kcFrame(const uint8_t *fb, const uint8_t *prev) {
@@ -150,7 +162,9 @@ static void kcReport(const char *what) {
   if (!kcN) return;
   printf("      C3 model, %s: %ld frames, drawing %.1f ms, SPI %.1f ms (20 MHz) / %.1f ms (40 MHz)\n", what, kcN, kcCpu / kcN / 1000,
          kcSpi20 / kcN / 1000, kcSpi40 / kcN / 1000);
-  printf("      -> %.1f fps at 20 MHz, %.1f fps at 40 MHz (slowest frame %.1f ms)\n", 1e6 * kcN / (kcCpu + kcSpi20), 1e6 * kcN / (kcCpu + kcSpi40), kcWorst40 / 1000);
+  printf("      -> %.1f fps at 20 MHz, %.1f fps at 40 MHz", 1e6 * kcN / (kcCpu + kcSpi20), 1e6 * kcN / (kcCpu + kcSpi40));
+  if (kcWorst40 > 0) printf(" (slowest frame %.1f ms at 40 MHz)", kcWorst40 / 1000);
+  printf("\n");
 }
 
 // ---------------- the driver on the keys ----------------
@@ -171,7 +185,9 @@ static void kartKeyBot(uint32_t t) {
   KgRace &R = kg->R;
   bool racing = kg->mode != KG_ATTRACT && R.T == &kg->T && (R.phase == KS_RACE || R.phase == KS_OVER) && kg->raceShown && millis() - kg->raceShown < 100;
   if (!racing) {
-    if (kbMenus && t >= kbOkAt && (recent("OK = on") || recent("OK = race"))) { press(t + 1, OK, 80); kbOkAt = t + 1200; }
+    static uint32_t onSeen = 0;                                 // a screen that waits for OK: read it a moment first
+    if (recent("OK = on") || recent("OK = race")) { if (!onSeen) onSeen = t; } else onSeen = 0;
+    if (kbMenus && onSeen && t - onSeen > 2000 && t >= kbOkAt) { press(t + 1, OK, 80); kbOkAt = t + 1200; }
     static uint32_t boxSeen = 0;
     if (recent("OK = again   hold OK = back")) {                // the time trial: once more, then back
       if (!boxSeen) boxSeen = t;
@@ -417,6 +433,8 @@ static void kartLogic() {
     if (t == 0) kartItemsLogic(T);
   }
   kcReport("all six tracks, one lap each");
+  printf("      on the heap: the game %u bytes (track %u, race %u) + the map's tiles; a time trial's ghosts %u\n",
+         (unsigned)sizeof(KgGame), (unsigned)sizeof(KgTrack), (unsigned)sizeof(KgRace), (unsigned)(2 * sizeof(KgGhost)));
   check("kart: at least 20 fps at 40 MHz on the C3 (model)", 1e6 * kcN / (kcCpu + kcSpi40) >= 20);
   // walls hold: full speed into the city's barriers for a while, never inside one
   kgBuild(*T, 4);
@@ -539,7 +557,7 @@ static void kartChecks() {
     kcReport("Coral Bay on the tilt sensor");
     printf("      %d races, tilt steering %u, keys %u, max tilt %d\n", kcRaces, kbTiltSteer, kbKeySteer, kbMaxTilt);
     check("kart: steered by tilting, stepless (no key held)", kbTiltSteer > 300 && kbKeySteer == 0 && kbMaxTilt > 2000);
-    check("kart: the race on the tilt sensor went over the line", kcRaces == 1 && seen("RESULTS") && seen("FINISH!"));
+    check("kart: the race on the tilt sensor went over the line", kcRaces == 1 && seen("RESULTS") && kcShots.count("finish"));
   }
   if (scenario == "kartghost") {
     kcReport("time trial");

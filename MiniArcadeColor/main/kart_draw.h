@@ -2,9 +2,10 @@
 // perspective, the karts and everything else on it, the effects and the
 // HUD. Part of console.cpp (through game_kart.h).
 /* The floor is "mode 7": every row below the horizon is a straight line
-   through the world at the distance that row looks at (the camera 25 px
-   above the track), sampled once per pixel in 16.16 fixed point - map
-   tile, cell, then a texel of the material's 16 x 16 texture. Towards the
+   through the world at the distance that row looks at (the camera 22 px
+   above the track), sampled in 16.16 fixed point - map tile, cell, then
+   a texel of the material's 16 x 16 texture; once per pixel, near the
+   camera every second pixel (a texel is wider than two there). Towards the
    horizon the rows take on the haze step by step (a colour table per
    step), and the farthest ones use one colour per material so that the
    pattern does not shimmer. The sky is a gradient, sun or moon, clouds and
@@ -55,7 +56,7 @@ static void kgFloor(const KgTrack &T, const KgCam &c) {
     const uint8_t *tp = tdat;
     if (dpx >= KG_FARD) {                                       // far: the material's colour in the haze
       const uint8_t *flat = T.flat[f];
-      KG_COST(SCR_W * 22 + 80);
+      KG_COST(SCR_W * 26 + 120);
       for (int16_t x = 0; x < SCR_W; x++, U += DU, V += DV) {
         uint8_t m;
         if (((U | V) >> 26) == 0) {
@@ -70,7 +71,7 @@ static void kgFloor(const KgTrack &T, const KgCam &c) {
     }
     bool half = dpx < KG_HALFD;
     if (half) { DU *= 2; DV *= 2; }
-    KG_COST((half ? SCR_W / 2 : SCR_W) * (f ? 30 : 27) + 80);
+    KG_COST((half ? SCR_W / 2 : SCR_W) * (f ? 36 : 33) + 120);
     const uint8_t *fog = T.fog[f];
     for (int16_t x = 0; x < SCR_W; x += half ? 2 : 1, U += DU, V += DV) {
       uint8_t m;
@@ -201,7 +202,7 @@ static void kgSky(const KgTrack &T, const KgCam &c, uint32_t ms) {
       else if (y >= KG_HZ - 3) k = h2 >= h ? farFog2 : farFog;
       fb[y * SCR_W + x] = k;
     }
-    KG_COST(h * 3 + 40);
+    KG_COST(h * 4 + 60);
   }
   if (th.farKind == KF_FAR_VOLCANO) {                           // smoke over the crater
     int16_t vx = kgSkyX(c, 47000);
@@ -217,7 +218,7 @@ static void kgSky(const KgTrack &T, const KgCam &c, uint32_t ms) {
     int16_t h = kgNearH(th.nearKind, a, th.nearH, tone);
     if (h <= 0) continue;
     int16_t top = KG_HZ - h;
-    KG_COST(h * 3 + 30);
+    KG_COST(h * (th.nearKind == KN_CITY ? 26 : 5) + 60);
     for (int16_t y = top; y < KG_HZ; y++) {
       col k = tone && th.nearKind != KN_CITY ? th.nearc[1] : th.nearc[0];
       switch (th.nearKind) {
@@ -261,7 +262,7 @@ static void kgBlit(const KgSpr &s, int16_t ax, int16_t ay, int32_t sc, const col
   uint8_t rb = (uint8_t)((s.w + 1) / 2);
   uint8_t *fb = gfx.buffer();
   int16_t i0 = x0 < 0 ? (int16_t)-x0 : 0, i1 = x0 + w > SCR_W ? (int16_t)(SCR_W - x0) : w;
-  KG_COST((int32_t)w * h * 9 + 40);
+  KG_COST((int32_t)(i1 - i0) * h * 12 + 60);
   for (int16_t j = y0 < top ? (int16_t)(top - y0) : 0; j < h && y0 + j < SCR_H; j++) {
     int32_t sy = (j * inv + inv / 2) >> 8;
     if (sy >= s.h) sy = s.h - 1;
@@ -282,6 +283,10 @@ static void kgBlit(const KgSpr &s, int16_t ax, int16_t ay, int32_t sc, const col
 // a sprite at its natural size (menus, HUD)
 static void kgSpr(const KgSpr &s, int16_t ax, int16_t ay, const col *pal, uint8_t scale = 1, uint8_t fl = 0) {
   kgBlit(s, ax, ay, 256 * scale, pal, fl);
+}
+// one of the big words (place, countdown, FINISH) round its middle, sc/256 times
+static void kgBig(const KgSpr &s, int16_t cx, int16_t cy, const col *pal, int32_t sc = 256) {
+  kgBlit(s, (int16_t)(cx - (s.w * sc >> 9)), (int16_t)(cy - (s.h * sc >> 9)), sc, pal);
 }
 
 static void kgShadow(const uint8_t *dark, int16_t cx, int16_t cy, int16_t rw) {
@@ -319,7 +324,44 @@ static bool kgProj(const KgCam &c, int32_t wx, int32_t wy, int32_t hpx256, int16
 }
 
 // ---------------- what is on the track, far to near ----------------
-enum { KO_DECOR, KO_BOX, KO_COIN, KO_PEEL, KO_ROCKET, KO_KART };
+enum { KO_DECOR, KO_BOX, KO_COIN, KO_PEEL, KO_ROCKET, KO_KART, KO_GATE };
+
+// the start gate over the finish line: two posts, a chequered banner between them
+#define KG_GATE_H 15                                            // px above the track
+static void kgGate(const KgTrack &T, const KgCam &c, uint32_t ms) {
+  int32_t px[2], py[2];
+  int16_t sx[2], top[2], bot[2], foot[2];
+  for (uint8_t i = 0; i < 2; i++) {
+    int32_t x, y, z;
+    kgPtAt(T, 0, (int16_t)(i ? T.w + 6 : -T.w - 6), x, y);
+    px[i] = x << 8; py[i] = y << 8;
+    int16_t s2;
+    if (!kgProj(c, px[i], py[i], KG_GATE_H * 256, sx[i], top[i], z)) return;
+    kgProj(c, px[i], py[i], (KG_GATE_H - 5) * 256, s2, bot[i], z);
+    kgProj(c, px[i], py[i], 0, s2, foot[i], z);
+  }
+  for (uint8_t i = 0; i < 2; i++) {                             // the posts
+    int16_t w = (int16_t)((foot[i] - top[i]) / 12 + 1);
+    gfx.fill(sx[i] - w / 2, top[i], w, foot[i] - top[i], GREY3);
+    gfx.vline(sx[i] + w / 2, top[i], foot[i] - top[i], GREY1);
+  }
+  int16_t x0 = sx[0], x1 = sx[1];
+  if (x0 == x1) return;
+  int16_t step = x1 > x0 ? 1 : -1;
+  uint8_t *fb = gfx.buffer();
+  for (int16_t x = x0; x != x1; x += step) {                    // the banner, chequered, a red edge on top
+    if ((uint16_t)x >= SCR_W) continue;
+    int32_t t = (int32_t)(x - x0) * 256 / (x1 - x0);
+    int16_t yt = (int16_t)(top[0] + (top[1] - top[0]) * t / 256), yb = (int16_t)(bot[0] + (bot[1] - bot[0]) * t / 256);
+    for (int16_t y = yt; y < yb; y++) {
+      if ((uint16_t)y >= SCR_H) continue;
+      int32_t v = (int32_t)(y - yt) * 256 / (yb - yt + 1);
+      col k = v < 50 ? C::RED : (((t * 14 / 256) + (v * 2 / 256)) & 1) ? C::WHITE : C::BLACK;
+      fb[y * SCR_W + x] = k;
+    }
+  }
+  (void)ms;
+}
 
 static const KgSpr &kgDecorSpr(uint8_t kind, uint8_t theme, const col *&pal) {
   switch (kind) {
@@ -399,10 +441,13 @@ static void kgDrawKart(const KgRace &R, const KgKart &k, const KgCam &c, int16_t
   bool mine = &k == &R.k[R.me];
   bool ghost = (k.flags & KK_GHOST) != 0;
   int32_t sc = (int32_t)((int64_t)KG_F * 65536 / KG_SPS / z);   // screen px per sprite px, 1/256
+  if (z < 12 * 256) return;                                       // right beside the camera: not a wall of kart
+  if (sc > 640) sc = 640;
   if (k.fall) sc = sc * k.fall / 60;
   uint16_t view = kgAtan2(k.y - c.y, k.x - c.x);
   uint8_t fr = (uint8_t)(((uint16_t)(k.a - view) + 2048) >> 12) & 15;
   int16_t lift = (int16_t)((int64_t)k.z * KG_F / z);
+  if (lift > 60) lift = 60;
   if (k.inv && (ms / 70) % 2) return;
   col pal[16];
   kgKartPal(k.drv, pal, ghost);
@@ -428,9 +473,10 @@ static void kgObjects(KgRace &R, const KgCam &c, uint32_t ms, const char *tagNam
   for (uint8_t i = 0; i < T.ncoin; i++) if (!T.coin[i].off) add((int32_t)T.coin[i].x << 8, (int32_t)T.coin[i].y << 8, 0, KO_COIN, i);
   for (uint8_t i = 0; i < KG_PEELS; i++) if (R.peel[i].on) add((int32_t)R.peel[i].x << 8, (int32_t)R.peel[i].y << 8, 0, KO_PEEL, i);
   for (uint8_t i = 0; i < KG_ROCKETS; i++) if (R.rk[i].on) add(R.rk[i].x, R.rk[i].y, 0, KO_ROCKET, i);
-  for (uint8_t i = 0; i <= R.nk; i++) {
+  add((int32_t)T.pt[0].x << 6, (int32_t)T.pt[0].y << 6, 0, KO_GATE, 0);
+  for (uint8_t i = 0; i <= KG_KARTS; i++) {                      // the racers, and the time trial's ghost (the last one)
     const KgKart &k = R.k[i];
-    if (i == R.nk && !(k.flags & KK_GHOST)) continue;
+    if (i >= R.nk && !(i == KG_KARTS && (k.flags & KK_GHOST))) continue;
     if (k.flags & KK_GONE) continue;
     add(k.x, k.y, 0, KO_KART, i);
   }
@@ -485,6 +531,9 @@ static void kgObjects(KgRace &R, const KgCam &c, uint32_t ms, const char *tagNam
       kgBlit(KG_ROCKET[fr], ob.sx, (int16_t)(ob.sy - sc2 / 256), sc2 / 2, KP_ROCKET, 0, 0);
       break;
     }
+    case KO_GATE:
+      kgGate(T, c, ms);
+      break;
     case KO_KART: {
       const KgKart &k = R.k[ob.i];
       kgDrawKart(R, k, c, ob.sx, ob.sy, ob.z, ms);
@@ -530,9 +579,9 @@ static void kgMiniMap(const KgRace &R, int16_t x0, int16_t y0) {
   }
   mm(T.pt[0].x, T.pt[0].y, px, py);
   gfx.fill(px - 2, py, 5, 2, C::WHITE);
-  for (int8_t i = (int8_t)R.nk; i >= 0; i--) {
+  for (int8_t i = KG_KARTS; i >= 0; i--) {
     const KgKart &k = R.k[i];
-    if (i == R.nk && !(k.flags & KK_GHOST)) continue;
+    if (i >= R.nk && !(i == KG_KARTS && (k.flags & KK_GHOST))) continue;
     if (k.flags & KK_GONE) continue;
     int16_t x, y;
     mm(k.x >> 6, k.y >> 6, x, y);
@@ -544,13 +593,11 @@ static void kgMiniMap(const KgRace &R, int16_t x0, int16_t y0) {
 static void kgHud(const KgRace &R, uint32_t ms, bool timeTrial) {
   const KgKart &k = R.k[R.me];
   char b[32];
-  // place, big, top left
+  // place, big, top left: gold, silver, bronze, then white
   if (!timeTrial) {
     uint8_t p = k.place ? k.place : R.nk;
-    static const col PC[4] = { rgb(255, 215, 0), rgb(220, 225, 235), rgb(230, 150, 80), C::WHITE };
-    snprintf(b, sizeof(b), "%u", p);
-    gfx.textShadow(8, 4, b, PC[p < 4 ? p - 1 : 3], C::BLACK, F_BIG);
-    gfx.textShadow(8 + Gfx::width(b, F_BIG) + 1, 6, kgOrd(p), PC[p < 4 ? p - 1 : 3], C::BLACK, F_BOLD);
+    const col *pc = p == 1 ? KP_TGOLD : p == 2 ? KP_TSILVER : p == 3 ? KP_TBRONZE : KP_TWHITE;
+    kgSpr(KG_PLACE[(p > 6 ? 6 : p) - 1], 4, 2, pc);
   }
   snprintf(b, sizeof(b), "LAP %u/%u", k.lap + 1 > KG_LAPS ? KG_LAPS : k.lap + 1, KG_LAPS);
   gfx.textShadow(timeTrial ? 8 : 10, timeTrial ? 8 : 44, b, C::WHITE, C::BLACK, F_TEXT);
