@@ -331,6 +331,7 @@ void setup() {
   batPin = (uint8_t)prefs.getUShort("bat", 254);
   bool soundAsked = prefs.getUShort("sset", 0) != 0;
   prefs.end();
+  tftChipRemember();
   runClock = cfgClock;
   setCpuFrequencyMhz(cfgClock);
   randomSeed(esp_random());

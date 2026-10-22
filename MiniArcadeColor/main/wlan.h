@@ -3,6 +3,34 @@
 // itself is net.cpp, shared with the OLED console; the updates come from
 // the colour console's own release channel (CONFIG_ARCADE_UPDATE_PATH).
 
+/* The display chip is stored once ("tftc": 1 = ILI9341, 2 = ST7789). Each
+   chip has its own firmware file in the release, and the GitHub update
+   fetches the one for the stored chip. Flashing the other build over USB
+   means the display was changed, so the stored chip follows the build.   */
+#if CONFIG_IDF_TARGET_ESP32S3
+#define FW_TARGET "s3"
+#else
+#define FW_TARGET "c3"
+#endif
+#if CONFIG_ARCADE_TFT_ST7789
+#define TFT_CHIP_BUILT 2
+#else
+#define TFT_CHIP_BUILT 1
+#endif
+static void tftChipRemember() {
+  prefs.begin("arcade", true);
+  uint16_t chip = prefs.getUShort("tftc", 0);
+  prefs.end();
+  if (chip != TFT_CHIP_BUILT) {
+    chip = TFT_CHIP_BUILT;
+    prefs.begin("arcade", false);
+    prefs.putUShort("tftc", chip);
+    prefs.end();
+  }
+  netSetUpdateBin(chip == 2 ? "miniarcade-color-" FW_TARGET "-st7789.bin"
+                            : "miniarcade-color-" FW_TARGET ".bin");
+}
+
 static bool wlanStay = false;        // keep the WLAN on after leaving this page
 static bool phoneLink = false;       // WLAN on outside this page right now
 
