@@ -166,7 +166,9 @@ static uint8_t ladderMask(uint8_t pin) {
   return l->keys;
 }
 
+static void batPinFree();                // below: no pull on the battery pin
 void applyPinModes() {
+  batPinFree();
   for (uint8_t i = 0; i < B_COUNT; i++) {
     if (BTN_PIN[i] == 255) continue;
     if (BTN_MV[i]) analogReadMilliVolts(BTN_PIN[i]);   // set up the ADC first: that drops the pull
@@ -414,6 +416,9 @@ static uint8_t batPin = 254;   // ADC pin; 255 = none found (searched at every s
 #define BAT_NONE_SET 253
 static bool adcPin(int p) { return p >= ADC_FIRST && p <= ADC_LAST; }   // int: ADC_FIRST is 0 on the C3
 static bool batValid() { return adcPin(batPin); }
+// the key search pulls every free pin up and down; a pull left on the
+// divider (about 45k against its 100k) would make the battery read far too low
+static void batPinFree() { if (batValid()) pinMode(batPin, INPUT); }
 void saveBat() { prefs.begin("arcade", false); prefs.putUShort("bat", batPin); prefs.end(); }
 
 static uint16_t batMilliVolts() {              // the lowest of four quick pairs, x2 for the divider

@@ -4274,6 +4274,7 @@ int main(int argc, char **argv) {
     check("battery divider found, not taken for a key", batPin == BAT && simNvsU16["bat"] == BAT);
     check("all five keys learned on the ladder pin", onLadder);
     check("no key held down afterwards", !kDown[0] && !kDown[1] && !kDown[2] && !kDown[3] && !kDown[4]);
+    check("no pull left on the battery pin after the key setup", pinMode_[BAT] != 2 && pinMode_[BAT] != 3);
   }
   if (scenario == "ladderpair") {
     printf("   supply %u mV, keys %u %u %u %u %u mV\n", ladVs, BTN_MV[0], BTN_MV[1], BTN_MV[2], BTN_MV[3], BTN_MV[4]);
