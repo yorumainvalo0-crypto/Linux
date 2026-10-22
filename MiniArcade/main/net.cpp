@@ -14,6 +14,7 @@
 #include "esp_http_server.h"
 #include "esp_http_client.h"
 #include "esp_ota_ops.h"
+#include "esp_heap_caps.h"
 #include "esp_app_format.h"
 #include "esp_image_format.h"
 #include "esp_crt_bundle.h"
@@ -386,7 +387,13 @@ static void installFromGithub() {
     int status = 0;
     int64_t len = -1;
     for (uint8_t hop = 0; hop < 5; hop++) {        // follow the redirect to the file
-      if (esp_http_client_open(c, 0) != ESP_OK) { status = -1; strlcpy(why, "no connection to GitHub", sizeof(why)); break; }
+      if (esp_http_client_open(c, 0) != ESP_OK) {
+        status = -1;
+        snprintf(why, sizeof(why), "no connection to GitHub (mem %uk/%uk)",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024));
+        break;
+      }
       len = esp_http_client_fetch_headers(c);
       if (len < 0) { status = -1; strlcpy(why, "no answer from GitHub", sizeof(why)); break; }
       status = esp_http_client_get_status_code(c);
@@ -425,7 +432,12 @@ static void installFromGithub() {
         } else {
           size_t want = total - done;
           int n = esp_http_client_read(c, buf, want < 4096 ? want : 4096);
-          if (n <= 0) { snprintf(why, sizeof(why), "download broken off at %u%%", (unsigned)(done * 100 / total)); break; }
+          if (n <= 0) {                             // where, and how much memory was left (TLS needs a 16 kB block)
+            snprintf(why, sizeof(why), "broken off at %u%% (mem %uk/%uk)", (unsigned)(done * 100 / total),
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024),
+                     (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024));
+            break;
+          }
           if (esp_ota_write(h, buf, n) != ESP_OK) { strlcpy(why, "cannot write the flash", sizeof(why)); fatal = true; break; }
           done += n;
         }
