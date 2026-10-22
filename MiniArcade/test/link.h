@@ -30,6 +30,7 @@ static const uint8_t SIM_BOT_MAC[6] = { 0x24, 0x6F, 0x28, 0x99, 0x88, 0x77 };
 
 static void simSendMe(void *, const uint8_t *, const uint8_t *d, uint8_t n)  { simAir.push_back({ true,  std::vector<uint8_t>(d, d + n) }); }
 static bool     simBotOld      = false;  // bot plays an older firmware: no real-time games
+static int      simAirDrop     = 0;      // % of the packets the radio loses (both ways)
 static void simSendBot(void *, const uint8_t *, const uint8_t *d, uint8_t n) {
   std::vector<uint8_t> v(d, d + n);
   if (simBotOld && n >= sizeof(LkPacket) && v[3] == LK_BEACON) v[offsetof(LkPacket, flags)] &= ~LK_CAPS;
@@ -317,6 +318,7 @@ void linkTick() {
   std::vector<SimPkt> air;
   air.swap(simAir);
   for (auto &p : air) {
+    if (simAirDrop && rand() % 100 < simAirDrop) continue;
     if (p.toBot) simBot.onPacket(SIM_MY_MAC, p.d.data(), (int)p.d.size(), -58, now);
     else         simMe.onPacket(SIM_BOT_MAC, p.d.data(), (int)p.d.size(), -58, now);
   }

@@ -70,6 +70,7 @@
 #include "game_chess.h"
 #include "qr.h"
 #include "game_pumpkin.h"
+#include "game_kart.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -112,6 +113,7 @@ static const char *const IC_SETTINGS[12] = {
 #include "multiplayer.h"           // online play: uses the games above and the icons
 #include "tv.h"                    // YouTube through the own server
 #include "inet.h"                  // online play over the internet: the TV's server and pairing
+#include "kart_online.h"           // Kart GP online: a race of two
 
 static const Game GAMES[] = {
   { "Snake",       "SNK", snakeRun,       IC_SNAKE,       C::GREEN,         NULL },
@@ -152,6 +154,7 @@ static const Game GAMES[] = {
   { "Lander",      "LND", landerRun,      IC_LANDER,      C::GREY,          NULL },
   { "Palace",      "PAL", palaceRun,      IC_PALACE,      rgb(210,150,40),  NULL },
   { "Pumpkin Maze", "PMZ", pumpkinRun,    IC_PUMPKIN,     rgb(255,102,0),   NULL },
+  { "Kart GP",     "KGP", kartRun,        IC_KART,        rgb(230,60,30),   NULL },
   // more games come here (before the entries with a tag)
   { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
   { "Online",      "ONL", onlineRun,      IC_ONLINE,      MP_ACCENT,        "nearby" },

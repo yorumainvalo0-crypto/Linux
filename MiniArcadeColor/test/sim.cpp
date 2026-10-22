@@ -130,6 +130,7 @@ static void applyMask(uint8_t m) {
 }
 void simDelayUs(uint32_t us) { clockUs += us; }
 static void simInetTick(uint32_t t);             // the pretend relay of internet play (inetsrv.h), every ms
+static void kcFrame(const uint8_t *fb, const uint8_t *prev);   // Kart GP's frame rate model (kartsim.h)
 
 // a player that looks at the game's state (board games): called every ms
 static void (*simBot)(uint32_t t) = NULL;
@@ -251,6 +252,7 @@ void Gfx::send() {
     }
     pmbFrames++;
   }
+  kcFrame(fb, lastFrame);                                        // Kart GP: the C3's frame rate model
   memcpy(lastFrame, fb, sizeof(fb));
   if (grabNext) { grabNext = 0; captureAt.insert(frames + 3); }
   if (palRec && !(frames & 1)) palRecFrame((uint32_t)(clockUs / 1000), fb);
@@ -1066,6 +1068,8 @@ static void chessPeer(uint32_t now) {
   if (!cpDone && !cpQn && (!cpN || cpPos.half >= 100 || chTooLittle(cpPos))) { cpDone = true; simBotGames++; B.finish(); }
 }
 
+#include "kartsim.h"                                           // Kart GP: the key driver, the rules, ANNA's kart
+
 // our side of each game, through the keys
 static void bshipBot(uint32_t t);                               // the local games' bots, below
 static void maumauBot(uint32_t t);
@@ -1113,6 +1117,7 @@ static void mpPlay(uint32_t t) {
   case LKG_DAME: mpPlayCheckers(t); break;
   case LKG_MAU:  maumauBot(t); break;
   case LKG_CHESS: mpPlayChess(t); break;
+  case LKG_KART: kartKeyBot(t); break;
   case LKG_BOMB: mpPlayRandom(t, rand() % 6 == 0); break;
   default: mpPlayRandom(t, false); break;                       // Pong, Snake, Pac-Man: arrows
   }
@@ -1136,7 +1141,7 @@ static void onlineDriver(uint32_t t) {
   if (mpChoosing && !botBusy(t) && t >= mpWait) { botPress(t, OK, 80); mpWait = t + 600; return; }   // nearby
   if (botBusy(t) || t < mpWait || !simOpen) return;
   LinkCore &L = linkCore();
-  if (L.state == LK_PLAYING) { mpPlay(t); return; }
+  if (L.state == LK_PLAYING || (kg && kg->mode == KG_NET)) { mpPlay(t); return; }   // Kart GP: the race runs on when the other one left
   if (mpStep >= mpSteps.size()) return;
   char s = mpSteps[mpStep];
   uint8_t game = mpStep + 1 < mpSteps.size() ? (uint8_t)(mpSteps[mpStep + 1] - '0') : 0;
@@ -1173,8 +1178,9 @@ static void onlineDriver(uint32_t t) {
 static void onlineGame(uint8_t game, uint32_t t) {
   mpSteps = std::string("c") + (char)('0' + game) + "q";
   simBot = onlineDriver; botFrom = t;
-  simBotOther = chessPeer;
+  simBotOther = colourPeer;
   simPeer.caps = LK_CAPS | LK_CAP_CHESS;                        // ANNA is a colour console here
+  simPeer.caps2 = LK_CAP2_KART;
 }
 
 // ---------------- online over the internet (inet.h): ANNA, BOB and CARL on the pretend relay (inetsrv.h) ----------------
@@ -1233,7 +1239,7 @@ static void inetDriver(uint32_t t) {
     return;
   }
   inNoteT = 0;
-  if (L.state == LK_PLAYING) {
+  if (L.state == LK_PLAYING || (kg && kg->mode == KG_NET)) {
     if (!inGameT) { inGameT = t; inGames++; }
     if (inDownNext && t > inGameT + 4000) { inDownNext = false; simNetDown = true; printf("      the server goes away at %u ms\n", t); }
     if (inGoneNext && t > inGameT + 4000) { inGoneNext = false; annaStop(); printf("      ANNA is switched off at %u ms\n", t); }
@@ -1318,8 +1324,9 @@ static void inetDriver(uint32_t t) {
 static void inetScenario(const char *steps, uint32_t t) {
   inSteps = steps;
   simBot = inetDriver; botFrom = t;
-  simBotOther = chessPeer;
+  simBotOther = colourPeer;
   simPeer.caps = LK_CAPS | LK_CAP_CHESS;
+  simPeer.caps2 = LK_CAP2_KART;
   fsSetup();
   annaStart(0);
   simNvsBlob["url"] = std::string("https://arcade.example.de") + '\0';
@@ -4111,7 +4118,9 @@ int main(int argc, char **argv) {
     simAt.push_back({ t + 4000, [] { runClock = 160; } });
     press(t + 4200, OK, 900);                                    // hold OK: the library
     t += 5600;
-    for (int i = 0; i < 3; i++) press(t + 250 * i, DN);          // TV: no WLAN saved
+    int toTv = 0;                                                // TV: no WLAN saved (from Pumpkin Maze, as many rows down as lie between)
+    for (uint8_t g = 0; g < GAME_COUNT; g++) { if (!strcmp(GAMES[g].name, "Pumpkin Maze")) toTv = -g; if (!strcmp(GAMES[g].name, "TV")) toTv += g; }
+    for (int i = 0; i < toTv; i++) press(t + 160 * i, DN);
     simAt.push_back({ t + 700, [] { simNoConfig = true; } });
     press(t + 900, OK, 80); press(t + 1900, OK, 80);
     simAt.push_back({ t + 2400, [] { simNoConfig = false; simNoNet = true; } });   // ... the network not there
@@ -4130,6 +4139,67 @@ int main(int argc, char **argv) {
     press(t + 900, UP); press(t + 1150, UP); press(t + 1400, LT);
     sprBack = t + 1400;
     simEnd = t + 2400;
+  } else if (scenario == "kart") {
+    // the Sun Cup on the keys, three races to the podium; the C3 model sets the pace
+    uint32_t t = openGameNamed("Kart GP", M); simEnd = t + 600000;
+    press(t + 1500, OK, 80);                                     // GRAND PRIX
+    press(t + 2300, OK, 80);                                     // BLAZE
+    press(t + 3100, OK, 80);                                     // SUN CUP
+    simBot = kartKeyBot; botFrom = t + 3200;
+    kcOn = true;
+    kbQuit = true;                                               // after the podium: out of the game
+  } else if (scenario == "kartmenu") {
+    // the menus: the class, the gas, a single race's track list, the time trial's, the driver, back
+    uint32_t t = openGameNamed("Kart GP", M); simEnd = t + 16000;
+    press(t + 1200, UP); press(t + 1500, OK, 80);                          // GAS: HOLD UP
+    press(t + 2000, OK, 80);                                               // ... and back to AUTO
+    press(t + 2400, UP); press(t + 2700, OK, 80);                          // CLASS: 150cc
+    press(t + 3100, OK, 80); press(t + 3500, OK, 80);                      // 50cc, 100cc
+    press(t + 3900, UP); press(t + 4200, UP); press(t + 4500, OK, 80);     // SINGLE RACE
+    press(t + 5200, RT); press(t + 5500, OK, 80);                          // MINT
+    press(t + 6200, DN); press(t + 6500, DN); press(t + 6800, DN);         // a locked track
+    press(t + 7100, OK, 80);                                               // ... does not start
+    press(t + 7600, OK, 900);                                              // back
+    press(t + 9000, DN); press(t + 9300, OK, 80);                          // TIME TRIAL
+    press(t + 10000, OK, 80);                                              // the driver
+    press(t + 10800, OK, 900);                                             // back from the tracks
+    press(t + 12300, OK, 900);                                             // and out of the game
+    captureMs = { t + 1000, t + 3000, t + 5300, t + 7000, t + 10600 };
+  } else if (scenario == "karttilt") {
+    // a single race on Coral Bay, steered by tilting the console
+    simGyro = true; simNvsU16["snd"] = 255;                      // GPIO7 is the gyroscope's here
+    simNvsU16["tilt"] = 1; simNvsU16["gsda"] = 21; simNvsU16["gscl"] = 8; simNvsU16["gax"] = 0 | 1 << 8;
+    uint32_t t = openGameNamed("Kart GP", M); simEnd = t + 300000;
+    press(t + 1200, DN); press(t + 1500, OK, 80);                // SINGLE RACE
+    press(t + 2200, OK, 80);                                     // the driver
+    press(t + 2900, DN); press(t + 3200, DN); press(t + 3500, OK, 80);   // CORAL BAY
+    simBot = kartKeyBot; botFrom = t + 3600; kbTilt = true; kbQuit = true;
+    kcOn = true;
+  } else if (scenario == "kartghost") {
+    // time trial on Meadow Ring twice: the best lap is kept as a ghost and drives along the second time
+    uint32_t t = openGameNamed("Kart GP", M); simEnd = t + 600000;
+    press(t + 1200, DN); press(t + 1500, DN); press(t + 1800, OK, 80);   // TIME TRIAL
+    press(t + 2500, OK, 80);                                     // the driver
+    press(t + 3200, OK, 80);                                     // MEADOW RING
+    simBot = kartKeyBot; botFrom = t + 3300;
+    kcOn = true;
+  } else if (scenario == "kartlogic") {
+    printf("== %s\n", scenario.c_str());
+    kartLogic();
+    return failures ? 1 : 0;
+  } else if (scenario == "mpkart" || scenario == "mpkartgone") {
+    // Kart GP with ANNA over the radio, a fifth of the packets lost; "gone": she gives up halfway
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 600000;
+    onlineGame(LKG_KART, t);
+    simAirDrop = 20;
+    if (scenario == "mpkartgone") kcpLeaveAt = t + 40000;
+    kcOn = true;
+  } else if (scenario == "inetkart") {
+    // Kart GP with ANNA over the internet relay, 60-100 ms each way
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
+    simNetMs = 60; simNetJit = 40;
+    inetScenario("Ic;q", t);
+    kcOn = true;
   } else if (scenario == "online") {
     // the lobby: rename, a friend, Chess with a console that has none, a "no",
     // 4 wins, ANNA's challenge to Tic Tac Toe accepted, another one declined, back
@@ -4197,6 +4267,7 @@ int main(int argc, char **argv) {
   const bool updMode = scenario == "updgithub" || scenario == "updupload" || scenario == "updfail" || scenario == "updnowlan" || scenario == "updnonet";   // a plain status screen, no sound
   if (!updMode) check("frames were drawn", frames > 20);
   if (!updMode) check("the picture uses many colours", colsInFrame() >= 6);
+  kartChecks();
   if (scenario == "menu")      check("menu lists the games", seen("Snake") && seen("Tetris") && seen("Doom"));
   if (scenario == "snake")     check("snake ran", seen("SNAKE"));
   if (scenario == "snakeover") check("game over shown", seen("GAME OVER") || seen("NEW RECORD!"));
@@ -4468,7 +4539,8 @@ int main(int argc, char **argv) {
   if (scenario.compare(0, 2, "mp") == 0 && scenario != "mpchess") {
     printf("      games ANNA saw %d (last: %s), steps %zu/%zu\n", simBotGames, simBotResult == 1 ? "ANNA won" :
            simBotResult == 2 ? "ANNA lost" : simBotResult == 3 ? "draw" : "-", mpStep, mpSteps.size());
-    if (scenario == "mpchessgame") {
+    if (scenario == "mpkartgone") {                              // ANNA gave up: kartsim.h checks it
+    } else if (scenario == "mpchessgame") {
       printf("      chess: %d plies, boards the same %d, wrong moves %d\n", cpPlies, mpChSame, cpBad);
       check("chess online: 40 plies, both boards the same", seen("CHESS") && cpPlies >= 40 && mpChSame == 1 && !cpBad);
       check("left the game, ANNA was told", seen("you left the game") && simPeer.state == LK_LOBBY);
@@ -4659,7 +4731,7 @@ int main(int argc, char **argv) {
     check("pumpkin editor: the own level is listed and played", seen("GRAVE RUN") && pmbLevelsWon >= 1 && pmSv.stars[PM_LEVELS] >= 1 && seen("OWN LEVEL 1"));
     check("pumpkin editor: in the home WLAN the link has its address and the WLAN stays on", seen("192.168.1.50/maze") && pmeHomeOut == NET_ONLINE);
   }
-  check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
+  check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "karttilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }
