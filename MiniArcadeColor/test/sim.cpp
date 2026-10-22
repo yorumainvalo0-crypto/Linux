@@ -4264,15 +4264,10 @@ int main(int argc, char **argv) {
     return failures ? 1 : 0;
   }
 
-<<<<<<< HEAD
   const bool updMode = scenario == "updgithub" || scenario == "updupload" || scenario == "updfail" || scenario == "updnowlan" || scenario == "updnonet";   // a plain status screen, no sound
   if (!updMode) check("frames were drawn", frames > 20);
   if (!updMode) check("the picture uses many colours", colsInFrame() >= 6);
-=======
-  check("frames were drawn", frames > 20);
-  check("the picture uses many colours", colsInFrame() >= 6);
   kartChecks();
->>>>>>> 573cf11 (MiniArcade Color: Kart GP, a mode 7 kart racer)
   if (scenario == "menu")      check("menu lists the games", seen("Snake") && seen("Tetris") && seen("Doom"));
   if (scenario == "snake")     check("snake ran", seen("SNAKE"));
   if (scenario == "snakeover") check("game over shown", seen("GAME OVER") || seen("NEW RECORD!"));
@@ -4736,11 +4731,7 @@ int main(int argc, char **argv) {
     check("pumpkin editor: the own level is listed and played", seen("GRAVE RUN") && pmbLevelsWon >= 1 && pmSv.stars[PM_LEVELS] >= 1 && seen("OWN LEVEL 1"));
     check("pumpkin editor: in the home WLAN the link has its address and the WLAN stays on", seen("192.168.1.50/maze") && pmeHomeOut == NET_ONLINE);
   }
-<<<<<<< HEAD
-  check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
-=======
-  check("sounds played", scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "karttilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
->>>>>>> 573cf11 (MiniArcade Color: Kart GP, a mode 7 kart racer)
+  check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "karttilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }
