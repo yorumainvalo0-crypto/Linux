@@ -490,10 +490,12 @@ void batTick() {
   batLearnTick(now);
 }
 uint16_t batSmoothMv() { batTick(); return (uint16_t)(batLow / 16); }
+// the shown value changes at most once a minute, so it does not flicker
+static uint32_t batShownAt = 0;
 uint8_t batPercent() {
   batLearnLoad();
   uint8_t p = batL.percent(batSmoothMv());
-  if (batShown == 255 || p == 0 || p == 100 || (p > batShown ? p - batShown : batShown - p) >= 3) batShown = p;
+  if (batShown == 255 || millis() - batShownAt >= 60000) { batShown = p; batShownAt = millis(); }
   return batShown;
 }
 void batReset() { batLow = 0; batShown = 255; }

@@ -19,6 +19,7 @@ static bool     blocked[sizeof(PINS_ALL)], mvNoisy[sizeof(PINS_ALL)];
 static int16_t  seenMv = -1;                 // voltage of the key just found (ladder)
 static int16_t  plainAgain = -1;             // a pin without ADC pressed again: no ladder there
 
+static bool batRecheck();                    // below, with the battery search
 static bool candAdc(uint8_t i) { return adcPin(CAND[i]) && CAND[i] != batPin; }   // the battery is no key
 
 static void readAll(uint8_t mode, uint8_t *out) {
@@ -188,6 +189,9 @@ void learnKeys() {
     wizScreen(TR("release all keys", "alle Tasten loslassen"), 0, s, act, -1);
     if (millis() - t0 > 6000) { calibrate(); t0 = millis(); }
   }
+  // a battery divider on an ADC pin reads like a ladder key held down:
+  // with every key released, find it now so it is never taken for a key
+  if (batRecheck()) calibrate();
   for (uint8_t b = 0; b < B_COUNT; b++) {
     char msg[32];
     snprintf(msg, sizeof(msg), b < 4 ? TR("press  %s", "drücke  %s") : TR("OK key - or two keys together", "OK-Taste - oder zwei zugleich"), BTN_NAME[b]);
@@ -328,6 +332,18 @@ BatProbe batProbe(uint8_t p, uint16_t *pinMv) {
 uint8_t batSearch() {
   for (uint8_t p = ADC_FIRST; p <= ADC_LAST; p++) if (batProbe(p, NULL) == BP_BAT) return p;
   return 255;
+}
+
+// true when the battery pin changed
+static bool batRecheck() {
+  if (batPin == BAT_NONE_SET) return false;
+  if (batValid() && batProbe(batPin, NULL) == BP_BAT) return false;
+  uint8_t p = batSearch();
+  if (p == batPin) return false;
+  batPin = p;
+  saveBat();
+  batReset();
+  return true;
 }
 
 void batDetect() {

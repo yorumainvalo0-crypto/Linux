@@ -3540,6 +3540,13 @@ int main(int argc, char **argv) {
     press(6700, 6 << 4, 700);                                    // UP + RIGHT: the supply
     script.push_back({ 13000, 7 << 4 });                         // DOWN + LEFT held to the end
     simEnd = 14000;
+  } else if (scenario == "ladderbat") {
+    // ladder keys on GPIO2, the battery divider on GPIO4 not known yet: it must not count as a key
+    simNvsU16.erase("pset"); simNvsU16.erase("bat"); LADDER = 2; LADDER_R = true;
+    press(2500, 1 << 4, 400); press(3300, 2 << 4, 400); press(4100, 3 << 4, 400); press(4900, 4 << 4, 400);
+    press(5700, 5 << 4, 400);
+    press(6700, 6 << 4, 700);                                    // UP + RIGHT: the supply
+    simEnd = 12000;
   } else if (scenario == "plain2") {
     // two keys on GPIO6, which has no ADC: the wizard says so
     simNvsU16.erase("pset");
@@ -4259,6 +4266,14 @@ int main(int argc, char **argv) {
     check("own OK key learned on the ladder", BTN_PIN[4] == 2 && BTN_MV[4] > 780);
     check("sound setup shows the own OK key", seen("OK = yes"));
     check("OK while beeping picked the buzzer", simNvsU16.count("snd") && simNvsU16["snd"] != 255 && simNvsU16["sset"] == 1);
+  }
+  if (scenario == "ladderbat") {
+    printf("   battery on %u, keys on %u %u %u %u %u\n", batPin, BTN_PIN[0], BTN_PIN[1], BTN_PIN[2], BTN_PIN[3], BTN_PIN[4]);
+    bool onLadder = true;
+    for (uint8_t b = 0; b < B_COUNT; b++) if (BTN_PIN[b] != 2) onLadder = false;
+    check("battery divider found, not taken for a key", batPin == BAT && simNvsU16["bat"] == BAT);
+    check("all five keys learned on the ladder pin", onLadder);
+    check("no key held down afterwards", !kDown[0] && !kDown[1] && !kDown[2] && !kDown[3] && !kDown[4]);
   }
   if (scenario == "ladderpair") {
     printf("   supply %u mV, keys %u %u %u %u %u mV\n", ladVs, BTN_MV[0], BTN_MV[1], BTN_MV[2], BTN_MV[3], BTN_MV[4]);
