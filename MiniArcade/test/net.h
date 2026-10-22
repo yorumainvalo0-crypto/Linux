@@ -11,6 +11,7 @@ static bool     simUpload = false;  // a file arrives over the web page right af
 static bool     simNoNet  = false;  // the saved network is not there: joining, then failed
 static int      simJoinTicks = 0;
 static bool     simNoConfig = false;  // no network saved at all
+static uint32_t simUploadAt = 0;      // a file arrives over the web page at this time (ms)
 
 bool        netHasConfig()      { return !simNoConfig; }
 const char *netSsid()           { return "HomeNet"; }
@@ -18,7 +19,11 @@ void        netConnect()        { simNet = simNoNet ? NET_CONNECTING : NET_ONLIN
 void        netSetup()          { simNet = NET_SETUP; }
 void        netStop()           { simNet = NET_OFF; if (simJob != JOB_ERROR) simJob = JOB_IDLE; }
 void        netForget()         { netStop(); }
-void        netTick()           { if (simNet == NET_CONNECTING && ++simJoinTicks > 500) simNet = NET_FAILED; }
+uint32_t millis();
+void        netTick()           {
+  if (simNet == NET_CONNECTING && ++simJoinTicks > 500) simNet = NET_FAILED;
+  if (simUploadAt && simNet == NET_ONLINE && millis() >= simUploadAt) { simUploadAt = 0; simJob = JOB_ASKING; }
+}
 void        netRestart()        { printf("      board restarts\n"); }
 NetState    netState()          { return simNet; }
 const char *netAddress()        { return "192.168.1.50"; }

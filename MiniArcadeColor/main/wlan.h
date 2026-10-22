@@ -34,7 +34,17 @@ static void tftChipRemember() {
 static bool wlanStay = false;        // keep the WLAN on after leaving this page
 static bool phoneLink = false;       // WLAN on outside this page right now
 
-static void phoneHook() { netTick(); lastInput = millis(); }
+static bool uploadShown = false;     // the upload question is on the screen right now
+static void uploadPrompt();          // below, with the WLAN page
+
+/* While the WLAN stays on outside the WLAN page, a firmware sent from the
+   web page must still be confirmed on the console - on whatever screen it
+   is (the web page waits 30 s for the answer).                         */
+static void phoneHook() {
+  netTick();
+  lastInput = millis();
+  if (!uploadShown && netJob() == JOB_ASKING) uploadPrompt();
+}
 
 void phoneLinkOff() {
   if (!phoneLink) return;
@@ -73,6 +83,31 @@ static void askBox(const char *title, const char *l1, const char *l2, const char
   if (l3) gfx.center(140, l3, C::LTGREY);
   gfx.center(196, TR("OK = yes      LEFT = no", "OK = ja      LEFT = nein"), C::LIME);
   gfx.send();
+}
+
+// the question, then the progress until the board restarts (or the answer was no)
+static void uploadPrompt() {
+  uploadShown = true;
+  btnClear();
+  for (;;) {
+    bool alive = poll();                 // runs phoneHook too, which only ticks the network now
+    NetJob jb = netJob();
+    if (jb == JOB_ASKING) {
+      if (!alive || btn(B_LEFT)) { netAnswer(false); sfx(300, 120); continue; }
+      if (btn(B_OK)) { netAnswer(true); sfx(1200, 50); continue; }
+      char b[40];
+      snprintf(b, sizeof(b), "v%.31s", netAskVersion());
+      askBox(TR("UPLOAD", "HOCHLADEN"), TR("install the firmware", "die Firmware installieren"), b, TR("from the web page?", "von der Webseite?"));
+    } else if (jb == JOB_UPDATING || jb == JOB_DONE) {
+      wlanTitle("UPDATE", C::GREEN);
+      gfx.center(80, jb == JOB_DONE ? TR("done - restarting", "fertig - Neustart") : TR("installing...", "installiere..."), C::WHITE, F_BOLD);
+      bar(30, 130, SCR_W - 60, netProgress(), C::LIME);
+      gfx.center(180, TR("do not switch off", "nicht ausschalten"), C::YELLOW);
+      gfx.send();
+    } else break;
+  }
+  btnClear();
+  uploadShown = false;
 }
 
 void wlanRun() {

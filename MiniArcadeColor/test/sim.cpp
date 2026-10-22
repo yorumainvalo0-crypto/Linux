@@ -3660,6 +3660,22 @@ int main(int argc, char **argv) {
   } else if (scenario == "settings") {
     simEnd = M + 3000; press(M, UP); press(M + 400, OK, 80); captureAt = { 200 };
     setenv("GRAB", "SETTINGS", 1);
+  } else if (scenario == "uploadask") {
+    // WLAN stays on after the page; a firmware from the web page is asked about in the library
+    uint32_t t = M;
+    press(t, UP); press(t + 400, OK, 80);                        // settings
+    t += 1000;
+    for (int i = 0; i < 5; i++) { press(t, UP); t += 250; }      // up to the WLAN line
+    press(t, OK, 80); t += 800;
+    for (int i = 0; i < 5; i++) { press(t, DN); t += 250; }      // "stay online"
+    press(t, OK, 80); t += 500;
+    press(t, OK, 900); t += 1500;                                // out of the WLAN page ...
+    press(t, OK, 900); t += 1500;                                // ... and out of the settings
+    simAt.push_back({ t, [] { simJob = JOB_ASKING; } });         // the first upload: no
+    press(t + 800, LT); t += 2000;
+    simAt.push_back({ t, [] { simJob = JOB_ASKING; } });         // the second: yes
+    press(t + 800, OK, 80);
+    simEnd = t + 2500;
   } else if (scenario == "pause") {
     uint32_t t = openGameNamed("Snake", M); simEnd = t + 4000;
     press(t + 1000, OK, 900);                                    // hold OK: pause menu
@@ -4509,6 +4525,11 @@ int main(int argc, char **argv) {
     check("own OK key learned on the ladder", BTN_PIN[4] == 2 && BTN_MV[4] > 780);
     check("sound setup shows the own OK key", seen("OK = yes"));
     check("OK while beeping picked the buzzer", simNvsU16.count("snd") && simNvsU16["snd"] != 255 && simNvsU16["sset"] == 1);
+  }
+  if (scenario == "uploadask") {
+    check("upload asked outside the WLAN page", seen("install the firmware"));
+    check("the answer reached the web page (no, then yes)", simAnswer == 1);
+    check("installing shown until the restart", seen("done - restarting"));
   }
   if (scenario == "ladderbat") {
     printf("   battery on %u, keys on %u %u %u %u %u\n", batPin, BTN_PIN[0], BTN_PIN[1], BTN_PIN[2], BTN_PIN[3], BTN_PIN[4]);
