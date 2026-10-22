@@ -229,6 +229,11 @@ void wlanRun() {
       gfx.text(132, 9, s, C::WHITE);
     }
     gfx.text(12, 40, info, infoC);
+    {                                    // free memory: TLS for the GitHub update needs a 16 kB block
+      char m[24];
+      snprintf(m, sizeof(m), "RAM %luk/%luk", (unsigned long)(tvFreeHeap(NULL) / 1024), (unsigned long)(tvLargestBlock() / 1024));
+      gfx.right(SCR_W - 10, 42, m, tvLargestBlock() < 17 * 1024 ? C::ORANGE : C::GREY, F_SMALL);
+    }
     for (uint8_t i = 0; i < ITEMS; i++) {
       int16_t y = 62 + i * 25;
       if (i == sel) gfx.rbox(6, y - 3, SCR_W - 12, 23, 5, C::BLUE);

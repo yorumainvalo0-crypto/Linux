@@ -208,3 +208,4 @@ void tvStreamReset() { simTvRing.clear(); }
 uint32_t tvStreamBytes() { return simTvBytes; }
 const char *tvConsoleCode() { return "QX7K"; }
 uint32_t tvFreeHeap(uint32_t *lowest) { if (lowest) *lowest = 61 * 1024; return 74 * 1024; }
+uint32_t tvLargestBlock() { return 40 * 1024; }

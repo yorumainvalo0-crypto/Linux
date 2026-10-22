@@ -311,3 +311,5 @@ uint32_t tvFreeHeap(uint32_t *lowest) {
   if (lowest) *lowest = esp_get_minimum_free_heap_size();
   return esp_get_free_heap_size();
 }
+
+uint32_t tvLargestBlock() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT); }

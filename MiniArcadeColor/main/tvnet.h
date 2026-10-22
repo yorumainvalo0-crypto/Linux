@@ -48,3 +48,4 @@ uint32_t    tvStreamBytes();                                   // received so fa
 
 const char *tvConsoleCode();                                   // 4 characters, as in the lobby
 uint32_t    tvFreeHeap(uint32_t *lowest);                      // bytes free now (and the lowest seen)
+uint32_t    tvLargestBlock();                                  // the biggest piece that can be allocated
