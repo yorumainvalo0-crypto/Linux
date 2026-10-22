@@ -6,3 +6,5 @@ sdkconfig.old
 test/colorsim
 test/frames/
 test/screens.png
+build-c3st/
+build-s3st/

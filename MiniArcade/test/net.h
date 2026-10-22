@@ -23,6 +23,7 @@ NetState    netState()          { return simNet; }
 const char *netAddress()        { return "192.168.1.50"; }
 const char *netApName()         { return "MiniArcade-AB12"; }
 const char *netVersion()        { return "9.2"; }
+void netSetUpdateBin(const char *) {}
 void        netCheckUpdate()    { simJob = JOB_NEWER; }
 void        netInstallUpdate()  { simJob = JOB_DONE; }
 NetJob      netJob()            { return simJob; }

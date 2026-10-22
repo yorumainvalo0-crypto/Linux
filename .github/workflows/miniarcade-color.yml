@@ -94,6 +94,26 @@ jobs:
             idf.py -B build-s3 -DSDKCONFIG=build-s3/sdkconfig build &&
             idf.py -B build-s3 -DSDKCONFIG=build-s3/sdkconfig merge-bin -o full.bin
 
+      - name: Build for the ESP32-C3 with the ST7789 display
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32c3
+          path: MiniArcadeColor
+          command: >-
+            idf.py -B build-c3st -DSDKCONFIG=build-c3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" build &&
+            idf.py -B build-c3st -DSDKCONFIG=build-c3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" merge-bin -o full.bin
+
+      - name: Build for the ESP32-S3 with the ST7789 display
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32s3
+          path: MiniArcadeColor
+          command: >-
+            idf.py -B build-s3st -DSDKCONFIG=build-s3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" build &&
+            idf.py -B build-s3st -DSDKCONFIG=build-s3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" merge-bin -o full.bin
+
       - name: Collect the files
         run: |
           mkdir out
@@ -102,6 +122,10 @@ jobs:
           cp $B/build-c3/full.bin             out/miniarcade-color-c3-full.bin
           cp $B/build-s3/miniarcade-color.bin out/miniarcade-color-s3.bin
           cp $B/build-s3/full.bin             out/miniarcade-color-s3-full.bin
+          cp $B/build-c3st/miniarcade-color.bin out/miniarcade-color-c3-st7789.bin
+          cp $B/build-c3st/full.bin             out/miniarcade-color-c3-st7789-full.bin
+          cp $B/build-s3st/miniarcade-color.bin out/miniarcade-color-s3-st7789.bin
+          cp $B/build-s3st/full.bin             out/miniarcade-color-s3-st7789-full.bin
           cp $B/version.txt out/
           ls -l out
 
@@ -137,5 +161,7 @@ jobs:
           }
           retry channel
           retry gh release upload color-latest $R --clobber out/miniarcade-color-c3.bin out/miniarcade-color-s3.bin \
-            out/miniarcade-color-c3-full.bin out/miniarcade-color-s3-full.bin
+            out/miniarcade-color-c3-full.bin out/miniarcade-color-s3-full.bin \
+            out/miniarcade-color-c3-st7789.bin out/miniarcade-color-s3-st7789.bin \
+            out/miniarcade-color-c3-st7789-full.bin out/miniarcade-color-s3-st7789-full.bin
           retry gh release upload color-latest $R --clobber out/version.txt

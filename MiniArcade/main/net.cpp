@@ -35,6 +35,11 @@
 #define GITHUB_BASE "https://github.com/" CONFIG_ARCADE_GITHUB_REPO "/" CONFIG_ARCADE_UPDATE_PATH
 #define AP_IP       "192.168.4.1"         // default address of the ESP hotspot
 
+// the file the GitHub update fetches; the colour console picks the one that
+// matches its display chip
+static const char *updateBin = CONFIG_ARCADE_UPDATE_BIN;
+void netSetUpdateBin(const char *name) { updateBin = name; }
+
 static volatile NetState state = NET_OFF;
 static volatile NetJob   job = JOB_IDLE;
 static volatile uint8_t  progress = 0;
@@ -356,7 +361,9 @@ static bool fetchVersion() {
 
 static void installFromGithub() {
   esp_http_client_config_t cfg;
-  clientCfg(&cfg, GITHUB_BASE CONFIG_ARCADE_UPDATE_BIN);
+  static char url[160];
+  snprintf(url, sizeof(url), "%s%s", GITHUB_BASE, updateBin);
+  clientCfg(&cfg, url);
   cfg.timeout_ms = 30000;
   esp_https_ota_config_t oc = {};
   oc.http_config = &cfg;

@@ -301,10 +301,19 @@ it never becomes the OLED console's "latest") and refreshes `color-latest`.
     miniarcade-color-c3.bin / -s3.bin             update (WLAN page or GitHub)
     miniarcade-color-c3-full.bin / -s3-full.bin   first flash at address 0x0
 
+The same files ending in `-st7789` are the build for an ST7789 display
+(same size, other chip), e.g. `miniarcade-color-c3-st7789-full.bin`. Flash
+the one that fits your display once; the console stores its display chip
+and from then on the GitHub update only fetches the file for that chip, so
+an ILI9341 board never gets the ST7789 build and the other way round.
+
 ## Build
 
     idf.py -B build-c3 set-target esp32c3 && idf.py -B build-c3 build
     idf.py -B build-s3 set-target esp32s3 && idf.py -B build-s3 build
+    # ST7789 display:
+    idf.py -B build-c3st -DSDKCONFIG=build-c3st/sdkconfig \
+      -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" set-target esp32c3 build
 
 PC simulator with all scenarios: `sh test/build.sh`, contact sheet of the
 captured frames: `python3 test/render.py` (needs Pillow).

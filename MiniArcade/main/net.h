@@ -43,6 +43,7 @@ const char *netAddress();         // IP of the web page, "" while unknown
 const char *netApName();
 const char *netVersion();         // version of the running firmware
 
+void        netSetUpdateBin(const char *name);   // firmware file the GitHub update fetches
 void        netCheckUpdate();     // runs in the background, see netJob()
 void        netInstallUpdate();
 NetJob      netJob();
