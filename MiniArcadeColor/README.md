@@ -229,8 +229,11 @@ the corner.
 
 MPU6050 gyroscope (GY-521): SDA and SCL on any two free pins (S3: GPIO8 /
 GPIO18 are kept for it), VCC 3V3, GND. Settings -> "tilt control" switches it
-on: the console finds the sensor, then asks to tilt it once to the right and
-once away from you. In a game, tilting works like the arrow keys; in Pong,
+on: the console finds the sensor, then asks to tilt it to the right, to the
+left, away from you and towards you (a way that does not fit the one before -
+LEFT not the opposite of RIGHT, say - is asked again). How far each side went
+is kept, so a side that reads less (a sensor off the middle) answers as much
+as the others. In a game, tilting works like the arrow keys; in Pong,
 Breakout, Racer, Rocks, Tunnel 3D and Doom it steers without steps - the
 further you tilt, the faster it goes. "tilt level"
 chooses what counts as level: the way the console is held when a game starts,

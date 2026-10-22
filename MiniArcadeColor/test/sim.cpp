@@ -3546,20 +3546,27 @@ int main(int argc, char **argv) {
     press(2500, RT, 400); press(3300, RT, 600);
     simEnd = 4500;
   } else if (scenario == "tilt") {
-    // settings -> tilt control on: sensor found, axes learned; level saved;
+    // settings -> tilt control on: sensor found, all four ways learned (LEFT, UP and DOWN
+    // each first tilted a wrong way and asked again; LEFT not as far as RIGHT); level saved;
     // then Snake: the pause menu offers a new level, tilting steers
     simGyro = true; simNvsU16["snd"] = 255;                      // GPIO7 is the gyroscope's here
     press(M, UP); press(M + 400, OK, 80);
     for (int i = 0; i < 9; i++) press(M + 800 + 220 * i, DN);
     press(M + 2900, RT);
-    accScript = { { M + 5000, 8000, 0 }, { M + 6000, 0, 0 }, { M + 7500, 0, -8000 }, { M + 8500, 0, 0 },
-                  { M + 20000, 0, -8000 } };                     // the last one: tilt up in the game
-    press(M + 9800, DN); press(M + 10200, OK, 80);               // "tilt level": save it
-    press(M + 15200, OK, 900);                                   // leave the settings
-    press(M + 16500, DN); press(M + 16900, OK, 80);              // Snake
-    press(M + 18000, OK, 900);                                   // pause ...
-    press(M + 19500, OK, 80);                                    // ... continue
-    simEnd = M + 21000;
+    accScript = { { M + 5000, 8000, 0 }, { M + 6000, 0, 0 },     // RIGHT
+                  { M + 7500, 0, -8000 }, { M + 8500, 0, 0 },    // LEFT asked, away given: once more
+                  { M + 12000, -6500, 0 }, { M + 13000, 0, 0 },  // LEFT, not as far
+                  { M + 14500, 8000, 0 }, { M + 15500, 0, 0 },   // UP asked, right given: once more
+                  { M + 19000, 0, -8000 }, { M + 20000, 0, 0 },  // UP (away)
+                  { M + 21500, 0, -8000 }, { M + 22500, 0, 0 },  // DOWN asked, away again: once more
+                  { M + 26000, 0, 7000 }, { M + 27000, 0, 0 },   // DOWN
+                  { M + 40000, 0, -8000 } };                     // the last one: tilt up in the game
+    press(M + 29800, DN); press(M + 30200, OK, 80);              // "tilt level": save it
+    press(M + 35200, OK, 900);                                   // leave the settings
+    press(M + 36500, DN); press(M + 36900, OK, 80);              // Snake
+    press(M + 38000, OK, 900);                                   // pause ...
+    press(M + 39500, OK, 80);                                    // ... continue
+    simEnd = M + 41000;
     setenv("GRAB", "TILT SETUP", 1);
   } else if (scenario == "sdcard") {
     // a card on GPIO20 is found at the first start; the settings show it
@@ -4211,12 +4218,26 @@ int main(int argc, char **argv) {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);
     check("sensor found on GPIO20 / GPIO7", gyroReady && gyroSda == 20 && gyroScl == 7);
     check("right = x, away = -y", tiltAx[0] == 0x00 && tiltAx[1] == 0x81);
+    printf("   full tilt: right %d left %d up %d down %d\n", tiltFull[0], tiltFull[1], tiltFull[2], tiltFull[3]);
+    check("four ways learned, wrong ways asked again", seen("LEFT did not match RIGHT") && seen("UP matched RIGHT/LEFT") &&
+          seen("DOWN did not match UP") && seen("tilt DOWN (to you)") &&
+          tiltFull[0] == 8000 && tiltFull[1] == 6500 && tiltFull[2] == 8000 && tiltFull[3] == 7000 && simNvsBlob.count("gful"));
     check("tilt control switched on", cfgTilt);
     check("level saved in the settings", seen("LEVEL SAVED") && cfgTiltFix);
     check("pause menu offers a new level", seen("tilt: level here"));
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
     printf("   stepless: up %d, left-right %d\n", keyAxis(B_DOWN, B_UP), keyAxis(B_LEFT, B_RIGHT));
     check("stepless tilt: nearly full up, nothing sideways", keyAxis(B_DOWN, B_UP) > 200 && keyAxis(B_LEFT, B_RIGHT) == 0);
+    // each side as far as it went when learned answers the same; LEFT (learned shorter) answers more for the same tilt
+    tiltGame = true;
+    auto an = [](int16_t x, uint8_t k) { simAcc[0] = x; simAcc[1] = 0; clockUs += 30000; tiltUpdate(); return tiltAn[k]; };
+    int r8 = an(8000, B_RIGHT), l65 = an(-6500, B_LEFT), r4 = an(4000, B_RIGHT), l4 = an(-4000, B_LEFT);
+    printf("   stepless: right 8000 -> %d, left 6500 -> %d, right 4000 -> %d, left 4000 -> %d\n", r8, l65, r4, l4);
+    check("each side scaled by its own full tilt", abs(r8 - l65) <= 2 && l4 > r4 + 20);
+    simNvsBlob.erase("gful");                                    // a setup from before the four ways: both sides the same
+    tiltLoad();
+    int r4o = an(4000, B_RIGHT), l4o = an(-4000, B_LEFT);
+    check("an older setup (two axes, no full tilts) still works, the same on both sides", tiltAx[0] == 0x00 && tiltAx[1] == 0x81 && r4o == l4o && r4o > 50);
   }
   if (scenario == "sdcard") {
     printf("   sdcs %u, card %d\n", simNvsU16["sdcs"], simSdIn);
