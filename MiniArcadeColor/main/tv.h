@@ -131,9 +131,10 @@ static const char *tvAsk(const char *path, bool post = false, int *st = NULL) {
     if (s == TVR_DONE || s == TVR_ERROR) break;
     if (!poll(false)) { tvQ = TVQ_DROP; return NULL; }       // the answer is thrown away later
     if (millis() - t0 > 400) {                               // a hint that something happens
-      static const char *const DOTS[4] = { "loading", "loading.", "loading..", "loading..." };
+      char dots[16];
+      snprintf(dots, sizeof(dots), "%s%.*s", TR("loading", "lade"), (int)((millis() / 300) % 4), "...");
       gfx.fill(SCR_W / 2 - 50, SCR_H - 22, 100, 18, C::BLACK);
-      gfx.center(SCR_H - 19, DOTS[(millis() / 300) % 4], C::LTGREY, F_SMALL);
+      gfx.center(SCR_H - 19, dots, C::LTGREY, F_SMALL);
       gfx.send();
     }
   }
@@ -156,7 +157,7 @@ static bool tvSay(const char *title, const char *l1, const char *l2, const char 
     gfx.center(70, l1, C::WHITE);
     if (l2) gfx.center(100, l2, C::YELLOW);
     if (l3) gfx.center(130, l3, C::LTGREY, F_SMALL);
-    gfx.center(200, "OK = go on    hold OK = back", C::GREY, F_SMALL);
+    gfx.center(200, TR("OK = go on    hold OK = back", "OK = weiter    OK halten = zurück"), C::GREY, F_SMALL);
     gfx.send();
   }
   return false;
@@ -167,7 +168,8 @@ static void tvHook() { netTick(); }
 // joins the saved WLAN; false = none saved, or left
 static bool tvOnline() {
   if (netState() == NET_ONLINE) return true;
-  if (!netHasConfig()) { tvSay("TV", "no WLAN saved", "Settings > WLAN", "set it up with the phone first"); return false; }
+  if (!netHasConfig()) { tvSay("TV", TR("no WLAN saved", "kein WLAN"), TR("Settings > WLAN", "Einstellungen > WLAN"),
+                                   TR("set it up with the phone first", "erst mit dem Handy einrichten")); return false; }
   if (netState() != NET_CONNECTING) netConnect();
   btnClear();
   while (poll()) {
@@ -175,11 +177,11 @@ static bool tvOnline() {
     if (st == NET_ONLINE) return true;
     tvTitle("TV");
     char b[48];
-    snprintf(b, sizeof(b), st == NET_FAILED ? "can't join %.20s" : "joining %.24s ...", netSsid());
+    snprintf(b, sizeof(b), st == NET_FAILED ? TR("can't join %.20s", "%.20s geht nicht") : TR("joining %.24s ...", "verbinde %.24s ..."), netSsid());
     gfx.center(100, b, st == NET_FAILED ? C::ORANGE : C::WHITE);
-    if (st == NET_FAILED) gfx.center(140, "OK = try again", C::LIME);
+    if (st == NET_FAILED) gfx.center(140, TR("OK = try again", "OK = nochmal"), C::LIME);
     if (st == NET_FAILED && btn(B_OK)) netConnect();
-    gfx.center(200, "hold OK = back", C::GREY, F_SMALL);
+    gfx.center(200, TR("hold OK = back", "OK halten = zurück"), C::GREY, F_SMALL);
     gfx.send();
   }
   return false;
@@ -194,6 +196,15 @@ static const char *const TV_KB_URL[6] = { "https://", ".de", ".com", ".net", "de
 static const char *const TV_KB_TXT[3] = { "space", "delete", "done" };
 static uint8_t tvKbX = 0, tvKbY = 0;                  // the cursor (host tests steer by it)
 static bool    tvKbUrl = false;
+
+// the word keys as shown: they follow the language
+static const char *tvKbLabel(const char *k) {
+  if (!strcmp(k, "del"))    return TR("del", "entf");
+  if (!strcmp(k, "done"))   return TR("done", "fertig");
+  if (!strcmp(k, "space"))  return TR("space", "Leerz.");
+  if (!strcmp(k, "delete")) return TR("delete", "löschen");
+  return k;
+}
 
 static bool tvKeyboard(const char *title, char *text, uint8_t max, bool url, const char *hint) {
   const char *const *last = url ? TV_KB_URL : TV_KB_TXT;
@@ -240,9 +251,10 @@ static bool tvKeyboard(const char *title, char *text, uint8_t max, bool url, con
     int16_t kw = 296 / nLast;
     for (uint8_t k = 0; k < nLast; k++) {
       bool on = tvKbY == 4 && k == tvKbX;
-      Font f = Gfx::width(last[k]) <= kw - 6 ? F_TEXT : F_SMALL;
+      const char *lb = tvKbLabel(last[k]);
+      Font f = Gfx::width(lb) <= kw - 6 ? F_TEXT : F_SMALL;
       gfx.rbox(12 + k * kw, 186, kw - 4, 24, 4, on ? TV_ACCENT : C::DKGREY);
-      gfx.text(12 + k * kw + (kw - 4 - Gfx::width(last[k], f)) / 2, f == F_TEXT ? 189 : 193, last[k], on ? C::WHITE : C::LTGREY, f);
+      gfx.text(12 + k * kw + (kw - 4 - Gfx::width(lb, f)) / 2, f == F_TEXT ? 189 : 193, lb, on ? C::WHITE : C::LTGREY, f);
     }
     gfx.center(SCR_H - 14, hint, C::GREY, F_SMALL);
     gfx.send();
@@ -255,10 +267,11 @@ static bool tvTypeUrl() {
   char t[sizeof(tvUrl)];
   strcpy(t, tvUrl[0] ? tvUrl : "https://");
   for (;;) {
-    if (!tvKeyboard("TV SERVER", t, sizeof(t) - 1, true, "your MiniArcade server - hold OK = cancel")) { btnClear(); return false; }
+    if (!tvKeyboard(TR("TV SERVER", "TV-SERVER"), t, sizeof(t) - 1, true,
+                    TR("your MiniArcade server - hold OK = cancel", "dein MiniArcade-Server - OK halten = abbrechen"))) { btnClear(); return false; }
     const char *err = tvSetUrl(t);
     if (!err) { btnClear(); return true; }
-    if (!tvSay("TV SERVER", err, NULL)) return false;
+    if (!tvSay(TR("TV SERVER", "TV-SERVER"), err, NULL)) return false;
   }
 }
 
@@ -267,8 +280,9 @@ void tvSettingsLine(char *out, size_t n) {
   tvLoad();
   const char *h = strstr(tvUrl, "://");
   h = h ? h + 3 : tvUrl;
-  if (!tvUrl[0]) snprintf(out, n, "tv server    not set");
-  else snprintf(out, n, "tv server    %.10s%s %s", h, strlen(h) > 10 ? ".." : "", tvTok[0] ? "paired" : "-");
+  if (!tvUrl[0]) snprintf(out, n, TR("tv server    not set", "TV-Server    fehlt"));
+  else if (strlen(h) <= 8) snprintf(out, n, TR("tv server    %s %s", "TV-Server    %s %s"), h, tvTok[0] ? TR("paired", "gepaart") : "-");
+  else snprintf(out, n, TR("tv server    %.6s.. %s", "TV-Server    %.6s.. %s"), h, tvTok[0] ? TR("paired", "gepaart") : "-");
 }
 void tvSettingsOk() { tvLoad(); tvTypeUrl(); }
 
@@ -294,8 +308,8 @@ static bool tvPinEntry(char *pin) {
       sfx(1200, 40);
       return true;
     }
-    tvTitle("SERVER PIN");
-    gfx.center(44, "PIN of your MiniArcade server", C::WHITE);
+    tvTitle(TR("SERVER PIN", "SERVER-PIN"));
+    gfx.center(44, TR("PIN of your MiniArcade server", "PIN deines MiniArcade-Servers"), C::WHITE);
     for (uint8_t i = 0; i < 8; i++) {
       int16_t x = 24 + i * 35, y = 76;
       bool on = i == cur;
@@ -304,10 +318,10 @@ static bool tvPinEntry(char *pin) {
       gfx.text(x + 6, y + 6, d, i < n ? C::WHITE : C::GREY, F_BIG);
     }
     gfx.triangle(24 + cur * 35 + 15, 128, 24 + cur * 35 + 9, 136, 24 + cur * 35 + 21, 136, C::YELLOW);
-    gfx.center(150, "UP/DOWN digit, LEFT/RIGHT move", C::LTGREY, F_SMALL);
-    gfx.center(166, "'-' ends a shorter PIN", C::LTGREY, F_SMALL);
-    gfx.center(186, "OK = pair    hold OK = back", C::LIME);
-    gfx.center(212, "(CONSOLE_PIN, also on the server's phone page)", C::GREY, F_SMALL);
+    gfx.center(150, TR("UP/DOWN digit, LEFT/RIGHT move", "UP/DOWN Ziffer, LEFT/RIGHT Stelle"), C::LTGREY, F_SMALL);
+    gfx.center(166, TR("'-' ends a shorter PIN", "'-' beendet eine kürzere PIN"), C::LTGREY, F_SMALL);
+    gfx.center(186, TR("OK = pair    hold OK = back", "OK = koppeln  halten = zurück"), C::LIME);
+    gfx.center(212, TR("(CONSOLE_PIN, also on the server's phone page)", "(CONSOLE_PIN, auch auf der Handy-Seite des Servers)"), C::GREY, F_SMALL);
     gfx.send();
   }
   return false;
@@ -316,17 +330,18 @@ static bool tvPinEntry(char *pin) {
 static bool tvPair() {
   char path[120], pin[12], why[48];
   for (;;) {                                          // does the server answer?
-    tvTitle("TV SERVER");
+    tvTitle(TR("TV SERVER", "TV-SERVER"));
     char b[60];
     snprintf(b, sizeof(b), "%.48s", tvUrl);
-    gfx.center(80, "testing the connection ...", C::WHITE);
+    gfx.center(80, TR("testing the connection ...", "teste die Verbindung ..."), C::WHITE);
     gfx.center(110, b, C::CYAN, F_SMALL);
     gfx.send();
     int st = 0;
     const char *r = tvAsk("/api/ping", false, &st);
     if (st < 0) return false;
     if (r && strstr(r, "\"ok\"")) break;
-    snprintf(why, sizeof(why), st ? "the server said %d" : "no answer", st);
+    if (st) snprintf(why, sizeof(why), TR("the server said %d", "der Server sagt %d"), st);
+    else snprintf(why, sizeof(why), TR("no answer", "keine Antwort"));
     btnClear();
     for (;;) {
       if (!poll()) return false;
@@ -338,12 +353,12 @@ static bool tvPair() {
         if (!tvNetStart(tvUrl, tvTok)) return false;
         break;
       }
-      tvTitle("TV SERVER");
+      tvTitle(TR("TV SERVER", "TV-SERVER"));
       gfx.center(60, why, C::ORANGE, F_BOLD);
       gfx.center(100, b, C::CYAN, F_SMALL);
-      gfx.center(130, "OK = try again", C::LIME);
-      gfx.center(156, "LEFT = change the address", C::LIME);
-      gfx.center(204, "hold OK = back", C::GREY, F_SMALL);
+      gfx.center(130, TR("OK = try again", "OK = nochmal"), C::LIME);
+      gfx.center(156, TR("LEFT = change the address", "LEFT = Adresse ändern"), C::LIME);
+      gfx.center(204, TR("hold OK = back", "OK halten = zurück"), C::GREY, F_SMALL);
       gfx.send();
     }
   }
@@ -366,9 +381,10 @@ static bool tvPair() {
       return true;
     }
     tvWhere = TVW_SAY;
-    bool go = st == 403 ? tvSay("PAIRING", "wrong PIN", NULL, "OK = try again")
-            : st == 429 ? tvSay("PAIRING", "too many wrong PINs", "wait a few minutes")
-            : tvSay("PAIRING", st ? "the server refused" : "no answer", NULL);
+    const char *title = TR("PAIRING", "KOPPELN");
+    bool go = st == 403 ? tvSay(title, TR("wrong PIN", "falsche PIN"), NULL, TR("OK = try again", "OK = nochmal"))
+            : st == 429 ? tvSay(title, TR("too many wrong PINs", "PIN zu oft falsch"), TR("wait a few minutes", "bitte kurz warten"))
+            : tvSay(title, st ? TR("the server refused", "Server lehnt ab") : TR("no answer", "keine Antwort"), NULL);
     if (!go) return false;
   }
 }
@@ -483,13 +499,13 @@ static bool tvPlayer(const char *title) {
   void (*keepOverlay)() = gfx.overlay;
   gfx.overlay = nullptr;                              // the fps corner would spoil skipped tiles
   gfx.clear();
-  gfx.center(100, title, C::WHITE);
-  gfx.center(130, "loading ...", C::LTGREY, F_SMALL);
+  gfx.center(100, title, C::WHITE, Gfx::width(title) <= SCR_W ? F_TEXT : F_SMALL);   // a long title in the small font
+  gfx.center(130, TR("loading ...", "lade ..."), C::LTGREY, F_SMALL);
   gfx.send();
   if (!tvStripSave || !tvStreamStart()) {
     free(tvStripSave); tvStripSave = NULL;
     gfx.overlay = keepOverlay;
-    tvSay("TV", "not enough memory", NULL);
+    tvSay("TV", TR("not enough memory", "zu wenig Speicher"), NULL);
     return true;
   }
   TvPlay &P = tvP;
@@ -512,11 +528,11 @@ static bool tvPlayer(const char *title) {
     uint32_t now = millis();
     // keys
     const char *act = NULL;
-    if (btn(B_OK))    { bool p = P.info.state == TVS_PAUSED; act = p ? "a=play" : "a=pause"; strcpy(note, p ? "play" : "pause"); }
+    if (btn(B_OK))    { bool p = P.info.state == TVS_PAUSED; act = p ? "a=play" : "a=pause"; strcpy(note, p ? TR("play", "weiter") : TR("pause", "Pause")); }
     if (btn(B_LEFT))  { act = "a=seek&d=-10"; strcpy(note, "-10 s"); }
     if (btn(B_RIGHT)) { act = "a=seek&d=10";  strcpy(note, "+10 s"); }
-    if (btn(B_UP))    { act = "a=mode&m=1";   strcpy(note, "sharp"); }
-    if (btn(B_DOWN))  { act = "a=mode&m=0";   strcpy(note, "fluent"); }
+    if (btn(B_UP))    { act = "a=mode&m=1";   strcpy(note, TR("sharp", "scharf")); }
+    if (btn(B_DOWN))  { act = "a=mode&m=0";   strcpy(note, TR("fluent", "weich")); }
     if (act) { sfx(1000, 20); tvStreamAct(act); P.waitGen = P.info.gen; noteUntil = now + 2000; P.pend = false; P.keys++; }
     // a lost connection: what is in the ring is half a story
     if (tvStreamBroken() != broken) {
@@ -533,9 +549,9 @@ static bool tvPlayer(const char *title) {
     tvDur(a, sizeof(a), (st == TVS_PLAYING && P.have ? P.lastTs : P.info.pos) / 1000);
     tvDur(b, sizeof(b), P.info.dur / 1000);
     bool buffering = st == TVS_PLAYING && (P.waitGen >= 0 || !P.have || now - P.lastShow > 800);
-    if (st == TVS_PAUSED) snprintf(left, sizeof(left), "PAUSED  %s / %s", a, b);
+    if (st == TVS_PAUSED) snprintf(left, sizeof(left), TR("PAUSED  %s / %s", "PAUSE  %s / %s"), a, b);
     else if (now < noteUntil) snprintf(left, sizeof(left), "%s  %s / %s", note, a, b);
-    else if (buffering) snprintf(left, sizeof(left), "buffering ...");
+    else if (buffering) snprintf(left, sizeof(left), TR("buffering ...", "puffere ..."));
     if (cfgFps) snprintf(right, sizeof(right), "%u fps %lu kB/s", fps, (unsigned long)kbs);
     // a frame when it is due
     bool sent = false;
@@ -563,7 +579,7 @@ static bool tvPlayer(const char *title) {
   free(tvStripSave);
   tvStripSave = NULL;
   gfx.overlay = keepOverlay;
-  if (paired && P.info.state == TVS_ERROR) tvSay("TV", "can't play this", P.info.title);
+  if (paired && P.info.state == TVS_ERROR) tvSay("TV", TR("can't play this", "nicht spielbar"), P.info.title);
   if (paired) tvAsk("/api/tv/ctl?a=stop");
   btnClear();
   return paired;
@@ -595,7 +611,7 @@ enum { TVT_SEARCH = 0, TVT_FAV, TVT_HIST, TVT_SETUP };   // after the categories
 
 static uint8_t tvTabs() { return tvCatN + 4; }
 static const char *tvTabName(uint8_t t) {
-  static const char *const X[4] = { "Search", "Favourites", "History", "Setup" };
+  const char *const X[4] = { TR("Search", "Suche"), TR("Favourites", "Favoriten"), TR("History", "Verlauf"), TR("Setup", "Einrichten") };
   return t < tvCatN ? tvCats[t] : X[t - tvCatN];
 }
 
@@ -688,7 +704,8 @@ static void tvDrawThumb(int16_t x, int16_t y, const char *id) {
 
 // OK on a list entry: play, favourite, back
 static uint8_t tvItemMenu(const TvItem &it) {
-  const char *opts[3] = { "play", it.f ? "favourite: remove" : "favourite: add", "back" };
+  const char *opts[3] = { TR("play", "abspielen"), it.f ? TR("favourite: remove", "Favorit: entfernen") : TR("favourite: add", "Favorit: dazu"),
+                          TR("back", "zurück") };
   uint8_t sel = 0;
   gfx.dim(0, 0, SCR_W, SCR_H);
   btnClear();
@@ -740,7 +757,7 @@ static bool tvBrowse() {
   if (st < 0) return true;
   if (st == 401) return false;
   if (r) tvParseCats(r);
-  if (!tvCatN) { strcpy(tvCats[0], "Popular"); tvCatN = 1; }
+  if (!tvCatN) { strcpy(tvCats[0], TR("Popular", "Beliebt")); tvCatN = 1; }
   tvWantList = true;
   tvN = 0;
   btnClear();
@@ -820,7 +837,7 @@ static bool tvBrowse() {
         if (sel) strcpy(t, tvRecent[sel - 1]);
         else {
           t[0] = 0;
-          if (!tvKeyboard("SEARCH", t, sizeof(t) - 1, false, "hold OK = cancel")) t[0] = 0;
+          if (!tvKeyboard(TR("SEARCH", "SUCHE"), t, sizeof(t) - 1, false, TR("hold OK = cancel", "OK halten = abbrechen"))) t[0] = 0;
         }
         if (t[0]) {
           strcpy(tvQuery, t);
@@ -849,7 +866,7 @@ static bool tvBrowse() {
           size_t n;
           const char *b = (const char *)tvReqBody(&n);
           tvErrText(b, n);
-          tvSay("TV", "the server did not start it", tvErr);
+          tvSay("TV", TR("the server did not start it", "der Server startet es nicht"), tvErr);
         }
       } else if (m == 1) {
         snprintf(path, sizeof(path), "/api/fav?id=%s&on=%u", it.id, it.f ? 0 : 1);
@@ -872,26 +889,26 @@ static bool tvBrowse() {
     if (setup) {
       char l[3][48];
       uint32_t low, fr = tvFreeHeap(&low);
-      snprintf(l[0], 48, "server  %.38s", tvUrl);
-      snprintf(l[1], 48, "unpair (console %s)", tvConsoleCode());
-      snprintf(l[2], 48, "memory free %lu kB, lowest %lu kB", (unsigned long)(fr / 1024), (unsigned long)(low / 1024));
+      snprintf(l[0], 48, TR("server  %.38s", "Server  %.38s"), tvUrl);
+      snprintf(l[1], 48, TR("unpair (console %s)", "entkoppeln (Konsole %s)"), tvConsoleCode());
+      snprintf(l[2], 48, TR("memory free %lu kB, lowest %lu kB", "Speicher frei %lu kB, minimal %lu kB"), (unsigned long)(fr / 1024), (unsigned long)(low / 1024));
       for (uint8_t i = 0; i < 3; i++) {
         int16_t y = 40 + i * 30;
         if (i == sel) gfx.rbox(4, y - 4, SCR_W - 8, 26, 5, TV_ACCENT);
         gfx.text(12, y + 3, l[i], i == sel ? C::WHITE : C::LTGREY, F_SMALL);
       }
-      gfx.text(12, 150, "OK on the first line: a new address", C::GREY, F_SMALL);
-      gfx.text(12, 166, "unpair: the token is forgotten, the PIN asked again", C::GREY, F_SMALL);
-      gfx.text(12, 190, "frame rate on the video: Settings, show fps", C::GREY, F_SMALL);
+      gfx.text(12, 150, TR("OK on the first line: a new address", "OK auf der ersten Zeile: neue Adresse"), C::GREY, F_SMALL);
+      gfx.text(12, 166, TR("unpair: the token is forgotten, the PIN asked again", "entkoppeln: Token vergessen, PIN neu abgefragt"), C::GREY, F_SMALL);
+      gfx.text(12, 190, TR("frame rate on the video: Settings, show fps", "Bildrate im Video: Einstellungen, fps zeigen"), C::GREY, F_SMALL);
     } else if (loadErr) {
-      gfx.center(80, "the server did not answer", C::ORANGE);
+      gfx.center(80, TR("the server did not answer", "Server antwortet nicht"), C::ORANGE);
       gfx.center(104, tvErr, C::YELLOW, F_SMALL);           // e.g. "YouTube blockiert - Pause bis 18:45"
-      gfx.center(130, "OK = try again", C::LIME);
+      gfx.center(130, TR("OK = try again", "OK = nochmal"), C::LIME);
     } else if (!rows) {
-      const char *t = loading ? "loading ..." : tab == tvCatN + TVT_FAV ? "no favourites yet"
-                    : tab == tvCatN + TVT_HIST ? "nothing watched yet" : "nothing here";
+      const char *t = loading ? TR("loading ...", "lade ...") : tab == tvCatN + TVT_FAV ? TR("no favourites yet", "keine Favoriten")
+                    : tab == tvCatN + TVT_HIST ? TR("nothing watched yet", "noch nichts gesehen") : TR("nothing here", "nichts da");
       gfx.center(100, t, C::LTGREY);
-      gfx.center(130, "LEFT / RIGHT = other lists", C::GREY, F_SMALL);
+      gfx.center(130, TR("LEFT / RIGHT = other lists", "LEFT / RIGHT = andere Listen"), C::GREY, F_SMALL);
     } else {
       for (uint8_t k = top; k < top + TV_ROWS && k < rows; k++) {
         int16_t y = 29 + (k - top) * 52;
@@ -902,10 +919,10 @@ static bool tvBrowse() {
           gfx.text(38, y + 14, k ? ">" : "?", C::WHITE, F_BOLD);
           char q[48];
           if (k) snprintf(q, sizeof(q), "%.22s", tvRecent[k - 1]);
-          gfx.text(92, y + 4, k ? q : "new search ...", on ? C::WHITE : C::LTGREY);
-          if (!k && loading) snprintf(q, sizeof(q), "searching \"%.20s\"", tvQuery);
-          else if (!k) snprintf(q, sizeof(q), "OK = keyboard");
-          else snprintf(q, sizeof(q), "search again");
+          gfx.text(92, y + 4, k ? q : TR("new search ...", "neue Suche ..."), on ? C::WHITE : C::LTGREY);
+          if (!k && loading) snprintf(q, sizeof(q), TR("searching \"%.20s\"", "suche \"%.20s\""), tvQuery);
+          else if (!k) snprintf(q, sizeof(q), TR("OK = keyboard", "OK = Tastatur"));
+          else snprintf(q, sizeof(q), TR("search again", "nochmal suchen"));
           gfx.text(92, y + 28, q, C::YELLOW, F_SMALL);
           continue;
         }
@@ -943,7 +960,7 @@ void tvRun() {
   pollHook = tvHook;
   if (tvOnline()) {
     while (tvUrl[0] || tvTypeUrl()) {
-      if (!tvNetStart(tvUrl, tvTok)) { tvSay("TV", "not enough memory", NULL); break; }
+      if (!tvNetStart(tvUrl, tvTok)) { tvSay("TV", TR("not enough memory", "zu wenig Speicher"), NULL); break; }
       if (!tvTok[0] && !tvPair()) break;
       bool left = tvBrowse();                          // false: the pairing is gone (or a new server)
       tvThumbFree();

@@ -66,6 +66,8 @@
 #include "game_minigolf.h"
 #include "game_palace.h"
 #include "game_chess.h"
+#include "qr.h"
+#include "game_pumpkin.h"
 
 // =========================================================
 //  GAME LIBRARY
@@ -146,6 +148,7 @@ static const Game GAMES[] = {
   { "Minigolf",    "GLF", minigolfRun,    IC_MINIGOLF,    C::GREEN,         NULL },
   { "Lander",      "LND", landerRun,      IC_LANDER,      C::GREY,          NULL },
   { "Palace",      "PAL", palaceRun,      IC_PALACE,      rgb(210,150,40),  NULL },
+  { "Pumpkin Maze", "PMZ", pumpkinRun,    IC_PUMPKIN,     rgb(255,102,0),   NULL },
   // more games come here (before the entries with a tag)
   { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
   { "Online",      "ONL", onlineRun,      IC_ONLINE,      MP_ACCENT,        "nearby" },
@@ -160,6 +163,14 @@ const Game &gameAt(uint8_t i) { return GAMES[i]; }
 const char *gameKey(uint8_t i) { return GAMES[i].key; }
 const char *gameName(uint8_t i) { return GAMES[i].name; }
 uint8_t     realGames()         { return REAL_GAMES; }
+
+// the library's words follow the language; the game names stay as they are
+static const char *gameLabel(uint8_t i) { return GAMES[i].run == settingsRun ? TR("Settings", "Einstellungen") : GAMES[i].name; }
+static const char *gameTag(const Game &g) {
+  if (!strcmp(g.tag, "nearby")) return TR("nearby", "nebenan");
+  if (!strcmp(g.tag, "setup"))  return TR("setup", "einrichten");
+  return g.tag;
+}
 
 // =========================================================
 //  MENU
@@ -221,7 +232,7 @@ void menu() {
       bool on = k == sel;
       if (on) { gfx.rbox(4, y, 176, 34, 6, GAMES[k].accent); gfx.rframe(4, y, 176, 34, 6, C::WHITE); }
       gfx.sprite(10, y + 5, GAMES[k].icon, 12, ICON_KEYS, ICON_PAL, 2);
-      gfx.text(42, y + 9, GAMES[k].name, on ? C::WHITE : C::LTGREY);
+      gfx.text(42, y + 9, gameLabel(k), on ? C::WHITE : C::LTGREY);
     }
     // scroll marks
     if (top > 0) gfx.triangle(92, 40, 86, 44, 98, 44, C::WHITE);
@@ -233,11 +244,11 @@ void menu() {
     if (!g.tag) {
       char b[20];
       snprintf(b, sizeof(b), "%u", loadHigh(sel));
-      gfx.text(204, 168, "BEST", C::LTGREY, F_SMALL);
+      gfx.text(204, 168, TR("BEST", "REKORD"), C::LTGREY, F_SMALL);
       gfx.text(204, 182, b, C::YELLOW, F_BOLD);
-    } else gfx.text(204, 176, g.tag, C::LTGREY);
+    } else gfx.text(204, 176, gameTag(g), C::LTGREY);
     char ok[24];
-    snprintf(ok, sizeof(ok), "%s = start", okKeys());
+    snprintf(ok, sizeof(ok), TR("%s = start", "%s = Start"), okKeys());
     gfx.text(196, 214, ok, C::GREY, F_SMALL);
     gfx.send();
   }
@@ -256,7 +267,7 @@ int appStats(char *out, int max) {
 
 int appSettings(char *out, int max) {
   tvLoad();
-  return snprintf(out, max, "{\"name\":\"%s\",\"bright\":%u,\"sleep\":%u,\"sound\":%u,\"clock\":%u,\"buzzer\":%u,\"tv\":\"%s\"}",
+  return snprintf(out, max, "{\"name\":\"%s\",\"bright\":%u,\"sleep\":%u,\"sound\":%u,\"clock\":%u,\"buzzer\":%u,\"tv\":\"%s\",\"maze\":1}",
                   linkName(), cfgBright, cfgSleep, cfgMute ? 0 : 1, cfgClock, sndPin != 255 ? 1 : 0, tvUrl);
 }
 

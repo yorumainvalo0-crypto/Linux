@@ -949,7 +949,7 @@ static void startServer() {
   c.uri_match_fn = httpd_uri_match_wildcard;
   c.stack_size = 6144;
   c.lru_purge_enable = true;
-  c.max_uri_handlers = 24;                        // with the phone pages
+  c.max_uri_handlers = 28;                        // with the phone pages
   if (httpd_start(&server, &c) != ESP_OK) { server = NULL; return; }
   static const httpd_uri_t uris[] = {
     { "/",       HTTP_GET,  pageGet,     NULL },

@@ -3,7 +3,10 @@
    layer and the real drawing code; only the hardware calls are redirected
    here. The panel driver is replaced: every frame sent lands in a buffer,
    and the frames a scenario asks for are written to frames/ as PPM.
-   Usage: ./colorsim <scenario>       (build.sh runs them all)          */
+   Usage: ./colorsim <scenario>       (build.sh runs them all)
+   SPRACHE=de ./colorsim <scenario>: the same in German - then only checked
+   that no text runs off the screen; what was drawn goes to frames/lang_de.txt
+   for the "sprache" scenario's check over every translation.            */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +19,10 @@
 #include <functional>
 #include <unordered_set>
 #include <queue>
+#include <regex>
+#include <fstream>
+#include <sstream>
+#include <dirent.h>
 
 std::map<std::string, uint16_t>    simNvsU16;
 std::map<std::string, std::string> simNvsBlob;
@@ -38,6 +45,7 @@ static uint32_t autoplayFrom = 0;
 static int grabNext = 0;
 static void (*pzBot)(uint32_t t) = NULL;         // puzzle games: a bot that plays through the keys
 static std::vector<uint32_t> captureMs;          // frames to keep, by time (ms)
+static long pmbBlocks = 0, pmbFrames = 0;        // Pumpkin Maze: 32-px pieces of rows sent while rolling
 static bool simSlept = false;
 static int8_t  LADDER = -1;                      // pin with three keys through resistors
 static uint8_t ladder = 0;                       // which of them is pressed (0 = none)
@@ -61,6 +69,11 @@ static int ladderRmv(uint8_t idx) {
 static int16_t simAcc[3] = { 0, 0, 16384 };      // the gyroscope's accelerometer, lying flat
 struct AccEv { uint32_t t; int16_t x, y; };
 static std::vector<AccEv> accScript;
+static std::vector<std::pair<uint32_t, std::function<void()>>> simAt;   // things that happen at a time (ms)
+static bool simDe = false;                       // SPRACHE=de: the scenario in German
+static const char *framePre = "";                // "de_" before the frame files then
+static std::set<std::string> deTexts;            // the texts drawn while the console spoke German
+static std::set<std::string> deOver;             // ... those that ran off the screen
 
 uint64_t simMicros() { return clockUs; }
 void simGpioConfig(uint64_t mask, int pu, int pd) {
@@ -116,6 +129,7 @@ void simDelayMs(uint32_t ms) {
     uint32_t t = (uint32_t)(clockUs / 1000);
     for (auto &e : script) if (e.t == t) applyMask(e.mask);
     for (auto &e : accScript) if (e.t == t) { simAcc[0] = e.x; simAcc[1] = e.y; }
+    for (auto &e : simAt) if (e.first == t) e.second();
     if (autoplay && t > autoplayFrom && t % 180 == 0) {
       static const uint8_t o[] = { 0, 0, 1, 2, 4, 8, 4, 8 };
       applyMask(o[rand() % 8]);
@@ -132,10 +146,22 @@ void simDelayMs(uint32_t ms) {
 #include "tvnet.h"                 // pretend MiniArcade server for the TV
 #include "../main/console.cpp"
 
+// every text drawn (gfx.cpp); in German also where it lies: nothing may run off the screen
+void arcadeTraceText(int16_t x, int16_t y, const char *s, Font f) {
+  arcadeTraceStr(s);
+  if (!cfgLang || !*s) return;
+  deTexts.insert(s);
+  if (x < 0 || y < 0 || x + Gfx::width(s, f) > SCR_W || y + Gfx::height(f) > SCR_H) {
+    char b[160];
+    snprintf(b, sizeof(b), "'%s' at %d,%d, %d px wide", s, x, y, Gfx::width(s, f));
+    deOver.insert(b);
+  }
+}
+
 // ---------------- the panel ----------------
 static void writeFrame(const uint8_t *fb) {
   char fn[96];
-  snprintf(fn, sizeof(fn), "frames/%s_%05ld.ppm", scenario.c_str(), frames);
+  snprintf(fn, sizeof(fn), "frames/%s%s_%05ld.ppm", framePre, scenario.c_str(), frames);
   FILE *f = fopen(fn, "wb");
   if (!f) return;
   fprintf(f, "P6\n%d %d\n255\n", SCR_W, SCR_H);
@@ -196,6 +222,15 @@ void Gfx::setSpeed(uint8_t) {}
 void Gfx::send() {
   if (overlay) overlay();
   frames++;
+  if (pm && tiltGame && pm->st == PS_ROLL) {                     // Pumpkin Maze: what goes to the panel (per row: first to last changed block)
+    for (int y = 0; y < SCR_H; y++) {
+      int b0 = -1, b1 = -1;
+      for (int b = 0; b < SCR_W / 32; b++)
+        if (memcmp(fb + y * SCR_W + b * 32, lastFrame + y * SCR_W + b * 32, 32)) { if (b0 < 0) b0 = b; b1 = b; }
+      if (b0 >= 0) pmbBlocks += b1 - b0 + 1;
+    }
+    pmbFrames++;
+  }
   memcpy(lastFrame, fb, sizeof(fb));
   if (grabNext) { grabNext = 0; captureAt.insert(frames + 3); }
   if (palRec && !(frames & 1)) palRecFrame((uint32_t)(clockUs / 1000), fb);
@@ -2815,6 +2850,500 @@ static void tvDecodeTest() {
   check("slow console: real time kept by dropping frames", dropped > 50 && shown > 120 && behind < 120);
 }
 
+// ---------------- Pumpkin Maze: a bot that rolls through a level ----------------
+/* It plans over the tiles (BFS from the pumpkin's tile: keys first, then
+   the goal; candies first when asked), looks ahead along the way as far
+   as a straight line stays clear of walls, bumpers and pits, and steers
+   towards that point with a speed it can still brake from. Before a
+   moving pit's track it waits until the pit is away.                  */
+static bool pmbCandy = false;                    // collect every candy first
+static int  pmbTrap = -1;                        // a pit to roll into on purpose (the trap test)
+static int  pmbWaits = 0;
+
+static int8_t pmbArrow(uint8_t t) { return t >= PT_BR && t <= PT_BD ? (int8_t)(t - PT_BR) : -1; }
+static bool pmbBlocked(uint8_t t) { return t == PT_WALL || t == PT_DOOR || t == PT_TRAP || t == PT_BUMP; }
+
+static std::vector<int> pmbPlan() {
+  int start = (int)(pm->y >> 12) * PM_W + (int)(pm->x >> 12);
+  auto target = [&](int c) {
+    uint8_t t = PTILE(pm->g[c / PM_W][c % PM_W]);
+    if (pmbTrap >= 0) return c == pmbTrap;
+    bool candy = false;
+    if (pmbCandy) for (int i = 0; i < PM_N; i++) if (PTILE(pm->g[i / PM_W][i % PM_W]) == PT_CANDY) candy = true;
+    if (candy) return t == PT_CANDY;
+    if (pm->keys < pm->keysAll) return t == PT_KEY;
+    return t == PT_GOAL;
+  };
+  std::vector<int> prev(PM_N, -2);
+  std::queue<int> q;
+  q.push(start); prev[start] = -1;
+  while (!q.empty()) {
+    int c = q.front(); q.pop();
+    if (target(c)) {
+      std::vector<int> p;
+      for (int k = c; k >= 0; k = prev[k]) p.insert(p.begin(), k);
+      return p;
+    }
+    int8_t from = pmbArrow(PTILE(pm->g[c / PM_W][c % PM_W]));
+    for (int k = 0; k < 4; k++) {
+      int x = c % PM_W + PM_DX[k], y = c / PM_W + PM_DY[k];
+      if (x < 0 || y < 0 || x >= PM_W || y >= PM_H) continue;
+      int n = y * PM_W + x;
+      uint8_t t = PTILE(pm->g[y][x]);
+      int8_t to = pmbArrow(t);
+      if (from == (k ^ 1) || to == (k ^ 1)) continue;
+      if (pmbBlocked(t) && n != pmbTrap) continue;
+      if (prev[n] != -2) continue;
+      prev[n] = c;
+      q.push(n);
+    }
+  }
+  return {};
+}
+
+// can the pumpkin roll straight from where it is to (tx, ty) (1/256 px)?
+static bool pmbClear(int32_t tx, int32_t ty, int goalCell) {
+  int32_t dx = tx - pm->x, dy = ty - pm->y;
+  int n = (int)(sqrt((double)dx * dx + (double)dy * dy) / (3 * 256)) + 1;
+  for (int i = 1; i <= n; i++) {
+    int32_t x = pm->x + dx * i / n, y = pm->y + dy * i / n;
+    for (int c = 0; c < 4; c++) {
+      int cx = (int)((x + (c & 1 ? 1 : -1) * 7 * 256) >> 12), cy = (int)((y + (c & 2 ? 1 : -1) * 7 * 256) >> 12);
+      uint8_t t = pmAt((int16_t)cx, (int16_t)cy);
+      if (t == PT_WALL || t == PT_DOOR || t == PT_BUMP) return false;
+      if (pmbArrow(t) >= 0 && cy * PM_W + cx != goalCell) return false;
+    }
+    int cx = (int)(x >> 12), cy = (int)(y >> 12);
+    for (int yy = cy - 1; yy <= cy + 1; yy++)
+      for (int xx = cx - 1; xx <= cx + 1; xx++) {
+        uint8_t t = pmAt((int16_t)xx, (int16_t)yy);
+        if ((t != PT_TRAP && t != PT_GOAL) || yy * PM_W + xx == goalCell) continue;
+        double ex = (x - pmMid((int16_t)xx)) / 256.0, ey = (y - pmMid((int16_t)yy)) / 256.0;
+        if (ex * ex + ey * ey < 13 * 13) return false;
+      }
+  }
+  return true;
+}
+
+static void pmbAxis(int16_t &ax, int16_t &ay) {
+  ax = ay = 0;
+  if (!pm || pm->st != PS_ROLL) return;
+  std::vector<int> p = pmbPlan();
+  if (p.empty()) return;
+  int last = (int)p.size() - 1, j = 0;
+  for (int k = 1; k <= last && k <= 6; k++) {                    // as far ahead as the way is straight and clear
+    if (!pmbClear(pmMid((int16_t)(p[k] % PM_W)), pmMid((int16_t)(p[k] / PM_W)), p[last])) break;
+    j = k;
+    if (pmbArrow(PTILE(pm->g[p[k] / PM_W][p[k] % PM_W])) >= 0) break;
+  }
+  if (j == 0 && last > 0) j = 1;
+  // a moving pit that will be on one of the next tiles when the pumpkin gets there: wait on this side
+  bool onTrack = pm->g[pm->y >> 12][pm->x >> 12] & PF_TRACK;
+  uint32_t now = pm->steps;
+  for (int k = 1; k <= 3 && k <= last && !onTrack && j; k++) {
+    int c = p[k];
+    if (!(pm->g[c / PM_W][c % PM_W] & PF_TRACK)) continue;
+    double ex = (pmMid((int16_t)(c % PM_W)) - pm->x) / 256.0, ey = (pmMid((int16_t)(c / PM_W)) - pm->y) / 256.0;
+    int arrive = (int)(sqrt(ex * ex + ey * ey) / 1.2);
+    for (int dt = arrive - 8; dt <= arrive + 14 && j; dt += 2) {
+      pm->steps = now + (uint32_t)(dt > 0 ? dt : 0);
+      for (uint8_t i = 0; i < pm->nMov && j; i++) {
+        int32_t mx, my;
+        pmMoverAt(i, mx, my);
+        double fx = (mx - pmMid((int16_t)(c % PM_W))) / 256.0, fy = (my - pmMid((int16_t)(c / PM_W))) / 256.0;
+        if (fx * fx + fy * fy < 12 * 12) { j = 0; pmbWaits++; }
+      }
+    }
+    pm->steps = now;
+  }
+  int32_t tx = j ? pmMid((int16_t)(p[j] % PM_W)) : pmMid((int16_t)(pm->x >> 12));
+  int32_t ty = j ? pmMid((int16_t)(p[j] / PM_W)) : pmMid((int16_t)(pm->y >> 12));
+  double dx = (tx - pm->x) / 256.0, dy = (ty - pm->y) / 256.0, d = sqrt(dx * dx + dy * dy);
+  uint8_t here = pmAt((int16_t)(pm->x >> 12), (int16_t)(pm->y >> 12));
+  double brake = here == PT_ICE ? 1.5 : 4.0, vmax = here == PT_ICE ? 200 : 360;
+  if (pmbTrap >= 0) vmax = 120;
+  double v = std::min(vmax, sqrt(2 * brake * d * 256) + (j < last && j ? 60 : 0));
+  double vx = d > 0.5 ? dx / d * v : 0, vy = d > 0.5 ? dy / d * v : 0;
+  ax = (int16_t)std::max(-256.0, std::min(256.0, (vx - pm->vx) * 5));
+  ay = (int16_t)std::max(-256.0, std::min(256.0, (vy - pm->vy) * 5));
+}
+
+// a level played without the screen; returns the steps to the goal, -1 = not reached
+static long pmbRun(uint8_t lv, int &lostPumpkins, int tries = 4) {
+  lostPumpkins = 0;
+  for (int t = 0; t < tries; t++) {
+    if (!pmLoad(lv)) return -1;
+    for (long s = 0; s < 20000; s++) {
+      int16_t ax, ay;
+      pmbAxis(ax, ay);
+      pmStep(ax, ay);
+      if (pm->st == PS_WON) { lostPumpkins += pm->lost; return (long)pm->steps; }
+      if (pm->st == PS_LOST) break;
+    }
+    lostPumpkins += pm->lost;
+  }
+  return -1;
+}
+
+// the tests' own levels go through the phone's way in
+static void pmPutLevel(uint8_t slot, const char *name, const char *const *rows) {
+  std::string t = name;
+  for (int y = 0; y < PM_H; y++) { t += "|"; t += rows[y]; }
+  const char *why = appMazePut(slot, t.c_str());
+  if (why) printf("      level %s refused: %s\n", name, why);
+}
+
+static void pmShot(const char *name) {                          // the board as it is now, into frames/
+  fxReset();
+  gfx.clear();
+  pm->full = true;
+  pmFrame(gameMillis());
+  std::string s = scenario;
+  scenario = name;
+  frames = 1;
+  writeFrame(gfx.buffer());
+  scenario = s;
+}
+
+static void pumpkinLogic() {
+  pm = (PmState *)calloc(1, sizeof(PmState));
+  pmSvLoad();
+  pmLuts();
+  // the built-in levels: well formed, a way to the goal, and the bot rolls through
+  int bad = 0, over = 0;
+  long total = 0;
+  for (uint8_t l = 0; l < PM_LEVELS; l++) {
+    for (int y = 0; y < PM_H; y++) if (strlen(PM_MAPS[l][y]) != PM_W) { bad++; printf("      level %u row %d: %zu tiles\n", l + 1, y, strlen(PM_MAPS[l][y])); }
+    char map[PM_N], name[PM_NAME + 1];
+    pmMap(l, map, name);
+    int16_t dist = -1;
+    const char *why = pmCheck(map, &dist);
+    if (why) { bad++; printf("      level %u: %s\n", l + 1, why); continue; }
+    int lost = 0;
+    clock_t c0 = clock();
+    long st = pmbRun(l, lost);
+    double us = (double)(clock() - c0) * 1e6 / CLOCKS_PER_SEC / (st > 0 ? st : 1);
+    printf("      level %2u %-15s way %3d tiles, par %4.1f s, bot %5.1f s, %d pumpkins lost, %u candies, %u keys, %u moving pits (%.1f us/step)\n",
+           l + 1, name, dist, pm->par / 10.0, st / 100.0, lost, pm->candyAll, pm->keysAll, pm->nMov, us);
+    if (st < 0) { bad++; printf("      level %u: the bot did not get through\n", l + 1); }
+    else { total += st; if (st / 10 > pm->par) over++; }
+  }
+  check("pumpkin: all 15 levels well formed, a way to the goal, rolled through by the bot", bad == 0);
+  printf("      bot over par on %d levels, %.0f s for all\n", over, total / 100.0);
+  check("pumpkin: the par times can be beaten (the bot is within par on most levels)", over <= 3);
+  // a pit swallows only near its middle: fast past the rim, no; slow over the middle, yes
+  static const char *const PIT[PM_H] = {
+    "####################", "#S.................#", "#..................#", "#........O.......G.#", "#..................#",
+    "#..................#", "#..................#", "#..................#", "#..................#", "#..................#",
+    "#..................#", "#..................#", "####################" };
+  pmPutLevel(7, "PIT TEST", PIT);
+  pmLoad(PM_LEVELS + 7);
+  pm->x = pmMid(4); pm->y = pmMid(3) - 8 * 256; pm->vx = PM_VMAX; pm->vy = 0;   // 8 px beside the middle, fast
+  bool fell = false;
+  for (int s = 0; s < 60; s++) { pmStep(0, 0); if (pm->st == PS_FALL) fell = true; }
+  bool overRim = !fell && pm->x > pmMid(10);
+  printf("      past the pit to x %d px\n", (int)(pm->x >> 8));
+  pmLoad(PM_LEVELS + 7);
+  pm->x = pmMid(7); pm->y = pmMid(3) - 3 * 256; pm->vx = 220;           // 3 px beside, slowly
+  for (int s = 0; s < 200 && pm->st == PS_ROLL; s++) pmStep(0, 0);
+  bool swallowed = pm->st == PS_FALL;
+  for (int s = 0; s < 80; s++) pmStep(0, 0);
+  printf("      fast past the rim: fell %d; slow: %d, then %u pumpkins left, back at the start %d\n", fell, swallowed, pm->lives,
+         pm->x == pm->sx && pm->y == pm->sy);
+  check("pumpkin: rolls over a pit's rim at speed, falls in near its middle", overRim && swallowed);
+  check("pumpkin: a fall costs a pumpkin and starts again at the start", pm->lives == PM_LIVES - 1 && pm->x == pmMid(1) && pm->y == pmMid(1));
+  for (int k = 0; k < 2; k++) {                                   // two more falls: the level is lost
+    for (int s = 0; s < 60; s++) pmStep(0, 0);
+    pm->x = pmMid(9); pm->y = pmMid(3) - 256; pm->vx = pm->vy = 0;
+    for (int s = 0; s < 80; s++) pmStep(0, 0);
+  }
+  check("pumpkin: the third fall loses the level", pm->st == PS_LOST && pm->lives == 0);
+  // floor, ice and mud: half a second of full tilt from rest, then let go
+  static const char *const SURF[PM_H] = {
+    "####################", "#S.................#", "#iiiiiiiiiiiiiiiiii#", "#mmmmmmmmmmmmmmmmmm#", "#..................#",
+    "#..................#", "#..................#", "#..................#", "#..................#", "#..................#",
+    "#..................#", "#................G.#", "####################" };
+  pmPutLevel(7, "SURFACES", SURF);
+  int32_t far[3];
+  for (int k = 0; k < 3; k++) {
+    pmLoad(PM_LEVELS + 7);
+    pm->x = pmMid(1); pm->y = pmMid((int16_t)(k == 0 ? 1 : k + 1));
+    for (int s = 0; s < 150; s++) pmStep(s < 50 ? 256 : 0, 0);
+    far[k] = (pm->x - pmMid(1)) >> 8;
+  }
+  printf("      rolled: floor %d px, ice %d px, mud %d px\n", far[0], far[1], far[2]);
+  check("pumpkin: ice slides on, mud holds", far[1] > far[0] * 3 / 2 && far[2] * 3 < far[0]);
+  // a bumper kicks the pumpkin back; an arrow cannot be rolled against
+  static const char *const BUMP[PM_H] = {
+    "####################", "#S.................#", "#.....*............#", "#..................#", "#..................#",
+    "#<<<<<<<<..........#", "#..................#", "#..................#", "#..................#", "#..................#",
+    "#..................#", "#................G.#", "####################" };
+  pmPutLevel(7, "BUMP", BUMP);
+  pmLoad(PM_LEVELS + 7);
+  pm->x = pmMid(3); pm->y = pmMid(2); pm->vx = 400;
+  int32_t vmin = 0;
+  for (int s = 0; s < 60; s++) { pmStep(0, 0); if (pm->vx < vmin) vmin = pm->vx; }
+  printf("      bumper: %u kicks, back at %.1f px/step\n", pm->bumps, -vmin / 256.0);
+  check("pumpkin: a bumper kicks the pumpkin away", pm->bumps >= 1 && -vmin >= PM_KICK * 9 / 10);
+  pmLoad(PM_LEVELS + 7);
+  pm->x = pmMid(1); pm->y = pmMid(5);
+  for (int s = 0; s < 500; s++) pmStep(256, 0);
+  int32_t xa = pm->x >> 12;
+  pm->x = pmMid(12); pm->y = pmMid(5); pm->vx = pm->vy = 0;
+  for (int s = 0; s < 300; s++) pmStep(0, 0);
+  printf("      against the arrows: reached tile %d; let go behind them: rolled to tile %d\n", xa, (int)(pm->x >> 12));
+  check("pumpkin: arrows push one way only", xa < 9 && pm->x >> 12 == 12);
+  pmLoad(PM_LEVELS + 7);
+  pm->x = pmMid(8); pm->y = pmMid(5);
+  for (int s = 0; s < 300; s++) pmStep(0, 0);
+  check("pumpkin: an arrow carries the pumpkin along", pm->x >> 12 == 1);
+  // key and door (level 8): the door holds until the key is taken
+  pmLoad(7);
+  pm->x = pmMid(7); pm->y = pmMid(8);
+  for (int s = 0; s < 200; s++) pmStep(0, 256);
+  bool held = pm->y >> 12 == 8 && PTILE(pm->g[9][7]) == PT_DOOR;
+  pmShot("pumpkin_door");
+  pm->x = pmMid(15); pm->y = pmMid(1);
+  pmStep(0, 0);
+  bool open = pm->keys == 1 && PTILE(pm->g[9][7]) == PT_OPEN;
+  pm->x = pmMid(7); pm->y = pmMid(8); pm->vx = pm->vy = 0;
+  for (int s = 0; s < 200; s++) pmStep(0, 256);
+  printf("      door: held %d, key taken and open %d, through to row %d\n", held, open, (int)(pm->y >> 12));
+  check("pumpkin: a door holds until the key is taken, then lets the pumpkin through", held && open && pm->y >> 12 >= 10);
+  // the rune: a fall starts there
+  pmLoad(8);
+  pm->x = pmMid(12); pm->y = pmMid(8);
+  pmStep(0, 0);
+  bool lit = pm->g[8][12] & PF_LIT;
+  pm->x = pmMid(3); pm->y = pmMid(9);
+  for (int s = 0; s < 90; s++) pmStep(0, 0);
+  check("pumpkin: the rune lights up and a fall starts there", lit && pm->lives == PM_LIVES - 1 && pm->x == pmMid(12) && pm->y == pmMid(8));
+  // the phone: own levels saved, read back, refused when broken, renamed, emptied
+  static const char *const OWN[PM_H] = {
+    "####################", "#S..c.....#........#", "#.........#..k.....#", "#..O......#........#", "#.........D........#",
+    "#.........#....*...#", "#.........#........#", "######.####..>>>...#", "#..................#", "#..H...............#",
+    "#.........C......G.#", "#..................#", "####################" };
+  pmPutLevel(0, "MY CRYPT", OWN);
+  char out[2048];
+  appMazeGet(0, out, sizeof(out));
+  std::string want = "MY CRYPT";
+  for (int y = 0; y < PM_H; y++) { want += "|"; want += OWN[y]; }
+  bool same = want == out;
+  appMazeGet(-1, out, sizeof(out));
+  bool listed = strstr(out, "\"slots\":8") && strstr(out, "{\"n\":\"MY CRYPT\",\"s\":0,\"t\":0}");
+  printf("      list: %.90s...\n", out);
+  check("pumpkin: an own level from the phone is kept and read back the same", same && listed);
+  const char *e1 = appMazePut(1, "NO START|####|#..G#|####"), *e2 = appMazePut(1, "TWO GOALS|#SGG#"),
+             *e3 = appMazePut(1, "WALLED|#S#G#|#####"), *e4 = appMazePut(1, "|#SG#"), *e5 = appMazePut(1, "BAD TILE|#SxG#"),
+             *e6 = appMazePut(1, "DOOR|#SDG#"), *e7 = appMazePut(9, "OK|SG");
+  printf("      refused: \"%s\" / \"%s\" / \"%s\" / \"%s\" / \"%s\" / \"%s\" / \"%s\"\n", e1, e2, e3, e4, e5, e6, e7);
+  check("pumpkin: broken levels are refused with a reason", e1 && e2 && e3 && e4 && e5 && e6 && e7 && !strcmp(e3, "the goal cannot be reached from the start"));
+  check("pumpkin: a tiny level with a short row is fine", !appMazePut(1, "TINY|S.G") && appMazeGet(1, out, sizeof(out)) && !strncmp(out, "TINY|S.G..", 10));
+  pmSv.stars[PM_LEVELS] = 2; pmSv.best[PM_LEVELS] = 123;
+  std::string ren = "RENAMED" + want.substr(want.find('|'));
+  bool kept = !appMazePut(0, ren.c_str()) && pmSv.stars[PM_LEVELS] == 2;
+  std::string changed = "NEW" + want.substr(want.find('|'));
+  changed[changed.size() - 3 * (PM_W + 1) - 2] = '#';           // one tile more wall, low on the right
+  bool reset = !appMazePut(0, changed.c_str()) && pmSv.stars[PM_LEVELS] == 0;
+  bool gone = !appMazePut(1, "") && !appMazeGet(1, out, sizeof(out));
+  check("pumpkin: renaming keeps the record, a changed level starts fresh, an empty text empties the slot", kept && reset && gone);
+  pmPutLevel(0, "MY CRYPT", OWN);
+  int lost = 0;
+  long st = pmbRun(PM_LEVELS, lost);
+  printf("      own level: %.1f s, %d lost\n", st / 100.0, lost);
+  check("pumpkin: the own level plays (key, door, arrows, rune, a moving pit)", st > 0);
+  appMazePut(7, "");
+  // QR codes: the same modules as a reference encoder (segno, padded to the byte as the standard says) with the same mask
+  struct QrGold { const char *text; uint8_t mask, n; const char *rows[37]; };
+  static const QrGold QG[] = {
+    { "WIFI:T:WPA;S:MiniArcade-AB12;P:12345678;;", 0, 29, { "1fc4367f","10487e41","1752405d","1749325d","17493e5d","10476f41","1fd5557f","0012fe00","1df1c1c4","1dbb496e","0757442f","1f3d8ceb","0fd6c1fb","0eb6498e","0a4cdda3","0dbac830","097dccec","09af4de2","1357c437","0da1ee29","14c24dfb","00160f1c","1fdc9d53","10520910","175d2dfc","174f8423","175b5c39","1059ef62","1fda431f" } },
+    { "WIFI:T:WPA;S:MiniArcade-AB12;P:12345678;;", 5, 29, { "1fce9c7f","1043d041","174e315d","1756cd5d","17554f5d","104cc141","1fd5557f","00095000","18edb018","0204b691","004b35e8","05962251","057c6b51","141de734","0d50ac64","120537cf","0e61bd2b","1304e358","19fd6e9d","170a4093","13de3dfc","0019f113","1fd0ed54","1059a71a","174787f6","17442a99","17472dfe","1056109d","1fd632d8" } },
+    { "http://192.168.4.1/maze", 6, 25, { "1fd397f","104cc41","1745c5d","1741f5d","174ac5d","1045d41","1fd557f","0016900","1b4e641","0729f9e","1bd62f9","0abf69f","0eeb1c1","1c30e32","1cc3b8f","1002115","17649f6","0013f12","1fc2559","1049d12","17557fb","175846b","1749017","10546f7","1fd1f49" } },
+    { "WIFI:T:WPA;S:MiniArcade-AB12;P:a very long password with spaces\\;semicolon 1234567;;", 3, 37, { "1fd5efa07f","104f986541","175c17695d","175d6a0e5d","17535a135d","1046bb5541","1fd555557f","00053c1600","1e57bea69d","1f95efe0a3","046794f0b0","0fa0343d65","01c9594fc4","170f6291f5","1ad6875000","1f1a46f093","00d576fb0b","0d0478374c","094cf8c257","1d06fc022b","014ccd90be","06b00d2029","1c64443530","0027e0493e","1f523d1fd8","0f96aa1ef2","0ee9434d8e","11a9b590fa","066611f9fc","0011b53112","1fcf251f57","10451f631a","17438a85fe","1751c3f84b","17539038fc","10503279f4","1fd57c5cd7" } } };
+  static uint8_t qb[QR_BUF];
+  bool qok = true;
+  for (const QrGold &q : QG) {
+    uint8_t n = qrMake(q.text, qb, q.mask);
+    if (n != q.n) { qok = false; printf("      QR \"%s\": %u modules, want %u\n", q.text, n, q.n); continue; }
+    for (int y = 0; y < n; y++) {
+      unsigned long long v = strtoull(q.rows[y], NULL, 16);
+      for (int x = 0; x < n; x++)
+        if ((bool)(qb[y * n + x] & 1) != (bool)(v >> (n - 1 - x) & 1)) { if (qok) printf("      QR \"%s\" mask %u: row %d differs\n", q.text, q.mask, y); qok = false; }
+    }
+  }
+  uint8_t na = qrMake(QG[0].text, qb);
+  std::string tooLong(110, 'x');
+  check("pumpkin: QR codes match the reference encoder, too long a text is refused", qok && na == 29 && !qrMake(tooLong.c_str(), qb));
+  // pictures of a few levels
+  pmLoad(11); pm->x = pmMid(9); pm->y = pmMid(3); pm->steps = 1234; pmShot("pumpkin_l12");
+  pmLoad(14); pm->x = pmMid(8) + 3 * 256; pm->y = pmMid(6); pm->steps = 2345; pm->keys = 1; pm->g[1][18] = PT_FLOOR; pmOpenDoors(); pmShot("pumpkin_l15");
+  free(pm); pm = NULL;
+}
+
+// on the screen: the bot through the tilt (accelerometer) or through the arrow keys
+static bool pmbKeys = false;
+static int  pmbLevelsWon = 0, pmbOkAt = 0, pmbStop = 0, pmbLostMax = 0;
+static uint32_t pmbAcc[2] = { 0, 0 };
+static void pumpkinBot(uint32_t t) {
+  if (!pm) { simAcc[0] = simAcc[1] = 0; return; }
+  static uint8_t lastSt = PS_ROLL;
+  if (pm->st == PS_WON && lastSt != PS_WON) {
+    pmbLevelsWon++; pmbOkAt = (int)t + 2300;
+    if (pmbLevelsWon == 1) captureMs.push_back(t + 2150);         // the box with its stars
+    if (pmbStop && pmbLevelsWon >= pmbStop) simEnd = t + 2500;  // the box with the stars, then the end
+  }
+  if (pm->lost > pmbLostMax) pmbLostMax = pm->lost;
+  if (pmbTrap >= 0 && pm->lost) pmbTrap = -1;                     // fell in on purpose: now to the goal
+  lastSt = pm->st;
+  if (pmbOkAt && (int)t >= pmbOkAt) { botPress(t, OK, 90); pmbOkAt = 0; return; }
+  if (botBusy(t)) return;
+  int16_t ax = 0, ay = 0;
+  if (tiltGame && pm->steps) pmbAxis(ax, ay);                     // not while the level's name shows
+  if (!pmbKeys) {                                                 // the accelerometer, as tilt.h reads it
+    const int dead = 4100 * 4 / 10, full = 4100 * 2;
+    simAcc[0] = (int16_t)(ax ? (ax > 0 ? 1 : -1) * (dead + abs(ax) * (full - dead) / 256) : 0);
+    simAcc[1] = (int16_t)(ay ? (ay > 0 ? 1 : -1) * (dead + abs(ay) * (full - dead) / 256) : 0);
+    return;
+  }
+  uint8_t m = 0;                                                  // the keys, pulsed as often as the axis asks
+  int16_t a[2] = { ax, ay };
+  for (int k = 0; k < 2; k++) {
+    pmbAcc[k] += (uint32_t)abs(a[k]);
+    if (pmbAcc[k] >= 256) { pmbAcc[k] -= 256; m |= (uint8_t)(k ? (a[k] > 0 ? DN : UP) : (a[k] > 0 ? RT : LT)); }
+  }
+  applyMask(m);
+}
+
+// Pumpkin Maze through the phone editor: the hotspot opens, a level comes in, the hotspot
+// closes, the level is played; then the same in the home WLAN (no hotspot of its own)
+static int      pmeStage = 0, pmeDn = 0;
+static uint32_t pmeT = 0;
+static NetState pmeNetIn = NET_OFF, pmeNetOut = NET_PLAY, pmeHomeOut = NET_OFF;
+static const char *const PME_LEVEL[PM_H] = {
+  "####################", "#S....#.....O......#", "#.....#..c.....c...#", "#..O..#.....C......#", "#.....D.....###....#",
+  "#.....#...........k#", "#####.#####........#", "#...........iiii...#", "#..c........iiii...#", "#.......U...iiii.O.#",
+  "#..*........mmmm...#", "#G..........mmmm...#", "####################" };
+static void pmEditorBot(uint32_t t) {
+  if (pmeStage != 3 && botBusy(t)) return;                        // a press still running
+  switch (pmeStage) {
+  case 0:                                                         // the phone saves a level while the editor shows
+    if (t < pmeT) return;
+    pmeNetIn = netState();
+    pmPutLevel(0, "GRAVE RUN", PME_LEVEL);
+    pmeStage = 1; pmeT = t + 1300;
+    return;
+  case 1: if (t >= pmeT) { botPress(t, OK, 80); pmeStage = 2; pmeT = t + 700; } return;      // done
+  case 2: if (t >= pmeT) { pmeNetOut = netState(); botPress(t, OK, 80); pmeStage = 3; } return;   // play it
+  case 3:
+    pumpkinBot(t);
+    if (pmbLevelsWon >= 1 && !pmbOkAt && !botBusy(t)) { pmeStage = 4; pmeT = t + 1500; }
+    return;
+  case 4: if (t >= pmeT) { netConnect(); pmeDn = 0; pmeStage = 5; } return;                   // now in the home WLAN
+  case 5:
+    if (botBusy(t)) return;
+    if (pmeDn < PM_OWN) { botPress(t, DN, 60); pmeDn++; } else { botPress(t, OK, 80); pmeStage = 6; pmeT = t + 2000; }
+    return;
+  case 6: if (t >= pmeT && !botBusy(t)) { botPress(t, OK, 80); pmeStage = 7; pmeT = t + 800; } return;
+  case 7: if (t >= pmeT) { pmeHomeOut = netState(); simEnd = t + 300; pmeStage = 8; } return;
+  }
+}
+
+// ---------------- the translations ----------------
+static uint32_t sprSwitch = 0, sprBack = 0;      // "sprache": when the language was switched there and back
+static uint16_t sprLangSaved = 0;
+/* Every TR("English", "Deutsch") in main/: the same placeholders in both,
+   only letters the fonts have, and a German text longer than its English
+   one must have been drawn in German somewhere - by the scenarios run with
+   SPRACHE=de or by "sprache" itself - where it was checked against the
+   screen's edges. Shorter ones fit wherever the English one fits.      */
+struct TrPair { std::string en, de, at; };
+static std::string trUnescape(const std::string &q) {
+  std::string o;
+  for (size_t i = 0; i < q.size(); i++) {
+    if (q[i] == '\\' && i + 1 < q.size()) { i++; o += q[i] == 'n' ? '\n' : q[i]; }
+    else o += q[i];
+  }
+  return o;
+}
+static std::vector<TrPair> trPairs() {
+  std::vector<TrPair> v;
+  static const std::regex re("TR\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*,\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)");
+  DIR *d = opendir("../main");
+  if (!d) return v;
+  std::vector<std::string> files;
+  while (dirent *e = readdir(d)) {
+    std::string n = e->d_name;
+    if (n.size() > 2 && (n.compare(n.size() - 2, 2, ".h") == 0 || (n.size() > 4 && n.compare(n.size() - 4, 4, ".cpp") == 0))) files.push_back(n);
+  }
+  closedir(d);
+  for (const std::string &n : files) {
+    std::ifstream in("../main/" + n);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string src = ss.str();
+    for (std::sregex_iterator it(src.begin(), src.end(), re), end; it != end; ++it)
+      v.push_back({ trUnescape((*it)[1]), trUnescape((*it)[2]), n });
+  }
+  return v;
+}
+static int trLetters(const std::string &s) { int n = 0; for (unsigned char c : s) if ((c & 0xC0) != 0x80) n++; return n; }
+// the placeholders of a format, in order ("%%" is a letter); spec = true: one of them starts at i
+static size_t trSpecEnd(const std::string &s, size_t i) {
+  size_t k = i + 1;
+  while (k < s.size() && strchr("-+ #0123456789.*hlLqjzt", s[k])) k++;
+  return k < s.size() ? k + 1 : k;
+}
+static std::string trSpecs(const std::string &s) {
+  std::string o;
+  for (size_t i = 0; i < s.size(); i++)
+    if (s[i] == '%') { if (i + 1 < s.size() && s[i + 1] == '%') { i++; continue; } size_t k = trSpecEnd(s, i); o += s.substr(i, k - i) + " "; i = k - 1; }
+  return o;
+}
+static bool trGlyphsOk(const std::string &s) {                   // ASCII or ä ö ü Ä Ö Ü ß
+  for (size_t i = 0; i < s.size(); i++) {
+    unsigned char c = (unsigned char)s[i];
+    if (c >= 32 && c <= 126) continue;
+    if (c == 0xC3 && i + 1 < s.size() && strchr("\xA4\xB6\xBC\x84\x96\x9C\x9F", s[i + 1])) { i++; continue; }
+    return false;
+  }
+  return true;
+}
+// the German text as drawn: every placeholder can be anything
+static bool trDrawn(const std::string &de, const std::set<std::string> &drawn) {
+  std::string pat, lit, longest;
+  for (size_t i = 0; i < de.size(); i++) {
+    if (de[i] == '%' && i + 1 < de.size() && de[i + 1] != '%') {
+      size_t k = trSpecEnd(de, i);
+      pat += ".*"; if (lit.size() > longest.size()) longest = lit; lit.clear(); i = k - 1; continue;
+    }
+    if (de[i] == '%') i++;
+    if (strchr("\\^$.|?*+()[]{}", de[i])) pat += '\\';
+    pat += de[i]; lit += de[i];
+  }
+  if (lit.size() > longest.size()) longest = lit;
+  std::regex re(pat);
+  for (const std::string &d : drawn)
+    if (d.find(longest) != std::string::npos && std::regex_search(d, re)) return true;
+  return false;
+}
+static void langTable() {
+  std::vector<TrPair> v = trPairs();
+  std::set<std::string> drawn = deTexts;
+  std::ifstream in("frames/lang_de.txt");
+  for (std::string l; std::getline(in, l); ) drawn.insert(l);
+  int longer = 0, bad = 0, unseen = 0;
+  for (const TrPair &p : v) {
+    if (trSpecs(p.en) != trSpecs(p.de)) { printf("      %s: placeholders differ: '%s' / '%s'\n", p.at.c_str(), p.en.c_str(), p.de.c_str()); bad++; }
+    if (!trGlyphsOk(p.de)) { printf("      %s: a letter the font lacks: '%s'\n", p.at.c_str(), p.de.c_str()); bad++; }
+    if (trLetters(p.de) <= trLetters(p.en)) continue;
+    longer++;
+    if (!trDrawn(p.de, drawn)) { printf("      %s: longer in German, never drawn: '%s'\n", p.at.c_str(), p.de.c_str()); unseen++; }
+  }
+  printf("      %zu translations, %d longer in German, %zu German texts drawn\n", v.size(), longer, drawn.size());
+  check("every translation: same placeholders, letters the font has", v.size() > 200 && !bad);
+  check("every German text longer than its English one was drawn and stayed on the screen", !unseen);
+}
+
 int main(int argc, char **argv) {
   scenario = argc > 1 ? argv[1] : "menu";
   srand(1);
@@ -2831,6 +3360,8 @@ int main(int argc, char **argv) {
   simNvsU16["pset"] = 3; simNvsU16["sset"] = 1; simNvsU16["snd"] = SND; simNvsU16["bat"] = BAT;
   for (int i = 0; i < 4; i++) { simNvsU16["p" + std::to_string(i)] = KEYS[i]; simNvsU16["a" + std::to_string(i)] = 1; }
   simNvsU16["p4"] = 255;
+  simDe = getenv("SPRACHE") && !strcmp(getenv("SPRACHE"), "de");
+  if (simDe) { simNvsU16["lang"] = 1; framePre = "de_"; }
   const uint32_t M = 1600;                                      // the menu is up by then
   if (scenario == "menu") {
     simEnd = 6000; captureAt = { 60 };
@@ -3015,20 +3546,27 @@ int main(int argc, char **argv) {
     press(2500, RT, 400); press(3300, RT, 600);
     simEnd = 4500;
   } else if (scenario == "tilt") {
-    // settings -> tilt control on: sensor found, axes learned; level saved;
+    // settings -> tilt control on: sensor found, all four ways learned (LEFT, UP and DOWN
+    // each first tilted a wrong way and asked again; LEFT not as far as RIGHT); level saved;
     // then Snake: the pause menu offers a new level, tilting steers
     simGyro = true; simNvsU16["snd"] = 255;                      // GPIO7 is the gyroscope's here
     press(M, UP); press(M + 400, OK, 80);
     for (int i = 0; i < 9; i++) press(M + 800 + 220 * i, DN);
     press(M + 2900, RT);
-    accScript = { { M + 5000, 8000, 0 }, { M + 6000, 0, 0 }, { M + 7500, 0, -8000 }, { M + 8500, 0, 0 },
-                  { M + 20000, 0, -8000 } };                     // the last one: tilt up in the game
-    press(M + 9800, DN); press(M + 10200, OK, 80);               // "tilt level": save it
-    press(M + 15200, OK, 900);                                   // leave the settings
-    press(M + 16500, DN); press(M + 16900, OK, 80);              // Snake
-    press(M + 18000, OK, 900);                                   // pause ...
-    press(M + 19500, OK, 80);                                    // ... continue
-    simEnd = M + 21000;
+    accScript = { { M + 5000, 8000, 0 }, { M + 6000, 0, 0 },     // RIGHT
+                  { M + 7500, 0, -8000 }, { M + 8500, 0, 0 },    // LEFT asked, away given: once more
+                  { M + 12000, -6500, 0 }, { M + 13000, 0, 0 },  // LEFT, not as far
+                  { M + 14500, 8000, 0 }, { M + 15500, 0, 0 },   // UP asked, right given: once more
+                  { M + 19000, 0, -8000 }, { M + 20000, 0, 0 },  // UP (away)
+                  { M + 21500, 0, -8000 }, { M + 22500, 0, 0 },  // DOWN asked, away again: once more
+                  { M + 26000, 0, 7000 }, { M + 27000, 0, 0 },   // DOWN
+                  { M + 40000, 0, -8000 } };                     // the last one: tilt up in the game
+    press(M + 29800, DN); press(M + 30200, OK, 80);              // "tilt level": save it
+    press(M + 35200, OK, 900);                                   // leave the settings
+    press(M + 36500, DN); press(M + 36900, OK, 80);              // Snake
+    press(M + 38000, OK, 900);                                   // pause ...
+    press(M + 39500, OK, 80);                                    // ... continue
+    simEnd = M + 41000;
     setenv("GRAB", "TILT SETUP", 1);
   } else if (scenario == "sdcard") {
     // a card on GPIO20 is found at the first start; the settings show it
@@ -3098,6 +3636,36 @@ int main(int argc, char **argv) {
     uint32_t t = openGameNamed("Fruit Pot", M); simEnd = t + 200000;
     pzStart = t + 600; pzBot = fruitBot; captureMs = { t + 40000, t + 90000 };
     setenv("GRAB", "POT FULL!", 1);
+  } else if (scenario == "pumpkin") {                           // tilt: the first levels rolled through, candies and all
+    simGyro = true; simNvsU16["snd"] = 255;                      // GPIO7 is the gyroscope's here
+    simNvsU16["tilt"] = 1; simNvsU16["gsda"] = 21; simNvsU16["gscl"] = 8; simNvsU16["gax"] = 0x8100;
+    uint32_t t = openGameNamed("Pumpkin Maze", M); simEnd = t + 200000;
+    press(t + 700, OK, 80);                                      // level 1
+    simBot = pumpkinBot; botFrom = t + 900;
+    pmbCandy = true; pmbStop = 3;
+    captureMs = { t + 400, t + 1500, t + 4500 };
+  } else if (scenario == "pumpkinkeys") {                       // keys: level 3, first into a pit on purpose, then to the goal
+    PmSave sv;
+    memset(&sv, 0, sizeof(sv)); sv.ver = 1; sv.open = 2;
+    simNvsBlob["PMZsv"] = std::string((const char *)&sv, sizeof(sv));
+    uint32_t t = openGameNamed("Pumpkin Maze", M); simEnd = t + 120000;
+    press(t + 1300, OK, 80);                                     // the list starts at the level reached
+    simBot = pumpkinBot; botFrom = t + 1500;
+    pmbKeys = true; pmbTrap = 1 * PM_W + 7;                      // the pit right of the start
+    pmbStop = 1;
+    captureMs = { t + 2000 };
+  } else if (scenario == "pmeditor") {                          // the phone editor on the own hotspot, the level played
+    uint32_t t = openGameNamed("Pumpkin Maze", M); simEnd = t + 200000;
+    for (int i = 0; i < 3 + PM_OWN; i++) press(t + 700 + 250 * i, DN);   // to the own levels, down to the editor
+    press(t + 700 + 250 * (3 + PM_OWN) + 300, OK, 80);
+    uint32_t e = t + 700 + 250 * (3 + PM_OWN) + 300;
+    simBot = pmEditorBot; botFrom = e + 400; pmeT = e + 1800;
+    pmbKeys = true;
+    captureMs = { e + 1500, e + 2600, e + 4200 };
+  } else if (scenario == "pmlogic") {
+    printf("== %s\n", scenario.c_str());
+    pumpkinLogic();
+    return failures ? 1 : 0;
   } else if (pzLogic()) {
     printf("== %s\n", scenario.c_str());
     printf("%s\n", failures ? "### FAILURES ###" : "   all checks passed");
@@ -3242,6 +3810,109 @@ int main(int argc, char **argv) {
     printf("== %s\n", scenario.c_str());
     chessProtocol();
     return failures ? 1 : 0;
+  } else if (scenario == "sprache") {
+    // settings -> language Deutsch, at once and saved; every settings line and the setup
+    // screens behind them in German, the library, the pause menu, the Pumpkin Maze list
+    // and the TV's screens too; then back to English
+    simNvsU16["tilt"] = 1; simNvsU16["gax"] = 0x8100;          // tilt control on, but no sensor
+    const char URL[] = "https://tv.example.de";                 // a TV server, not paired yet
+    simNvsBlob["url"] = std::string(URL, sizeof(URL));
+    PmSave sv;                                                   // Pumpkin Maze: three levels played
+    memset(&sv, 0, sizeof(sv)); sv.ver = 1; sv.open = 2;
+    for (int i = 0; i < 3; i++) { sv.stars[i] = 2; sv.best[i] = (uint16_t)(150 + i * 40); }
+    simNvsBlob["PMZsv"] = std::string((const char *)&sv, sizeof(sv));
+    press(M, UP); press(M + 400, OK, 80);                        // settings
+    uint32_t t = M + 900;
+    press(t, UP); press(t + 250, UP); press(t + 500, RT);        // the last line but one: language
+    sprSwitch = t + 500;
+    simAt.push_back({ t + 800, [] { sprLangSaved = simNvsU16.count("lang") ? simNvsU16["lang"] : 0; } });
+    captureMs = { t + 800 };
+    t += 1100;
+    for (int i = 0; i < 21; i++) {                               // every line once, back at the language
+      press(t, DN);
+      if (i == 8 || i == 9) { press(t + 100, RT); press(t + 200, RT); }   // red/blue, colours: changed and back
+      if (i == 12) { press(t + 100, LT); press(t + 200, RT); }            // tilt: weak, normal again
+      t += 300;
+    }
+    captureMs.push_back(t - 300 * 15);                           // the first lines
+    t += 300;
+    press(t, UP); press(t + 250, OK, 80); press(t + 1100, OK, 900);              // firmware version, back
+    t += 2400;
+    press(t, UP); press(t + 250, OK, 80); press(t + 1100, OK, 900);              // tv server: the keyboard, cancelled
+    t += 2400;
+    uint32_t w = t + 250;                                        // wlan and update
+    press(t, UP); press(w, OK, 80);
+    press(w + 500, DN); press(w + 750, DN); press(w + 1000, OK, 80);             // check for update: a newer one
+    captureMs.push_back(w + 1500);
+    simAt.push_back({ w + 1700, [] { simJob = JOB_UPDATING; } });
+    simAt.push_back({ w + 2300, [] { simJob = JOB_IDLE; } });
+    simAt.push_back({ w + 2600, [] { simJob = JOB_ASKING; } });  // a firmware from the web page: no
+    press(w + 3200, LT);
+    simAt.push_back({ w + 3600, [] { simRestoreAsk = true; simJob = JOB_IDLE; } });   // a backup from the phone: no
+    press(w + 4200, LT);
+    press(w + 4600, DN); press(w + 4900, OK, 80);                // the phone hotspot
+    press(w + 5400, RT); press(w + 5800, RT); press(w + 6100, LT); press(w + 6500, OK, 80);
+    simAt.push_back({ w + 6800, [] { simNoNet = true; } });      // joining a network that is not there
+    press(w + 7000, UP); press(w + 7250, UP); press(w + 7500, UP); press(w + 7800, OK, 80);
+    simAt.push_back({ w + 8400, [] { simNet = NET_FAILED; simNoNet = false; } });
+    press(w + 9000, DN); press(w + 9300, OK, 80);                // set up with the phone
+    press(w + 9900, OK, 900);                                    // hold OK: out of the page
+    t = w + 11200;
+    simAt.push_back({ t, [] { runClock = 40; } });               // too slow for the WLAN
+    press(t + 200, OK, 80); press(t + 1000, OK, 900);
+    simAt.push_back({ t + 2200, [] { runClock = 160; } });
+    t += 2400;
+    simAt.push_back({ t, [] { tftPins.miso = -1; } });           // sd card: the display's SDO not wired
+    press(t, UP); press(t + 250, OK, 80);
+    simAt.push_back({ t + 4500, [] { tftPins.miso = 9; simSd = true; } });
+    press(t + 4700, OK, 80);                                     // ... then a card on GPIO20
+    t += 8000;
+    press(t, UP); press(t + 250, OK, 80); press(t + 900, LT); press(t + 1200, DN); press(t + 1500, OK, 900);   // battery
+    t += 2800;
+    press(t, UP); press(t + 250, OK, 80);                        // sound: no pin beeps
+    for (int i = 0; i < 4; i++) press(t + 800 + 300 * i, RT);
+    t += 800 + 300 * 4 + 2000;
+    press(t, UP); press(t + 250, UP); press(t + 500, UP); press(t + 750, OK, 80);   // tilt level: no sensor
+    t += 2950;
+    press(t, UP); press(t + 250, OK, 80);                        // tilt control: set up again, no sensor
+    t += 3600;
+    for (int i = 0; i < 5; i++) press(t + 250 * i, UP);          // screen speed: slower, then faster and kept
+    press(t + 1400, LT); press(t + 1800, RT); press(t + 3000, OK, 80);
+    t += 3600;
+    press(t, OK, 900);                                           // hold OK: the library
+    captureMs.push_back(t + 1400);
+    press(t + 1600, DN); press(t + 2000, OK, 80);                // Snake ...
+    press(t + 3200, OK, 900);                                    // ... paused
+    captureMs.push_back(t + 4600);
+    press(t + 4900, DN); press(t + 5200, DN); press(t + 5500, OK, 80);   // quit to the menu
+    t = openGameNamed("Pumpkin Maze", t + 6300);                // the level list, the own levels
+    captureMs.push_back(t + 800);
+    for (int i = 0; i < 3 + PM_OWN; i++) press(t + 1000 + 250 * i, DN);
+    t += 1000 + 250 * (3 + PM_OWN) + 300;
+    simAt.push_back({ t, [] { runClock = 40; } });               // the phone editor: too slow for the WLAN
+    press(t + 200, OK, 80);
+    simAt.push_back({ t + 4000, [] { runClock = 160; } });
+    press(t + 4200, OK, 900);                                    // hold OK: the library
+    t += 5600;
+    for (int i = 0; i < 3; i++) press(t + 250 * i, DN);          // TV: no WLAN saved
+    simAt.push_back({ t + 700, [] { simNoConfig = true; } });
+    press(t + 900, OK, 80); press(t + 1900, OK, 80);
+    simAt.push_back({ t + 2400, [] { simNoConfig = false; simNoNet = true; } });   // ... the network not there
+    press(t + 2600, OK, 80);
+    simAt.push_back({ t + 3200, [] { simNet = NET_FAILED; simNoNet = false; } });
+    press(t + 3800, OK, 900);
+    simAt.push_back({ t + 5000, [] { simTvDown = true; } });     // ... the server not answering
+    press(t + 5200, OK, 80); press(t + 6400, OK, 900);
+    simAt.push_back({ t + 7600, [] { simTvDown = false; strcpy(tvTok, "TOKEN-1234567890-abcdefghijklmnop"); } });
+    press(t + 7800, OK, 80);                                     // ... paired: the list, then its setup
+    press(t + 9800, LT);
+    captureMs.push_back(t + 10400);
+    press(t + 10800, OK, 900);
+    t += 12200;
+    press(t, DN); press(t + 400, OK, 80);                        // settings again: back to English
+    press(t + 900, UP); press(t + 1150, UP); press(t + 1400, LT);
+    sprBack = t + 1400;
+    simEnd = t + 2400;
   } else if (scenario == "online") {
     // the lobby: rename, a friend, Chess with a console that has none, a "no",
     // 4 wins, ANNA's challenge to Tic Tac Toe accepted, another one declined, back
@@ -3266,6 +3937,15 @@ int main(int argc, char **argv) {
     setup();
     for (;;) loop();
   } catch (SimEnd &) {}
+  if (simDe) {                                                  // German: the screen's edges only, the texts for "sprache"
+    check("frames were drawn", frames > 20);
+    for (const std::string &o : deOver) printf("      off the screen: %s\n", o.c_str());
+    check("German: the menus were drawn, no text runs off the screen", deOver.empty() && !deTexts.empty());
+    FILE *f = fopen("frames/lang_de.txt", "a");
+    if (f) { for (const std::string &x : deTexts) if (!strchr(x.c_str(), '\n')) fprintf(f, "%s\n", x.c_str()); fclose(f); }
+    printf("   %zu German texts, %ld frames, %.1f s simulated\n", deTexts.size(), frames, clockUs / 1e6);
+    return failures ? 1 : 0;
+  }
 
   check("frames were drawn", frames > 20);
   check("the picture uses many colours", colsInFrame() >= 6);
@@ -3517,16 +4197,47 @@ int main(int argc, char **argv) {
     check("palace: the score counts the levels played", overShown && palScore > 300 && palScore < 300 + 450);
   }
   if (scenario == "wizard")    check("key wizard shown", frames > 20);
+  if (scenario == "sprache") {
+    auto after = [](const char *x, uint32_t from) { auto it = textAt.find(x); return it != textAt.end() && it->second > from; };
+    for (const std::string &o : deOver) printf("      off the screen: %s\n", o.c_str());
+    check("language: English first, Deutsch at once, saved", seen("language     English") && after("Sprache      Deutsch", sprSwitch) &&
+          after("EINSTELLUNGEN", sprSwitch) && sprLangSaved == 1);
+    check("German settings and setup screens", seen("Helligkeit   (LED an 3V3)") && seen("Kippstärke   normal") && seen("zurück zu den Spielen") &&
+          seen("WLAN EINRICHTEN") && seen("HANDY-HOTSPOT") && seen("9.3 installieren") && seen("SICHERUNG") && seen("KEINE KARTE") &&
+          seen("AKKU") && seen("KEIN SUMMER") && seen("KIPPEN IST AUS") && seen("KEIN SENSOR") && seen("BILD 40 MHz") &&
+          seen("SD-KARTE BEREIT") && seen("Kippen       an (kein Sensor)"));
+    check("German Pumpkin Maze list and TV screens", seen("Bestzeit 23.0 s") && seen("+ Level-Editor am Handy") && seen("kein WLAN") &&
+          seen("keine Antwort") && seen("< Einrichten >") && seen("PUMPKIN MAZE"));
+    check("German library and pause menu, the game names stay", seen("Einstellungen") && seen("REKORD") && seen("zum Menü") &&
+          seen("Snake") && seen("SNAKE"));
+    check("German: nothing ran off the screen", deOver.empty() && deTexts.size() > 100);
+    check("back to English, saved", after("language     English", sprBack) && after("SETTINGS", sprBack) && simNvsU16["lang"] == 0 && cfgLang == 0);
+    langTable();
+  }
   if (scenario == "tilt") {
     printf("   tilt: on %d ready %d axes %02x %02x pins %d/%d\n", cfgTilt, gyroReady, tiltAx[0], tiltAx[1], gyroSda, gyroScl);
     check("sensor found on GPIO20 / GPIO7", gyroReady && gyroSda == 20 && gyroScl == 7);
     check("right = x, away = -y", tiltAx[0] == 0x00 && tiltAx[1] == 0x81);
+    printf("   full tilt: right %d left %d up %d down %d\n", tiltFull[0], tiltFull[1], tiltFull[2], tiltFull[3]);
+    check("four ways learned, wrong ways asked again", seen("LEFT did not match RIGHT") && seen("UP matched RIGHT/LEFT") &&
+          seen("DOWN did not match UP") && seen("tilt DOWN (to you)") &&
+          tiltFull[0] == 8000 && tiltFull[1] == 6500 && tiltFull[2] == 8000 && tiltFull[3] == 7000 && simNvsBlob.count("gful"));
     check("tilt control switched on", cfgTilt);
     check("level saved in the settings", seen("LEVEL SAVED") && cfgTiltFix);
     check("pause menu offers a new level", seen("tilt: level here"));
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
     printf("   stepless: up %d, left-right %d\n", keyAxis(B_DOWN, B_UP), keyAxis(B_LEFT, B_RIGHT));
     check("stepless tilt: nearly full up, nothing sideways", keyAxis(B_DOWN, B_UP) > 200 && keyAxis(B_LEFT, B_RIGHT) == 0);
+    // each side as far as it went when learned answers the same; LEFT (learned shorter) answers more for the same tilt
+    tiltGame = true;
+    auto an = [](int16_t x, uint8_t k) { simAcc[0] = x; simAcc[1] = 0; clockUs += 30000; tiltUpdate(); return tiltAn[k]; };
+    int r8 = an(8000, B_RIGHT), l65 = an(-6500, B_LEFT), r4 = an(4000, B_RIGHT), l4 = an(-4000, B_LEFT);
+    printf("   stepless: right 8000 -> %d, left 6500 -> %d, right 4000 -> %d, left 4000 -> %d\n", r8, l65, r4, l4);
+    check("each side scaled by its own full tilt", abs(r8 - l65) <= 2 && l4 > r4 + 20);
+    simNvsBlob.erase("gful");                                    // a setup from before the four ways: both sides the same
+    tiltLoad();
+    int r4o = an(4000, B_RIGHT), l4o = an(-4000, B_LEFT);
+    check("an older setup (two axes, no full tilts) still works, the same on both sides", tiltAx[0] == 0x00 && tiltAx[1] == 0x81 && r4o == l4o && r4o > 50);
   }
   if (scenario == "sdcard") {
     printf("   sdcs %u, card %d\n", simNvsU16["sdcs"], simSdIn);
@@ -3595,7 +4306,30 @@ int main(int argc, char **argv) {
     check("RIGHT on its own pin", BTN_PIN[3] == 6 && !BTN_MV[3]);
     check("LEFT+RIGHT opened a game", seen("SNAKE"));
   }
-  check("sounds played", scenario == "wizard" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
+  if (scenario == "pumpkin" || scenario == "pumpkinkeys" || scenario == "pmeditor") {
+    printf("      levels won %d, waits for moving pits %d, panel: %.0f blocks of 32 px a frame while rolling (of 2400)\n",
+           pmbLevelsWon, pmbWaits, pmbFrames ? (double)pmbBlocks / pmbFrames : 0.0);
+    check("pumpkin: few parts of the picture change while rolling (under 10 %)", pmbFrames > 100 && pmbBlocks < pmbFrames * 240);
+  }
+  if (scenario == "pumpkin") {
+    printf("      stars %u %u %u, open %u, best %u\n", pmSv.stars[0], pmSv.stars[1], pmSv.stars[2], pmSv.open, simNvsU16["hPMZ"]);
+    check("pumpkin: tilt rolled through levels 1-3, the title cards and stars shown", pmbLevelsWon >= 3 && seen("FIRST ROLL") && seen("CANDY LANE") && seen("LEVEL CLEAR!") && seen("tilt the console to roll"));
+    check("pumpkin: progress kept in flash (stars, times, the next level open, best = stars)",
+          simNvsBlob.count("PMZsv") && pmSv.open >= 3 && pmSv.stars[0] >= 2 && pmSv.best[0] > 0 && simNvsU16["hPMZ"] == pmStarSum());
+  }
+  if (scenario == "pumpkinkeys") {
+    printf("      pumpkins lost on the way: %d\n", pmbLostMax);
+    check("pumpkin: keys roll it, a pit swallows it (a pumpkin lost), then the goal", pmbLevelsWon >= 1 && seen("PIT PARADE") && seen("hold the arrow keys to roll") && pmbLostMax >= 1);
+  }
+  if (scenario == "pmeditor") {
+    printf("      hotspot when the level came: %d, after leaving: %d; home WLAN after leaving: %d\n", pmeNetIn, pmeNetOut, pmeHomeOut);
+    check("pumpkin editor: the own hotspot opens with name, password and link, a QR code", pmeNetIn == NET_PLAY && seen("MiniArcade-AB12") && seen("12345678") &&
+          seen("192.168.4.1/maze") && seen("QR: join the WLAN"));
+    check("pumpkin editor: the level from the phone shows at once, the hotspot closes on leaving", seen("saved: GRAVE RUN") && pmeNetOut == NET_OFF);
+    check("pumpkin editor: the own level is listed and played", seen("GRAVE RUN") && pmbLevelsWon >= 1 && pmSv.stars[PM_LEVELS] >= 1 && seen("OWN LEVEL 1"));
+    check("pumpkin editor: in the home WLAN the link has its address and the WLAN stays on", seen("192.168.1.50/maze") && pmeHomeOut == NET_ONLINE);
+  }
+  check("sounds played", scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }

@@ -86,6 +86,9 @@ const char *appSet(const char *key, const char *val);        // NULL = done, els
 void        appScreen(uint8_t *out);                         // 1024 bytes, SSD1306 page order
 const char *appLevel(uint8_t slot, const char *text);        // NULL = saved, else why not
 int         appLevelGet(uint8_t slot, char *out, int max);   // "" when the slot is free
+// Pumpkin Maze levels (colour console only; the OLED console answers "none")
+int         appMazeGet(int slot, char *out, int max);         // slot < 0: the list as JSON, else the level ("" = free)
+const char *appMazePut(uint8_t slot, const char *text);       // NULL = saved ("" empties the slot), else why not
 void        appKey(uint8_t key, bool down);                  // runs in the web task
 
 bool        phoneAsking();        // a backup came in: restore it? (answered on the WLAN page)

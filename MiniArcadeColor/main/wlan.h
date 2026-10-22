@@ -53,9 +53,9 @@ static void wlanNeedsClock() {
   btnClear();
   while (poll()) {
     wlanTitle("WLAN");
-    gfx.center(80, "WLAN needs 80 MHz or more", C::WHITE);
-    gfx.center(120, "OK = switch to 160 MHz", C::LIME);
-    gfx.center(146, "and restart", C::LIME);
+    gfx.center(80, TR("WLAN needs 80 MHz or more", "WLAN braucht 80 MHz oder mehr"), C::WHITE);
+    gfx.center(120, TR("OK = switch to 160 MHz", "OK = auf 160 MHz stellen"), C::LIME);
+    gfx.center(146, TR("and restart", "und neu starten"), C::LIME);
     gfx.send();
     if (btn(B_OK)) { cfgClock = 160; saveCfg(); netRestart(); }
   }
@@ -71,7 +71,7 @@ static void askBox(const char *title, const char *l1, const char *l2, const char
   if (l1) gfx.center(70, l1, C::WHITE);
   if (l2) gfx.center(100, l2, C::YELLOW, F_BOLD);
   if (l3) gfx.center(140, l3, C::LTGREY);
-  gfx.center(196, "OK = yes      LEFT = no", C::LIME);
+  gfx.center(196, TR("OK = yes      LEFT = no", "OK = ja      LEFT = nein"), C::LIME);
   gfx.send();
 }
 
@@ -97,30 +97,31 @@ void wlanRun() {
       if (btn(B_LEFT)) { netAnswer(false); sfx(300, 120); }
       char b[40];
       snprintf(b, sizeof(b), "v%.31s", netAskVersion());
-      askBox("UPLOAD", "install the firmware", b, "from the web page?");
+      askBox(TR("UPLOAD", "HOCHLADEN"), TR("install the firmware", "die Firmware installieren"), b, TR("from the web page?", "von der Webseite?"));
       continue;
     }
     if (phoneAsking()) {
       if (btn(B_OK))   { phoneAnswer(true);  sfx(1200, 50); }
       if (btn(B_LEFT)) { phoneAnswer(false); sfx(300, 120); }
-      askBox("BACKUP", "restore the backup", "from the phone?", "all saves are replaced");
+      askBox(TR("BACKUP", "SICHERUNG"), TR("restore the backup", "Sicherung zurückholen"), TR("from the phone?", "vom Handy?"),
+             TR("all saves are replaced", "alle Spielstände ersetzt"));
       continue;
     }
     if (locked) {
       wlanTitle("UPDATE", C::GREEN);
-      gfx.center(80, jb == JOB_DONE ? "done - restarting" : "installing...", C::WHITE, F_BOLD);
+      gfx.center(80, jb == JOB_DONE ? TR("done - restarting", "fertig - Neustart") : TR("installing...", "installiere..."), C::WHITE, F_BOLD);
       bar(30, 130, SCR_W - 60, netProgress(), C::LIME);
-      gfx.center(180, "do not switch off", C::YELLOW);
+      gfx.center(180, TR("do not switch off", "nicht ausschalten"), C::YELLOW);
       gfx.send();
       continue;
     }
     if (st == NET_SETUP) {
-      wlanTitle("WLAN SETUP", C::PURPLE);
-      gfx.center(52, "on the phone join", C::WHITE);
+      wlanTitle(TR("WLAN SETUP", "WLAN EINRICHTEN"), C::PURPLE);
+      gfx.center(52, TR("on the phone join", "am Handy verbinden mit"), C::WHITE);
       gfx.center(80, netApName(), C::YELLOW, F_BOLD);
-      gfx.center(120, "the setup page opens,", C::WHITE);
-      gfx.center(144, "else go to 192.168.4.1", C::WHITE);
-      gfx.center(200, "hold OK = leave", C::GREY, F_SMALL);
+      gfx.center(120, TR("the setup page opens,", "die Seite öffnet sich,"), C::WHITE);
+      gfx.center(144, TR("else go to 192.168.4.1", "sonst 192.168.4.1 öffnen"), C::WHITE);
+      gfx.center(200, TR("hold OK = leave", "OK halten = verlassen"), C::GREY, F_SMALL);
       gfx.send();
       continue;
     }
@@ -128,16 +129,16 @@ void wlanRun() {
       if (btn(B_LEFT))  { netApNewPass();    sfx(900, 40); }
       if (btn(B_RIGHT)) { netApToggleOpen(); sfx(700, 40); }
       if (btn(B_OK))    { netStop(); sfx(1200, 50); btnClear(); continue; }
-      wlanTitle("PHONE HOTSPOT", C::PURPLE);
+      wlanTitle(TR("PHONE HOTSPOT", "HANDY-HOTSPOT"), C::PURPLE);
       char b[48];
-      snprintf(b, sizeof(b), "join  %s", netApName());
+      snprintf(b, sizeof(b), TR("join  %s", "Netz  %s"), netApName());
       gfx.text(16, 50, b, C::WHITE);
       const char *pw = netApPass();
-      if (pw[0]) snprintf(b, sizeof(b), "pass  %.24s", pw); else snprintf(b, sizeof(b), "no password - open!");
+      if (pw[0]) snprintf(b, sizeof(b), TR("pass  %.24s", "PW    %.24s"), pw); else snprintf(b, sizeof(b), TR("no password - open!", "kein Passwort - offen!"));
       gfx.text(16, 80, b, pw[0] ? C::YELLOW : C::ORANGE);
-      gfx.text(16, 110, "open  http://192.168.4.1", C::CYAN);
-      gfx.text(16, 160, "LEFT new password  RIGHT on/off", C::LTGREY, F_SMALL);
-      gfx.text(16, 176, "OK = stop the hotspot", C::LTGREY, F_SMALL);
+      gfx.text(16, 110, TR("open  http://192.168.4.1", "öffne http://192.168.4.1"), C::CYAN);
+      gfx.text(16, 160, TR("LEFT new password  RIGHT on/off", "LEFT neues Passwort  RIGHT an/aus"), C::LTGREY, F_SMALL);
+      gfx.text(16, 176, TR("OK = stop the hotspot", "OK = Hotspot beenden"), C::LTGREY, F_SMALL);
       gfx.send();
       continue;
     }
@@ -165,27 +166,29 @@ void wlanRun() {
     col infoC = C::LTGREY;
     if (jb == JOB_ERROR)           { snprintf(info, sizeof(info), "%s", netError()); infoC = C::ORANGE; }
     else if (st == NET_ONLINE)     { snprintf(info, sizeof(info), "http://%s", netAddress()); infoC = C::CYAN; }
-    else if (st == NET_CONNECTING)   snprintf(info, sizeof(info), "joining %s", netSsid());
-    else if (st == NET_FAILED)     { snprintf(info, sizeof(info), "can't join %s", netSsid()); infoC = C::ORANGE; }
-    else if (netHasConfig())         snprintf(info, sizeof(info), "network %s", netSsid());
-    else                             snprintf(info, sizeof(info), "no network saved");
-    snprintf(item[0], 32, st == NET_ONLINE ? "disconnect" : (st == NET_CONNECTING ? "stop joining" : "connect"));
-    snprintf(item[1], 32, "set up with phone");
-    if (jb == JOB_CHECKING)        snprintf(item[2], 32, "asking GitHub...");
-    else if (jb == JOB_NEWER)      snprintf(item[2], 32, "install %s", netRemoteVersion());
-    else if (jb == JOB_UPTODATE)   snprintf(item[2], 32, "up to date");
-    else                           snprintf(item[2], 32, "check for update");
-    snprintf(item[3], 32, "phone hotspot");
-    snprintf(item[4], 32, "forget network");
-    snprintf(item[5], 32, "stay online: %s", wlanStay ? "yes" : "no");
-    snprintf(item[6], 32, "back");
+    else if (st == NET_CONNECTING)   snprintf(info, sizeof(info), TR("joining %s", "verbinde %s"), netSsid());
+    else if (st == NET_FAILED)     { snprintf(info, sizeof(info), TR("can't join %s", "%s geht nicht"), netSsid()); infoC = C::ORANGE; }
+    else if (netHasConfig())         snprintf(info, sizeof(info), TR("network %s", "Netz %s"), netSsid());
+    else                             snprintf(info, sizeof(info), TR("no network saved", "kein Netz"));
+    snprintf(item[0], 32, st == NET_ONLINE ? TR("disconnect", "trennen")
+                        : (st == NET_CONNECTING ? TR("stop joining", "Verbinden abbrechen") : TR("connect", "verbinden")));
+    snprintf(item[1], 32, TR("set up with phone", "mit Handy einrichten"));
+    if (jb == JOB_CHECKING)        snprintf(item[2], 32, TR("asking GitHub...", "frage GitHub..."));
+    else if (jb == JOB_NEWER)      snprintf(item[2], 32, TR("install %s", "%s installieren"), netRemoteVersion());
+    else if (jb == JOB_UPTODATE)   snprintf(item[2], 32, TR("up to date", "aktuell"));
+    else                           snprintf(item[2], 32, TR("check for update", "nach Update suchen"));
+    snprintf(item[3], 32, TR("phone hotspot", "Handy-Hotspot"));
+    snprintf(item[4], 32, TR("forget network", "Netz vergessen"));
+    snprintf(item[5], 32, TR("stay online: %s", "online bleiben: %s"), wlanStay ? TR("yes", "ja") : TR("no", "nein"));
+    snprintf(item[6], 32, TR("back", "zurück"));
 
     wlanTitle("WLAN");
     {
       char v[20];
       snprintf(v, sizeof(v), "v%s", netVersion());
       gfx.right(SCR_W - 10, 12, v, C::LTGREY, F_SMALL);
-      const char *s = st == NET_ONLINE ? "online" : (st == NET_CONNECTING ? "joining" : (st == NET_FAILED ? "failed" : "offline"));
+      const char *s = st == NET_ONLINE ? "online" : (st == NET_CONNECTING ? TR("joining", "verbinde")
+                    : (st == NET_FAILED ? TR("failed", "Fehler") : "offline"));
       col dc = st == NET_ONLINE ? C::LIME : (st == NET_FAILED ? C::RED : C::GREY);
       if (st != NET_CONNECTING || (millis() / 300) % 2) gfx.disc(120, 16, 5, dc);
       gfx.text(132, 9, s, C::WHITE);
@@ -229,7 +232,7 @@ void versionRun(bool atBoot) {
       }
       if (s[1].present && s[1].bootable) {
         wlanTitle("VERSION");
-        gfx.center(100, "STARTING", C::WHITE, F_BOLD);
+        gfx.center(100, TR("STARTING", "STARTE"), C::WHITE, F_BOLD);
         char b[40];
         snprintf(b, sizeof(b), "v%.31s", s[1].version);
         gfx.center(140, b, C::YELLOW);
@@ -246,16 +249,16 @@ void versionRun(bool atBoot) {
     if (waiting) { char b[8]; snprintf(b, sizeof(b), "%us", (unsigned)((left + 999) / 1000 % 10)); gfx.right(SCR_W - 12, 8, b, C::YELLOW, F_BOLD); }
     for (uint8_t i = 0; i < 2; i++) {
       int16_t y = 56 + i * 52;
-      const char *tag = i == 0 ? (s[0].pending ? "new" : "running")
-                               : (!s[1].present ? "" : (!s[1].bootable ? "broken" : "previous"));
+      const char *tag = i == 0 ? (s[0].pending ? TR("new", "neu") : TR("running", "läuft"))
+                               : (!s[1].present ? "" : (!s[1].bootable ? TR("broken", "defekt") : TR("previous", "vorige")));
       char b[40];
-      if (s[i].present) snprintf(b, sizeof(b), "v%.31s", s[i].version); else snprintf(b, sizeof(b), "no other version");
+      if (s[i].present) snprintf(b, sizeof(b), "v%.31s", s[i].version); else snprintf(b, sizeof(b), TR("no other version", "keine andere Version"));
       gfx.rbox(10, y, SCR_W - 20, 42, 6, i == sel ? C::BLUE : C::DKGREY);
       gfx.text(22, y + 9, b, C::WHITE, s[i].present ? F_BOLD : F_TEXT);
       gfx.right(SCR_W - 22, y + 14, tag, C::YELLOW);
     }
-    gfx.center(182, "UP/DOWN, OK = start", C::LTGREY);
-    if (!atBoot) gfx.center(206, "hold OK = back", C::GREY, F_SMALL);
+    gfx.center(182, TR("UP/DOWN, OK = start", "UP/DOWN, OK = starten"), C::LTGREY);
+    if (!atBoot) gfx.center(206, TR("hold OK = back", "OK halten = zurück"), C::GREY, F_SMALL);
     gfx.send();
   }
 }

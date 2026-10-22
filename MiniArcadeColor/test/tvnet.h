@@ -128,8 +128,9 @@ static std::string simTvItems(const char *tag) {
   return s + "]}";
 }
 
+static bool simTvDown = false;                          // the server cannot be reached at all
 bool tvReq(const char *path, bool post) {
-  if (!simTvOn || simTvReq == TVR_BUSY) return false;
+  if (!simTvOn || simTvReq == TVR_BUSY || simTvDown) return false;
   std::string p = path;
   simTvLog.push_back(std::string(post ? "POST " : "GET ") + p);
   simTvReq = TVR_BUSY;

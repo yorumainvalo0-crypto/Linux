@@ -10,8 +10,9 @@ static NetJob   simJob = JOB_IDLE;
 static bool     simUpload = false;  // a file arrives over the web page right after joining
 static bool     simNoNet  = false;  // the saved network is not there: joining, then failed
 static int      simJoinTicks = 0;
+static bool     simNoConfig = false;  // no network saved at all
 
-bool        netHasConfig()      { return true; }
+bool        netHasConfig()      { return !simNoConfig; }
 const char *netSsid()           { return "HomeNet"; }
 void        netConnect()        { simNet = simNoNet ? NET_CONNECTING : NET_ONLINE; simJoinTicks = 0; if (simUpload) simJob = JOB_ASKING; }
 void        netSetup()          { simNet = NET_SETUP; }

@@ -7,7 +7,7 @@
 Gfx gfx;
 
 #ifdef ARCADE_TRACE
-extern void arcadeTraceStr(const char *s);      // host test harness only
+extern void arcadeTraceText(int16_t x, int16_t y, const char *s, Font f);   // host test harness only
 #endif
 
 // ---------------- colours ----------------
@@ -193,25 +193,51 @@ void Gfx::bits(int16_t x, int16_t y, const uint32_t *rows, uint8_t w, uint8_t h,
 
 // ---------------- text ----------------
 /* The two bitmap fonts of the OLED console, drawn 1x, 2x or 3x. FONT_S is
-   5 wide (incl. spacing) and 9 rows, FONT_L 7 wide and 12 rows.        */
+   5 wide (incl. spacing) and 9 rows, FONT_L 7 wide and 12 rows. Texts are
+   UTF-8: the German letters below have glyphs of their own here (the OLED
+   console's fonts stay as they are), any other non-ASCII letter is one
+   empty cell.                                                          */
 static uint8_t fScale(Font f) { return f == F_SMALL ? 1 : (f == F_BIG ? 3 : 2); }
 static bool    fBold(Font f)  { return f == F_BOLD || f == F_BIG; }
 
-int16_t Gfx::width(const char *s, Font f) { return (int16_t)strlen(s) * (fBold(f) ? 7 : 5) * fScale(f); }
+// ä ö ü Ä Ö Ü ß: the second byte of their UTF-8 (C3 xx), then the columns
+static const uint8_t  DE_CODE[7] = { 0xA4, 0xB6, 0xBC, 0x84, 0x96, 0x9C, 0x9F };
+static const uint16_t DE_S[7][5] = {
+  {0x0,0x75,0x54,0x74,0x79}, {0x0,0x7D,0x44,0x44,0x39}, {0x0,0x7D,0x40,0x60,0x7D}, {0x61,0x3C,0x22,0x3C,0x71},
+  {0x1D,0x7E,0x42,0x62,0x3D}, {0x0,0x7F,0x40,0x40,0x3F}, {0x0,0x7E,0x1,0x25,0x1A} };
+static const uint16_t DE_L[7][7] = {
+  {0x0,0x3C8,0x3CB,0x24B,0x348,0x3F3,0x3C3}, {0x0,0x1F3,0x31B,0x208,0x31B,0x1F3,0xE0},
+  {0x0,0x1FB,0x3FB,0x200,0x3FB,0x3FB,0x0}, {0x200,0x3E1,0x7D,0x4C,0x7D,0x3F1,0x300},
+  {0x0,0x1F9,0x38D,0x204,0x305,0x1F9,0x70}, {0x0,0x1FD,0x301,0x200,0x301,0x3FD,0xFC},
+  {0x0,0x7FC,0x7FE,0x2,0x27E,0x3DC,0x180} };
+
+// letters, not bytes: the second byte of a UTF-8 letter takes no room
+static int16_t letters(const char *s) {
+  int16_t n = 0;
+  for (; *s; s++) if (((uint8_t)*s & 0xC0) != 0x80) n++;
+  return n;
+}
+
+int16_t Gfx::width(const char *s, Font f) { return letters(s) * (fBold(f) ? 7 : 5) * fScale(f); }
 int16_t Gfx::height(Font f)               { return (fBold(f) ? 12 : 9) * fScale(f); }
 
 int16_t Gfx::text(int16_t x, int16_t y, const char *s, col c, Font f) {
 #ifdef ARCADE_TRACE
-  arcadeTraceStr(s);
+  arcadeTraceText(x, y, s, f);
 #endif
   uint8_t k = fScale(f);
   bool bold = fBold(f);
   for (; *s; s++) {
     uint8_t ch = (uint8_t)*s;
     uint8_t cw = bold ? 7 : 5;
-    if (ch >= 32 && ch <= 126)
+    if ((ch & 0xC0) == 0x80) continue;                      // the rest of a UTF-8 letter
+    const uint16_t *g = NULL;
+    if (ch >= 32 && ch <= 126) g = bold ? FONT_L[ch - 32] : FONT_S[ch - 32];
+    else if (ch == 0xC3)
+      for (uint8_t i = 0; i < 7; i++) if ((uint8_t)s[1] == DE_CODE[i]) g = bold ? DE_L[i] : DE_S[i];
+    if (g)
       for (uint8_t cx = 0; cx < cw; cx++) {
-        uint16_t bitsCol = bold ? FONT_L[ch - 32][cx] : FONT_S[ch - 32][cx];
+        uint16_t bitsCol = g[cx];
         for (uint8_t r = 0; r < (bold ? 12 : 9); r++)
           if (bitsCol & (1 << r)) {
             if (k == 1) pixel(x + cx, y + r, c);

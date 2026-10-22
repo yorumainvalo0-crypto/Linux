@@ -6,6 +6,7 @@
 //   /screen    live picture of the display            (GET /api/screen)
 //   /pad       the screen plus big keys to play with  (POST /api/key)
 //   /level     Sokoban level editor, 3 own slots      (GET/POST /api/level)
+//   /maze      Pumpkin Maze level editor, 8 own slots (GET/POST /api/maze; colour console)
 //   /backup    all saves as a text file and back      (GET /api/backup, POST /api/restore)
 //
 // Only served in the own WLAN, never on the open setup hotspot. The web
@@ -24,11 +25,12 @@
 #include "freertos/task.h"
 
 // ---------------- the UI loop answers ----------------
-enum { UI_STATS = 1, UI_SETTINGS, UI_SET, UI_SCREEN, UI_LEVEL, UI_LEVELGET };
+enum { UI_STATS = 1, UI_SETTINGS, UI_SET, UI_SCREEN, UI_LEVEL, UI_LEVELGET, UI_MAZE, UI_MAZEGET };
 enum { UIS_IDLE, UIS_WAIT, UIS_RUN, UIS_DONE };
 
 static volatile uint8_t uiState = UIS_IDLE;
 static uint8_t          uiKind, uiSlot;
+static int              uiMaze;                   // UI_MAZEGET: the slot, -1 = the list
 static char             uiOut[6144];              // answer (JSON, screen, level text)
 static int              uiLen;
 static const char      *uiA, *uiB, *uiErr;        // arguments / error of UI_SET, UI_LEVEL
@@ -67,6 +69,8 @@ void phoneTick() {
   case UI_SCREEN:   appScreen((uint8_t *)uiOut); uiLen = 1024; break;
   case UI_LEVEL:    uiErr = appLevel(uiSlot, uiA); break;
   case UI_LEVELGET: uiLen = appLevelGet(uiSlot, uiOut, sizeof(uiOut)); break;
+  case UI_MAZE:     uiErr = appMazePut(uiSlot, uiA); break;
+  case UI_MAZEGET:  uiLen = appMazeGet(uiMaze, uiOut, sizeof(uiOut)); break;
   }
   uiState = UIS_DONE;
   xSemaphoreGive(uiDone);
@@ -130,7 +134,9 @@ const char PHONE_LINKS[] =
   "<h2>On this phone</h2><p>"
   "<a href=/stats>Stats and awards</a><br><a href=/settings>Settings</a><br>"
   "<a href=/screen>Screen</a><br><a href=/pad>Controller</a><br>"
-  "<a href=/level>Sokoban editor</a><br><a href=/backup>Backup</a></p>"
+  "<a href=/level>Sokoban editor</a><br><span id=pmz style=display:none><a href=/maze>Pumpkin Maze editor</a><br></span>"
+  "<a href=/backup>Backup</a></p><script>fetch('/api/settings').then(function(r){return r.json()})"   // the maze: colour console only
+  ".then(function(s){if('maze'in s)document.getElementById('pmz').style.display=''}).catch(function(){})</script>"
   "<p class=m>Screen and controller while playing: on the console's WLAN page set "
   "\"stay online: yes\", then leave the page.</p>";
 
@@ -281,6 +287,86 @@ static const char P_LEVEL[] =
   "var t=document.elementFromPoint(e.clientX,e.clientY);if(t&&t.dataset.i&&g[t.dataset.i]!=tool)put(+t.dataset.i)};"
   "$('sl').onchange=load;clr();load()</script>";
 
+// Pumpkin Maze: 20 x 13 tiles, one character each (see game_pumpkin.h of the colour console).
+// The checks are the console's again: one start and goal, keys and doors, a way to the goal.
+static const char P_MAZE[] =
+  "<h1>Pumpkin Maze editor</h1><p id=no class=m style=display:none>This console has no Pumpkin Maze.</p><div id=ed>"
+  "<label>Level name<input id=nm maxlength=12></label>"
+  "<div id=tl style='display:grid;grid-template-columns:repeat(6,1fr);gap:4px'></div>"
+  "<div id=gr style='display:grid;grid-template-columns:repeat(20,1fr);gap:1px;margin:10px 0;touch-action:none;"
+  "user-select:none;-webkit-user-select:none'></div><p id=msg class=m></p>"
+  "<div style='display:grid;grid-template-columns:1fr 1fr;gap:6px'><button onclick=chk(1)>check</button>"
+  "<button onclick=clr() style=background:#555>new level</button></div>"
+  "<label>Save as own level<select id=sl></select></label><button onclick=save()>save to the console</button>"
+  "<h1>Own levels</h1><table id=ls></table>"
+  "<h1>Export / import</h1><textarea id=tx rows=8 spellcheck=false style='width:100%;box-sizing:border-box;"
+  "font-family:monospace;font-size:13px;background:#222;color:#eee;border-radius:8px;border:1px solid #555'></textarea>"
+  "<div style='display:grid;grid-template-columns:1fr 1fr;gap:6px'><button onclick=exp()>export</button>"
+  "<button onclick=imp()>import</button></div>"
+  "<p class=m>Pick a tile, then tap or drag over the board. Start and goal exist once. A pit swallows the pumpkin "
+  "when its middle comes close; the wandering pits run along their row or column. Doors open when every key "
+  "(up to 3) is taken; arrows push one way only; the rune keeps the place to start again after a fall. "
+  "On the console: Pumpkin Maze, DOWN to the own levels.</p></div>"
+  "<style>#gr div{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:11px;line-height:1;"
+  "overflow:hidden}#tl button{padding:6px 0;font-size:12px;margin:0}#ls td button{width:auto;padding:5px 8px;margin:0 2px;"
+  "font-size:13px}</style><script>"
+  "var W=20,H=13,g=[],tool='#',L=[],T=[['.','floor','#6b4423',''],['#','wall','#776a80',''],"
+  "['S','start','#6b4423','\\u25cf','#f80'],['G','goal','#1a7a1a','\\u25ce','#cfc'],['O','pit','#111','\\u25cf','#433'],"
+  "['i','ice','#9cf',''],['m','mud','#3a2a05','\\u2219','#a80'],['*','bumper','#8a3cc4','\\u2726','#fff'],"
+  "['>','arrow','#4a1500','\\u25b6','#f80'],['<','arrow','#4a1500','\\u25c0','#f80'],['^','arrow','#4a1500','\\u25b2','#f80'],"
+  "['v','arrow','#4a1500','\\u25bc','#f80'],['c','candy','#6b4423','\\u25cf','#f6c'],['k','key','#6b4423','\\u2640','#fd0'],"
+  "['D','door','#a0602a','\\u25a6','#ff0'],['C','rune','#6b4423','\\u271a','#a8f'],['H','pit \\u2194','#3a1060','\\u2194','#c9f'],"
+  "['U','pit \\u2195','#3a1060','\\u2195','#c9f']],C={};T.forEach(function(t){C[t[0]]=t});"
+  "function show(){for(var i=0;i<W*H;i++){var d=$('gr').children[i],t=C[g[i]];d.style.background=t[2];"
+  "d.textContent=t[3];d.style.color=t[4]||''}}"
+  "function put(i){if(tool=='S'||tool=='G')for(var k=0;k<W*H;k++)if(g[k]==tool)g[k]='.';g[i]=tool;show()}"
+  "function clr(){for(var y=0;y<H;y++)for(var x=0;x<W;x++)g[y*W+x]=x&&y&&x<W-1&&y<H-1?'.':'#';g[W+1]='S';"
+  "g[(H-2)*W+W-2]='G';$('nm').value='MY LEVEL';$('msg').textContent='';show()}"
+  "function rows(){var r=[];for(var y=0;y<H;y++)r.push(g.slice(y*W,y*W+W).join(''));return r}"
+  "function nm(){return $('nm').value.replace(/[\"\\\\|]/g,'').trim()}"
+  "function text(){return nm()+'|'+rows().join('|')}"
+  "function load(t){var p=t.split(/[|\\n]/).map(function(s){return s.replace(/\\r/g,'')});$('nm').value=p[0].trim().slice(0,12);"
+  "for(var i=0;i<W*H;i++)g[i]='.';for(var y=0;y<H&&y+1<p.length;y++)for(var x=0;x<W&&x<p[y+1].length;x++)"
+  "g[y*W+x]=C[p[y+1][x]]?p[y+1][x]:'.';$('msg').textContent='';show()}"
+  "function path(){var K=[],s=-1,A='><^v',DX=[1,-1,0,0],DY=[0,0,-1,1];for(var i=0;i<W*H;i++){if(g[i]=='k'&&K.length<3)K.push(i);"
+  "if(g[i]=='S')s=i}var F=(1<<K.length)-1,seen={},q=[[s,0,0]];seen[s+',0']=1;while(q.length){var c=q.shift(),m=c[1];"
+  "if(g[c[0]]=='G')return c[2];var f=A.indexOf(g[c[0]]);for(var k=0;k<4;k++){var x=c[0]%W+DX[k],y=(c[0]/W|0)+DY[k];"
+  "if(x<0||y<0||x>=W||y>=H)continue;var n=y*W+x,ch=g[n],t=A.indexOf(ch);if(f==(k^1)||t==(k^1))continue;"
+  "if(ch=='#'||ch=='O'||ch=='*'||(ch=='D'&&m!=F))continue;var mm=m,ki=K.indexOf(n);if(ki>=0)mm|=1<<ki;"
+  "if(seen[n+','+mm])continue;seen[n+','+mm]=1;q.push([n,mm,c[2]+1])}}return -1}"
+  "function chk(say){var n={},e='';g.forEach(function(c){n[c]=(n[c]||0)+1});"
+  "if(!nm())e='the level needs a name';else if(n.S!=1)e='exactly one start (S) is needed';"
+  "else if(n.G!=1)e='exactly one goal (G) is needed';else if((n.k||0)>3)e='3 keys at most';"
+  "else if(n.D&&!n.k)e='a door needs a key';else if((n.H||0)+(n.U||0)>6)e='6 moving pits at most';"
+  "else{var d=path();if(d<0)e='the goal cannot be reached from the start';"
+  "else if(say)$('msg').textContent='\\u2714 playable - the shortest way is '+d+' tiles'}"
+  "if(e)$('msg').textContent='\\u2718 '+e;return!e}"
+  "function send(s,t){$('msg').textContent='saving...';fetch('/api/maze?s='+s,{method:'POST',body:t})"
+  ".then(function(r){return r.text()}).then(function(t){$('msg').textContent=t;list()})"
+  ".catch(function(){$('msg').textContent='the console did not answer'})}"
+  "function save(){if(chk(0))send($('sl').value,text())}"
+  "function get(i,f){fetch('/api/maze?s='+i).then(function(r){return r.text()}).then(f)}"
+  "function ren(i){var n=prompt('new name',L[i].n);if(!n)return;get(i,function(t){send(i,n.replace(/[\"\\\\|]/g,'').trim().slice(0,12)+t.slice(t.indexOf('|')))})}"
+  "function del(i){if(confirm('delete '+L[i].n+'?'))send(i,'')}"
+  "function bt(r,l,f){var b=document.createElement('button');b.textContent=l;b.onclick=f;r.cells[2].appendChild(b)}"
+  "function list(){fetch('/api/maze').then(function(r){return r.json()}).then(function(s){"
+  "if(!s.slots){$('ed').style.display='none';$('no').style.display='';return}L=s.l;var v=$('sl').value,t=$('ls');"
+  "$('sl').innerHTML='';t.innerHTML='';s.l.forEach(function(o,i){var p=document.createElement('option');p.value=i;"
+  "p.textContent=(i+1)+'  '+(o.n||'(empty)');$('sl').appendChild(p);var r=t.insertRow();r.insertCell().textContent=i+1;"
+  "r.insertCell().textContent=o.n?o.n+' '+'\\u2605\\u2605\\u2605'.slice(0,o.s)+(o.t?' '+(o.t/10).toFixed(1)+'s':''):'(empty)';"
+  "r.insertCell().style.textAlign='right';if(o.n){bt(r,'load',function(){get(i,load)});bt(r,'rename',function(){ren(i)});"
+  "bt(r,'delete',function(){del(i)})}});if(v)$('sl').value=v})"
+  ".catch(function(){$('msg').textContent='the console did not answer'})}"
+  "function exp(){$('tx').value=nm()+'\\n'+rows().join('\\n')}function imp(){load($('tx').value)}"
+  "T.forEach(function(t){var b=document.createElement('button');b.innerHTML='<span style=\"color:'+(t[4]||t[2])+'\">'+(t[3]||'\\u25a0')"
+  "+'</span> '+t[1];b.onclick=function(){tool=t[0];[].forEach.call($('tl').children,function(o){o.style.outline=''});"
+  "b.style.outline='3px solid #6cf'};$('tl').appendChild(b)});$('tl').children[1].style.outline='3px solid #6cf';"
+  "for(var i=0;i<W*H;i++){var d=document.createElement('div');d.dataset.i=i;$('gr').appendChild(d)}"
+  "var paint=0;$('gr').onpointerdown=function(e){e.preventDefault();paint=1;var i=e.target.dataset.i;if(i)put(+i)};"
+  "onpointerup=function(){paint=0};$('gr').onpointermove=function(e){if(!paint)return;"
+  "var t=document.elementFromPoint(e.clientX,e.clientY);if(t&&t.dataset.i&&g[t.dataset.i]!=tool)put(+t.dataset.i)};"
+  "clr();list()</script>";
+
 static const char P_BACKUP[] =
   "<h1>Backup</h1><a class=b href=/api/backup download=miniarcade-backup.txt>download the backup</a>"
   "<p class=m>High scores, stats and awards, the Mine world, own Sokoban levels, name, friends and "
@@ -308,6 +394,7 @@ static esp_err_t screenPage(httpd_req_t *r)   { return page(r, P_SCREEN, P_SCREE
 static esp_err_t padPage(httpd_req_t *r)      { return page(r, P_PAD, P_SCREEN_JS); }
 static esp_err_t levelPage(httpd_req_t *r)    { return page(r, P_LEVEL); }
 static esp_err_t backupPage(httpd_req_t *r)   { return page(r, P_BACKUP); }
+static esp_err_t mazePage(httpd_req_t *r)     { return page(r, P_MAZE); }
 
 // ---------------- API ----------------
 static esp_err_t json(httpd_req_t *r, uint8_t kind) {
@@ -395,6 +482,30 @@ static esp_err_t levelPost(httpd_req_t *r) {
   if (uiErr) return text(r, "400 Bad Request", uiErr);
   return text(r, "200 OK", body[0] ? "saved - on the console: Sokoban, then RIGHT past the last level"
                                    : "slot is empty now");
+}
+
+// Pumpkin Maze levels: GET without s = the list (JSON), with s = one level; POST s + the level ("" = delete)
+static esp_err_t mazeGet(httpd_req_t *r) {
+  if (!allowed(r)) return ESP_OK;
+  uiMaze = queryInt(r, "s", -1);
+  if (!askUi(UI_MAZEGET)) return busy(r);
+  httpd_resp_set_type(r, uiMaze < 0 ? "application/json" : "text/plain");
+  httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+  return httpd_resp_send(r, uiOut, uiLen);
+}
+
+static esp_err_t mazePost(httpd_req_t *r) {
+  if (!allowed(r)) return ESP_OK;
+  char *body = uiOut;                             // a name and 13 rows of 20; UI_MAZE answers no text
+  if (readBody(r, body, 400) < 0) return text(r, "400 Bad Request", "level too big");
+  int s = queryInt(r, "s", -1);
+  if (s < 0 || s > 254) return text(r, "400 Bad Request", "which slot?");
+  uiSlot = (uint8_t)s;
+  uiA = body;
+  if (!askUi(UI_MAZE)) return busy(r);
+  if (uiErr) return text(r, "400 Bad Request", uiErr);
+  return text(r, "200 OK", body[0] ? "saved - on the console: Pumpkin Maze, DOWN to the own levels"
+                                   : "the slot is empty now");
 }
 
 // ---------------- backup ----------------
@@ -520,6 +631,7 @@ void phoneRegister(void *server) {
     { "/pad",          HTTP_GET,  padPage,      NULL },
     { "/level",        HTTP_GET,  levelPage,    NULL },
     { "/backup",       HTTP_GET,  backupPage,   NULL },
+    { "/maze",         HTTP_GET,  mazePage,     NULL },
     { "/api/stats",    HTTP_GET,  statsGet,     NULL },
     { "/api/settings", HTTP_GET,  settingsGet,  NULL },
     { "/api/set",      HTTP_POST, setPost,      NULL },
@@ -528,6 +640,8 @@ void phoneRegister(void *server) {
     { "/api/key",      HTTP_POST, keyPost,      NULL },
     { "/api/level",    HTTP_GET,  levelGet,     NULL },
     { "/api/level",    HTTP_POST, levelPost,    NULL },
+    { "/api/maze",     HTTP_GET,  mazeGet,      NULL },
+    { "/api/maze",     HTTP_POST, mazePost,     NULL },
     { "/api/backup",   HTTP_GET,  backupGet,    NULL },
     { "/api/restore",  HTTP_POST, restorePost,  NULL },
   };
