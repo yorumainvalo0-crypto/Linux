@@ -12,6 +12,7 @@ FAVS_MAX = 100
 FRIENDS_MAX = 16
 FC_ALPHA = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'   # friend codes: no 0/O, 1/I/L mix-ups
 FC_LEN = 6
+NET_CONSOLES_MAX = 500                       # consoles that only came for internet play (NET_OPEN)
 
 
 def token_hash(tok):
@@ -36,14 +37,37 @@ class Store:
         os.replace(tmp, self.path)
 
     # ---------------- consoles ----------------
-    def add_console(self, code, name):
-        """A new console; returns (console id, token). The token is shown once."""
+    def add_console(self, code, name, scope=''):
+        """A new console; returns (console id, token). The token is shown once.
+        scope 'net': the token is good for internet play only (no PIN asked, NET_OPEN)."""
+        if scope == 'net':                          # never more than NET_CONSOLES_MAX of those: the oldest goes
+            net = [cid for cid, c in self.data['consoles'].items() if c.get('scope') == 'net']   # oldest first
+            for cid in net[:max(0, len(net) - NET_CONSOLES_MAX + 1)]:
+                self.remove(cid)
         cid = secrets.token_hex(4)
         tok = secrets.token_urlsafe(32)
         self.data['consoles'][cid] = {'code': code, 'name': name, 'tok': token_hash(tok), 'since': int(time.time()),
                                       'history': [], 'favs': []}
+        if scope:
+            self.data['consoles'][cid]['scope'] = scope
         self.save()
         return cid, tok
+
+    def scope(self, cid):
+        """'' = paired with the PIN (everything), 'net' = internet play only."""
+        return (self.console(cid) or {}).get('scope', '')
+
+    def upgrade(self, cid, name):
+        """A console of internet play paired with the PIN: the same console (its friend
+        code and friends stay) with a new token that is good for everything."""
+        c = self.console(cid)
+        tok = secrets.token_urlsafe(32)
+        c['tok'] = token_hash(tok)
+        c.pop('scope', None)
+        if name:
+            c['name'] = name
+        self.save()
+        return tok
 
     def by_token(self, tok):
         if not tok or len(tok) > 100:

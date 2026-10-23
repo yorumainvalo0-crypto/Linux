@@ -32,6 +32,8 @@ QUEUE_MAX = 64          # messages waiting for one side
 MSG_MAX = 16            # messages in one poll
 PAYLOAD_MAX = 32        # bytes in one message
 LOBBY_MAX = 16          # consoles in the lobby list
+RECENT_S = 600          # a console that went offline is listed this long as "seen lately"
+RECENT_MAX = 8          # ... at most so many
 LEAD_MIN, LEAD_MAX = 6, 24   # real-time games: input delay in ticks of 20 ms
 HEX_RE = re.compile(r'^(?:[0-9a-fA-F]{2}){1,%d}$' % PAYLOAD_MAX)
 
@@ -159,7 +161,7 @@ class Relay:
             if all(s.left) or (s.over_t and t - s.over_t > LEFT_KEEP_S) or \
                     all(s.end[i] == 'lost' or s.left[i] for i in (0, 1)):
                 self.drop_session(s)
-        for cid in [c for c, p in self.pres.items() if t - p.seen > ONLINE_S * 4]:
+        for cid in [c for c, p in self.pres.items() if t - p.seen > RECENT_S]:
             if cid not in self.of:
                 del self.pres[cid]
 
@@ -261,23 +263,40 @@ class Relay:
                     out['msg'] = ','.join('%d.%s' % m for m in msgs)
             if s.end[i] and not (s.q[i] and s.q[i][-1][0] > got):
                 out['ses']['se'] = s.end[i]            # over - after the last messages
-        if d.get('l'):
-            out['lob'], out['fr'] = self.lists(cid)
+        try:
+            lists = int(d.get('l', 0) or 0)
+        except (TypeError, ValueError):
+            lists = 0
+        if lists:
+            out['lob'], out['fr'], rc = self.lists(cid)
+            if lists >= 2:                             # newer consoles: the ones seen lately too
+                out['rc'] = rc
         return out
 
     def lists(self, cid):
+        """Everybody online (free ones first, friends first among them), the friends,
+        and the consoles that went offline in the last RECENT_S."""
         friends = self.store.friends(cid)
-        lob = []
-        for c, p in sorted(self.pres.items(), key=lambda kv: (kv[0] not in friends, kv[1].name)):
+        t = self.now()
+        lob, rc = [], []
+        for c, p in sorted(self.pres.items(), key=lambda kv: (self.busy(kv[0]), kv[0] not in friends,
+                                                              self.name_of(kv[0]))):
             if c == cid or not self.online(c) or not self.store.console(c):
                 continue
             lob.append({'c': self.store.friend_code(c), 'n': self.name_of(c), 'g': p.game,
                         'b': 1 if self.busy(c) else 0, 'f': 1 if c in friends else 0})
             if len(lob) >= LOBBY_MAX:
                 break
+        for c, p in sorted(self.pres.items(), key=lambda kv: -kv[1].seen):
+            if c == cid or self.online(c) or t - p.seen > RECENT_S or not self.store.console(c):
+                continue
+            rc.append({'c': self.store.friend_code(c), 'n': self.name_of(c), 'f': 1 if c in friends else 0,
+                       'm': int((t - p.seen) // 60)})
+            if len(rc) >= RECENT_MAX:
+                break
         fr = [{'c': self.store.friend_code(c), 'n': self.name_of(c), 'o': 1 if self.online(c) else 0,
                'b': 1 if self.busy(c) else 0} for c in friends if self.store.console(c)]
-        return lob, fr
+        return lob, fr, rc
 
     async def poll(self, cid, d):
         """One poll: report, messages in, then what is new (now or after waiting)."""

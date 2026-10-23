@@ -44,6 +44,7 @@ yt-dlp aktualisiert sich selbst: bei jedem Containerstart und danach alle
 |---|---|---|
 | `ADMIN_PASSWORD` | – (Pflicht) | Passwort der Handy-Seite. Ohne startet der Server nicht. |
 | `CONSOLE_PIN` | wird erzeugt | PIN, mit der sich **jede** Konsole einmal koppelt (4–10 Ziffern, besser 8). Fehlt sie, erzeugt der Server eine 8-stellige, speichert sie im Volume und schreibt sie ins Log (`docker compose logs \| grep PIN`). Sie steht auch auf der Handy-Seite. |
+| `NET_OPEN` | 1 | Mehrspieler übers Internet **ohne PIN**: jede Konsole holt sich selbst einen Token, der nur für `/api/net/*` gilt (siehe „Mehrspieler übers Internet“). `0` = nur gekoppelte Konsolen (PIN) spielen online; bereits ausgegebene Nur-Mehrspieler-Tokens gelten dann nicht mehr. Das TV braucht immer die PIN. |
 | `PORT` | 8080 | Port im Container. |
 | `HOST_PORT`, `BIND_IP` | 8080, 127.0.0.1 | Wo Docker den Port auf dem Host anbietet. `BIND_IP=0.0.0.0` nur, wenn der Proxy auf einer anderen Maschine läuft. |
 | `BASE_PATH` | leer | Unterpfad, z. B. `/tv`, wenn der Proxy den Server unter `https://example.de/tv` anbietet. |
@@ -192,11 +193,12 @@ im `server`-Block (optional).
 ## Konsole einrichten (ohne Handy)
 
 1. Konsole ins WLAN bringen (Settings → wlan and update).
-2. In der Spieleliste **TV** öffnen. Beim ersten Mal kommt die Tastatur für
-   die Server-Adresse, vorbelegt mit `https://` (Tasten `.de`, `.com`, `.net`,
-   `del`, `done`). Beispiel: `https://tv.example.de` oder
-   `https://example.de/tv`. Später änderbar: TV → Reiter *Setup*, oder
-   Settings → *tv server*.
+2. In der Spieleliste **TV** öffnen. Die Firmware bringt eine Server-Adresse
+   mit (Kconfig `ARCADE_DEFAULT_SERVER`, Standard `https://vid.dev.a-b-cloud.de`).
+   Ist sie leer gebaut, kommt beim ersten Mal die Tastatur für die Adresse,
+   vorbelegt mit `https://` (Tasten `.de`, `.com`, `.net`, `del`, `done`).
+   Beispiel: `https://tv.example.de` oder `https://example.de/tv`. Änderbar:
+   TV → Reiter *Setup*, oder Settings → *tv server* (leer = die eingebaute).
 3. Die Konsole testet die Verbindung (`/api/ping`) und fragt dann die
    **Server-PIN** ab: OBEN/UNTEN ändert die Ziffer, LINKS/RECHTS wechselt die
    Stelle, `-` beendet eine kürzere PIN, OK koppelt. Die Konsole bekommt
@@ -244,18 +246,40 @@ gehen auch übers Internet – über diesen Server. Er vermittelt nur: Lobby,
 Freunde, Herausforderungen, und er reicht die Spielzüge weiter. Gerechnet
 wird weiter auf beiden Konsolen.
 
-**Einrichten:** nichts Zusätzliches. Es gilt dieselbe Kopplung wie beim TV
-(Adresse, `CONSOLE_PIN`, ein Token pro Konsole). Eine fürs TV gekoppelte
-Konsole kann sofort online spielen; eine ungekoppelte führt „Online →
-Internet (server)“ durch dieselbe Adress- und PIN-Eingabe.
+**Einrichten:** nichts. Die Firmware kennt eine eingebaute Server-Adresse
+(Kconfig `ARCADE_DEFAULT_SERVER`, Standard `https://vid.dev.a-b-cloud.de`;
+an der Konsole änderbar wie bisher: TV → *Setup* oder Settings → *tv
+server*). Bei „Online → Internet (server)“ ohne Token fragt die Konsole
+selbst `POST /api/net/hello` (Konsolencode und Name) und bekommt einen
+eigenen Token – keine Adresse tippen, keine PIN. Dieser Token gilt **nur
+für den Mehrspieler-Teil** (`/api/net/*`); das TV (Listen, Videos) braucht
+weiter die Kopplung mit `CONSOLE_PIN`. Koppelt man eine solche Konsole
+später fürs TV, bleibt es dieselbe Konsole (Freundescode und Freunde
+bleiben), sie bekommt nur einen neuen, vollen Token. Eine fürs TV
+gekoppelte Konsole spielt mit ihrem Token sofort online.
 
-**An der Konsole:** Online → *Internet (server)*. Die Lobby zeigt alle
-gekoppelten Konsolen dieses Servers, die gerade online sind (letzte Abfrage
-vor weniger als 30 s), mit Name und dem Spiel, das sie gern spielen würden,
-dazu die Freunde – auch offline. OK auf einer freien Konsole fordert sie
-heraus (30 s Zeit zum Antworten). Eigene Zeile, OK: *my code* (der
-Freundescode), *add a friend by code* (Code-Eingabe am Bildschirm), Name,
-Wunschspiel. RECHTS auf einer Konsole: als Freund hinzufügen / entfernen.
+Mit `NET_OPEN=0` antwortet `/api/net/hello` mit 403; dann führt die Konsole
+wie früher durch die Adress- und PIN-Eingabe (dieselbe wie beim TV), und
+Nur-Mehrspieler-Tokens von vorher gelten nicht mehr. Gegen Massenanmeldungen:
+höchstens 5 neue Konsolen auf einmal und dann 20 pro Stunde **pro
+Client-Adresse** (hinter dem Proxy zählt die echte Adresse nur mit
+`TRUSTED_PROXIES`, sonst teilen sich alle die des Proxys), und höchstens
+500 Nur-Mehrspieler-Konsolen im Volume (die älteste fällt heraus).
+Konsolen ohne Namen heißen „MA“ + Konsolencode (z. B. `MAQX7K`); der Name
+ist in der Lobby änderbar. Auf der Handy-Seite stehen sie als „nur
+Mehrspieler (ohne PIN)“ und lassen sich entfernen.
+
+**An der Konsole:** Online → *Internet (server)*. Die Lobby zeigt sofort
+**alle** Konsolen dieses Servers, die gerade online sind (letzte Abfrage
+vor weniger als 30 s) – ohne Codes, ohne Freunde –, mit Name, frei/spielt
+und dem Spiel, das sie gern spielen würden; freie zuerst. Darunter grau die
+Konsolen, die in den letzten 10 Minuten da waren („offline“, vor wie vielen
+Minuten), dann Freunde, die offline sind. OK auf einer freien Konsole
+fordert sie heraus (30 s Zeit zum Antworten) – jede, ohne Freundschaft.
+Eigene Zeile, OK: Name, Wunschspiel und – nebensächlich – *friends: my
+code* (der Freundescode) und *friends: add by code*. RECHTS auf einer
+Konsole: als Freund markieren / entfernen (Freunde stehen unter den freien
+zuerst und bleiben auch offline in der Liste).
 
 - **Freundescodes:** 6 Zeichen aus `23456789ABCDEFGHJKMNPQRSTUVWXYZ` (kein
   0/O, 1/I/L), einmal pro Konsole erzeugt und mit der Freundesliste in
@@ -271,6 +295,7 @@ Wunschspiel. RECHTS auf einer Konsole: als Freund hinzufügen / entfernen.
 | Anfrage | Zweck |
 |---|---|
 | `POST /api/net/poll` (JSON) | Die Konsole meldet sich (`n` Name, `g` Wunschspiel, `rtt` ihre Antwortzeit, `l` = Listen mitschicken), schickt ihre Nachrichten (`sid`, `m: [[nr, "hex"], …]`, bis 16 à 32 Byte) und bestätigt die erhaltenen (`got`). Antwort: eigener Code `me`, eine Herausforderung `inv`, Stand der eigenen `out`, das Spiel `ses` (mit `se` = `left`/`gone`/`lost`, wenn es vorbei ist), `ack`, die Nachrichten der Gegenseite `msg`, auf Wunsch `lob` und `fr`. Ist nichts Neues da, hält der Server die Anfrage bis `wait` ms (höchstens 25 s) und antwortet sofort, wenn etwas kommt. |
+| `POST /api/net/hello?code=QX7K&name=…` | ohne Token, nur mit `NET_OPEN=1`: neuer Nur-Mehrspieler-Token (`token`, `me`); 403 wenn geschlossen, 429 bei zu vielen pro Adresse |
 | `GET /api/net/me` | eigener Freundescode und Name |
 | `POST /api/net/invite?to=CODE&g=SPIEL` | herausfordern (404 unbekannt, 409 `offline`/`busy`/`self`) |
 | `POST /api/net/answer?iid=…&yes=1` | annehmen (Antwort enthält das Spiel) oder ablehnen |
@@ -281,7 +306,12 @@ Wunschspiel. RECHTS auf einer Konsole: als Freund hinzufügen / entfernen.
 **Zustellung:** Die Nachrichten eines Spiels sind je Richtung durchnummeriert.
 Die Konsole wiederholt unbestätigte, der Server nimmt jede Nummer genau
 einmal und in Reihenfolge; die Gegenseite meldet mit `got`, was sie hat, und
-bekommt Verlorenes einfach noch einmal. So geht weder eine verlorene Anfrage
+bekommt Verlorenes einfach noch einmal.
+
+**Listen:** Mit `l=1` kommen `lob` (online, freie zuerst, höchstens 16) und
+`fr` (Freunde); mit `l=2` zusätzlich `rc`: bis zu 8 Konsolen, die in den
+letzten 10 Minuten online waren (`m` = vor so vielen Minuten). Ältere
+Konsolen schicken `l=1` und sehen alles wie bisher. So geht weder eine verlorene Anfrage
 noch eine verlorene Antwort verloren.
 
 **Zeitgrenzen:** online 30 s nach der letzten Abfrage; Herausforderung 30 s;
@@ -308,8 +338,8 @@ HTTPS-Anfragen auf der vorhandenen Keep-Alive-Verbindung, gehalten höchstens
 25 s – das passt zum vHost oben (`proxy_http_version 1.1`,
 `proxy_set_header Connection ""`, `proxy_buffering off`,
 `proxy_read_timeout 60s`). Die Mehrspieler-Grenzen zählen pro Konsole
-(Token), nicht pro Adresse; `TRUSTED_PROXIES` braucht es wie beim TV nur
-für die PIN-Sperre beim Koppeln.
+(Token), nicht pro Adresse; `TRUSTED_PROXIES` braucht es für die PIN-Sperre
+beim Koppeln und für die Grenze neuer Konsolen ohne PIN (`/api/net/hello`).
 
 ## Tests (Entwicklung)
 
@@ -320,6 +350,6 @@ python3 tests/make_golden.py            # nur nach Änderungen am Format
 ```
 
 Die Tests laden nichts von YouTube (yt-dlp wird durch `tests/fake_ytdlp.py`
-ersetzt). `tests/test_net.py` prüft den Mehrspieler-Teil (Anmeldung, Lobby,
-Freunde, Herausforderungen, Reihenfolge der Nachrichten, Zeitgrenzen und
+ersetzt). `tests/test_net.py` prüft den Mehrspieler-Teil (Anmeldung, `NET_OPEN` an/aus,
+Reichweite der Tokens, Grenze pro Adresse, Lobby, Freunde, Herausforderungen, Reihenfolge der Nachrichten, Zeitgrenzen und
 Begrenzungen) mit einer verstellbaren Uhr. `tests/golden.bin` prüft auch der Simulator der Konsole.
