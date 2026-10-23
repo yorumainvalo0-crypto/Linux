@@ -3,6 +3,7 @@
 #define CONFIG_ARCADE_GITHUB_REPO   "yorumainvalo0-crypto/Linux"
 #define CONFIG_ARCADE_UPDATE_PATH   "releases/download/color-latest/"
 #define CONFIG_ARCADE_UPDATE_BIN    "miniarcade-color-c3.bin"
+#define CONFIG_ARCADE_DEFAULT_SERVER "https://vid.dev.a-b-cloud.de"
 #define CONFIG_ARCADE_TFT_SCK       8
 #define CONFIG_ARCADE_TFT_MOSI      10
 #define CONFIG_ARCADE_TFT_MISO      9

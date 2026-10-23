@@ -16,7 +16,10 @@
    BYE are left out, and of the real-time SYNC packets only the newest
    unsent one is kept - as long as it still covers every input not sent.
    The matching (lobby, friends, challenges) is the server's; when a
-   session starts, LinkCore::startNet() begins the game at once.      */
+   session starts, LinkCore::startNet() begins the game at once.
+   The lobby lists everybody online on the server (free ones first), the
+   consoles seen in the last minutes and the friends; anyone can be
+   challenged, friends are only a mark and a list.                     */
 #pragma once
 #include <stdint.h>
 #include <stdio.h>
@@ -28,6 +31,7 @@
 
 #define IN_CODE        6     // friend codes: 6 characters of IN_ALPHA
 #define IN_LIST       16     // consoles in the lobby list, friends
+#define IN_SEEN        8     // consoles seen lately (offline now)
 #define IN_OUT        24     // our packets waiting for the server's ack
 #define IN_PER_POLL   16     // packets in one poll (the server's limit)
 #define IN_PKT        24     // the longest packet (LkSync)
@@ -47,6 +51,7 @@ struct InPeer {
   char    name[LK_NAME + 1];
   uint8_t game;                      // the game it would like to play (0 = any)
   bool    busy, friendly, online;
+  uint8_t ago;                       // offline: minutes since it was seen (255 = not known)
 };
 
 enum InReq : uint8_t { INR_NONE, INR_POLL, INR_INVITE, INR_CANCEL, INR_ANSWER, INR_LEAVE, INR_FRIEND };
@@ -62,10 +67,12 @@ public:
   char     me[IN_CODE + 1];          // own friend code ("" until the server said it)
   uint8_t  want = 0;                 // the game we would like to play, shown to the others
   bool     lists = false;            // the lobby is on the screen: the polls ask for the lists
-  InPeer   lob[IN_LIST];             // online now (friends first)
+  InPeer   lob[IN_LIST];             // online now (free ones first)
   uint8_t  nLob = 0;
   InPeer   fr[IN_LIST];              // friends, online or not
   uint8_t  nFr = 0;
+  InPeer   seen[IN_SEEN];            // offline, but seen in the last minutes (newest first)
+  uint8_t  nSeen = 0;
   bool     haveLists = false;
 
   bool     inv = false;              // a challenge for us
@@ -106,7 +113,7 @@ public:
     L->caps = LK_CAPS | LK_CAP_CHESS;
     L->caps2 = LK_CAP2_KART;
     me[0] = 0;
-    nLob = nFr = 0; haveLists = false;
+    nLob = nFr = nSeen = 0; haveLists = false;
     inv = invGone = false; out = INO_NONE; frRes = INF_NONE;
     status = -1; unpaired = false; everOk = false; rtt = 0;
     act = INR_NONE; inFlight = INR_NONE;
@@ -350,7 +357,7 @@ private:
     uint16_t wait = leaving ? 0 : (sid ? (LinkCore::live(L->game) ? IN_WAIT_RT : IN_WAIT_TURN) : IN_WAIT_LOBBY);
     if (!sid && (out == INO_WAIT || inv)) wait = IN_WAIT_TURN;       // a challenge: quicker
     int w = snprintf(b, max, "{\"n\":\"%s\",\"g\":%u,\"l\":%u,\"rtt\":%u,\"sid\":%u,\"got\":%lu,\"wait\":%u,\"m\":[",
-                     nm, want, lists ? 1 : 0, rtt ? rtt : 100, sid, (unsigned long)got, wait);
+                     nm, want, lists ? 2 : 0, rtt ? rtt : 100, sid, (unsigned long)got, wait);
     reqSid = sid;
     for (uint8_t i = 0; i < nOut && i < IN_PER_POLL && w + 80 < (int)max; i++) {
       const Pkt &k2 = outQ[i];
@@ -392,17 +399,18 @@ private:
     for (char *c = p.name; *c; c++) if (*c < ' ' || *c > '~') *c = '?';
   }
 
-  static uint8_t readList(const char *b, const char *e, const char *key, InPeer *list) {
+  static uint8_t readList(const char *b, const char *e, const char *key, InPeer *list, uint8_t max = IN_LIST) {
     const char *end, *s = listOf(b, e, key, &end);
     uint8_t n = 0;
     if (!s) return 0;
-    for (const char *oe; n < IN_LIST && (s = jsObj(s, end, &oe)); s = oe) {
+    for (const char *oe; n < max && (s = jsObj(s, end, &oe)); s = oe) {
       InPeer &p = list[n++];
       peerOf(s, oe, "c", "n", p);
       p.game = (uint8_t)jsInt(s, oe, "g", 0);
       p.busy = jsInt(s, oe, "b", 0) != 0;
       p.friendly = jsInt(s, oe, "f", 1) != 0;
       p.online = jsInt(s, oe, "o", 1) != 0;
+      p.ago = (uint8_t)jsInt(s, oe, "m", 255);
     }
     return n;
   }
@@ -461,6 +469,8 @@ private:
     if (lst) {
       nLob = readList(b, e, "lob", lob);
       nFr = readList(b, e, "fr", fr);
+      nSeen = readList(b, e, "rc", seen, IN_SEEN);       // an older server: none
+      for (uint8_t i = 0; i < nSeen; i++) seen[i].online = false;
       haveLists = true;
       e = lst;                                            // the rest is before the lists
     }

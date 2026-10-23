@@ -1191,7 +1191,8 @@ static void onlineGame(uint8_t game, uint32_t t) {
    shown, 'f' BOB added by his code, 'u' a code nobody has, 's' our own
    code, 'o' challenge BOB (a friend, offline), 'r' ANNA a friend with
    RIGHT, 'D' the server goes away in the next game, 'U' back when the
-   lobby says so, 'g' ANNA is switched off in the next game, 'q' leave. */
+   lobby says so, 'g' ANNA is switched off in the next game, 'q' leave
+   (the lobby's rows are noted then: inRowsAtEnd).                      */
 static std::string inSteps;
 static size_t   inStep = 0;
 static uint32_t inWait = 0, inNoteT = 0, inGameT = 0, inEvent = 0;
@@ -1200,12 +1201,14 @@ static int      inGames = 0;
 static uint32_t inTicks = 0, inGameMs = 0, inLastGame = 0;
 static std::vector<int> inResults;                               // ours, as ANNA counts them: 1 she won, 2 she lost, 3 draw
 static std::string inTyping;                                     // the code being typed
+static std::string inRowsAtEnd;                                  // the lobby when leaving: "NAME:state ..."
+static bool     inJoinShot = false;
 static const char *inTarget(char s) { return s == 'f' ? "BQB234" : s == 'u' ? "ZZZZZZ" : "MY3CDE"; }
 
 // the row of the lobby with this code ("" = own): moves there, true when it is picked
 static bool inPick(uint32_t t, const char *code) {
-  InRow rows[IN_LIST * 2];
-  uint8_t n = inRows(rows, IN_LIST * 2);
+  InRow rows[IN_ROWS];
+  uint8_t n = inRows(rows, IN_ROWS);
   int want = code[0] ? -1 : 0, cur = 0;
   for (uint8_t i = 0; i < n; i++) {
     if (!strcmp(rows[i].p.code, code)) want = i + 1;
@@ -1227,7 +1230,8 @@ static void inetDriver(uint32_t t) {
     if (inStep < inSteps.size() && inSteps[inStep] == 'I') { press(t + 1, DN); press(t + 300, OK, 80); inStep++; inChose = true; inWait = t + 800; }
     return;
   }
-  if (!inS) {                                                   // pairing first: OK on its message
+  if (!inS) {                                                   // the first time: a token (or the PIN, OK on its message)
+    if (inWhere == IW_JOIN && !inJoinShot) { inJoinShot = true; captureMs.push_back(t + 400); }   // "connected"
     if (tvWhere == TVW_SAY && t > inEvent + 400) { botPress(t, OK, 80); inEvent = t; }
     return;
   }
@@ -1307,15 +1311,24 @@ static void inetDriver(uint32_t t) {
     inStep += 2; inWait = k + 1200;
     break;
   }
-  case 'm': case 'f': case 'u': case 's':                       // the own row's menu
+  case 'm': case 'f': case 'u': case 's': {                     // the own row's menu: the friends' lines are the last two
     if (!inPick(t, "")) break;
     press(t + 1, OK, 80);
-    if (s != 'm') press(t + 700, DN);
-    press(t + 1000, OK, 80);
+    uint8_t dn = s == 'm' ? 2 : 3;
+    for (uint8_t i = 0; i < dn; i++) press(t + 600 + 200 * i, DN);
+    press(t + 1300, OK, 80);
     inTyping = inTarget(s);
-    inStep++; inWait = t + 2000; inEvent = t + 1500;
+    inStep++; inWait = t + 2300; inEvent = t + 1800;
     break;
-  case 'q': captureMs.push_back(t); botPress(t + 20, OK, 1100); inStep++; break;   // the lobby once more, hold OK: back
+  }
+  case 'q': {                                                   // the lobby once more, hold OK: back
+    InRow rows[IN_ROWS];
+    uint8_t n = inRows(rows, IN_ROWS);
+    inRowsAtEnd.clear();
+    for (uint8_t i = 0; i < n; i++)
+      inRowsAtEnd += std::string(i ? " " : "") + rows[i].p.name + ":" + (!rows[i].p.online ? "off" : rows[i].p.busy ? "busy" : "free");
+    captureMs.push_back(t); botPress(t + 20, OK, 1100); inStep++; break;
+  }
   default: inStep++; break;
   }
 }
@@ -3903,6 +3916,7 @@ int main(int argc, char **argv) {
     // the list with thumbnails, a video played: +10 s, pause, play, sharp, a lost
     // connection, back to the list, back to the menu
     uint32_t t = openGameNamed("TV", M); simEnd = t + 34000;
+    tvDefaultUrl = "";                                           // a firmware without a built-in server
     simNvsU16["fps"] = 1;                                        // the frame rate shown over the video
     simBot = tvUiBot; botFrom = t;
     tvUiT = t;
@@ -4221,12 +4235,31 @@ int main(int argc, char **argv) {
     inetScenario("Ic3q", t);
     captureMs = { t + 9000 };
   } else if (scenario == "inetfriend") {
-    // internet, not paired yet: the PIN, then the own code, BOB added by his code (offline),
-    // a code nobody has, the own one, ANNA a friend with RIGHT, back
+    // internet, no token yet: one without the PIN, then the own code, BOB added by his code
+    // (offline), a code nobody has, the own one, ANNA a friend with RIGHT, back
     uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
     inetScenario("Imfousrq", t);
     simNvsBlob.erase("tok");
+  } else if (scenario == "inetfirst") {
+    // the very first time: no server address saved (the built-in one), no token, no name -
+    // Online > Internet goes straight to the lobby; 4 wins with ANNA, back
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
+    inetScenario("Ic1q", t);
+    simNvsBlob.erase("url");
+    simNvsBlob.erase("tok");
+  } else if (scenario == "inetpin") {
+    // the server is closed (NET_OPEN=0): no token without the PIN - the PIN screens, then the lobby
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
+    inetScenario("Iq", t);
+    simNvsBlob.erase("tok");
+    simNetOpen = false;
     strcpy(tvPinRam, "120000");                                  // the PIN, as if typed on the phone page
+  } else if (scenario == "inetlobby") {
+    // a lobby with several consoles online, nobody a friend: the free ones first, the busy
+    // one, the one seen 4 minutes ago (grey), back
+    uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
+    inetScenario("Iq", t);
+    fsExtra();
   } else if (scenario == "inetall") {
     // internet: every online game with ANNA, one after the other, 30-50 ms each way;
     // Chess is left after 40 plies like in mpchessgame
@@ -4510,11 +4543,37 @@ int main(int argc, char **argv) {
     check("a longer input delay for the internet, from the round trips", simNetLead >= 10 && simNetLead <= 18);
     check("smooth: nearly full speed, hardly ever waiting", tps > 44 && inStalled * 20 < inFrames);
   }
+  if (scenario == "inetfriend" || scenario == "inetfirst") {
+    check("no token: one without the PIN, saved for internet play only", seen("connecting to the server ...") &&
+          seen("connected") && !seen("SERVER PIN") && simNetHellos == 1 && !tvTok[0] && !strcmp(tvNtok, SIM_NET_TOK) &&
+          simNvsBlob.count("ntok") && simNvsBlob["ntok"].compare(0, 4, "NTOK") == 0);
+  }
+  if (scenario == "inetfirst") {
+    printf("      server %s, hello %s, name %s\n", tvUrl, simNetHelloPath.c_str(), linkName());
+    check("no address saved: the built-in server", !strcmp(tvUrl, CONFIG_ARCADE_DEFAULT_SERVER) && seen("vid.dev.a-b-cloud.de"));
+    check("no name yet: MA and the console code, told to the server", !strcmp(linkName(), "MAQX7K") &&
+          simNetHelloPath == "/api/net/hello?code=QX7K&name=MAQX7K" && fsCon["MY3CDE"].name == "MAQX7K" && seen("you play as MAQX7K"));
+    check("then a game with ANNA, nobody a friend", seen("4 WINS") && seen("vs ANNA") && mpOver && inGames == 1 && fsCon["MY3CDE"].fr.empty());
+  }
+  if (scenario == "inetpin") {
+    printf("      hellos %u, token %s\n", simNetHellos, tvTok);
+    bool paired = false;
+    for (auto &l : simTvLog) paired = paired || l.compare(0, 25, "POST /api/pair?code=QX7K&") == 0;
+    check("the server closed: asked once, then the PIN screens", simNetHellos == 1 && seen("the server asks for its PIN") && paired);
+    check("paired with the PIN: the TV's token, none for internet only", !strcmp(tvTok, "TOKEN-1234567890-abcdefghijklmnop") &&
+          !tvNtok[0] && fsCon["MY3CDE"].tok == SIM_ME_TOK);
+  }
+  if (scenario == "inetlobby") {
+    printf("      lobby: %s\n", inRowsAtEnd.c_str());
+    check("everybody online listed without friends: free ones first, then busy, then seen lately",
+          inRowsAtEnd == "ANNA:free DAVE:free EVE:free CARL:busy FRED:off" && fsCon["MY3CDE"].fr.empty());
+    check("the busy one with its game, the one seen lately grey with its minutes", seen("busy") && seen("Chess") &&
+          seen("offline") && seen("4 min") && seen("Pong"));
+    check("BOB (never seen) not listed", inRowsAtEnd.find("BOB") == std::string::npos);
+  }
   if (scenario == "inetfriend") {
     FsCon &me = fsCon["MY3CDE"], &bob = fsCon["BQB234"], &anna = fsCon["AN4K7Q"];
     auto has = [](const FsCon &c, const char *x) { return std::find(c.fr.begin(), c.fr.end(), x) != c.fr.end(); };
-    check("not paired: the PIN, the token saved (TV and internet)", seen("not paired with the server") &&
-          !strcmp(tvTok, "TOKEN-1234567890-abcdefghijklmnop"));
     check("the own code shown", seen("MY CODE") && seen("MY3CDE"));
     check("BOB added by his code, both ways", seen("FRIEND'S CODE") && seen("BOB is your friend now") && has(me, "BQB234") && has(bob, "MY3CDE"));
     check("BOB is offline: no challenge", seen("BOB is offline") && seen("offline"));

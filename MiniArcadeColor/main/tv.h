@@ -17,8 +17,13 @@ static const char *const IC_TV[12] = {
 enum : uint8_t { TVW_NONE, TVW_KEYS, TVW_PIN, TVW_SAY, TVW_LIST, TVW_MENU, TVW_PLAYER };
 static uint8_t tvWhere = TVW_NONE;                    // which screen is up (for the host tests)
 
-// ---------------- saved: server address, token, the last searches ----------------
+// ---------------- saved: server address, tokens, the last searches ----------------
+#ifndef CONFIG_ARCADE_DEFAULT_SERVER
+#define CONFIG_ARCADE_DEFAULT_SERVER ""
+#endif
+static const char *tvDefaultUrl = CONFIG_ARCADE_DEFAULT_SERVER;   // until another one is set (the host tests change it)
 static char tvUrl[100], tvTok[64];
+static char tvNtok[64];                               // internet play only: got without the PIN (inet.h)
 static char tvRecent[4][41];                          // the last searches, newest first
 static bool tvLoaded = false;
 
@@ -30,21 +35,30 @@ static void tvLoad() {
   tvUrl[n] = 0;
   n = prefs.getBytes("tok", tvTok, sizeof(tvTok) - 1);
   tvTok[n] = 0;
+  n = prefs.getBytes("ntok", tvNtok, sizeof(tvNtok) - 1);
+  tvNtok[n] = 0;
   if (prefs.getBytes("srch", tvRecent, sizeof(tvRecent)) != sizeof(tvRecent)) memset(tvRecent, 0, sizeof(tvRecent));
   for (auto &r : tvRecent) r[sizeof(r) - 1] = 0;
   prefs.end();
+  if (!tvUrl[0] && strlen(tvDefaultUrl) < sizeof(tvUrl)) strcpy(tvUrl, tvDefaultUrl);   // none set: the built-in one
 }
 
 static void tvSave() {
   prefs.begin("tv", false);
   prefs.putBytes("url", tvUrl, strlen(tvUrl) + 1);
   prefs.putBytes("tok", tvTok, strlen(tvTok) + 1);
+  prefs.putBytes("ntok", tvNtok, strlen(tvNtok) + 1);
   prefs.putBytes("srch", tvRecent, sizeof(tvRecent));
   prefs.end();
 }
 static void tvForget() { tvTok[0] = 0; tvSave(); }
+static void tvForgetNet() { tvNtok[0] = 0; tvSave(); }
+// the token a connection starts with: the TV's (PIN), else internet play's - pairing
+// with it keeps the console the server knows (its friend code and friends)
+static const char *tvStartTok() { return tvTok[0] ? tvTok : tvNtok; }
 
 // the address from the phone page or the keyboard; NULL = taken. A new server forgets the pairing.
+// Empty = the built-in one (CONFIG_ARCADE_DEFAULT_SERVER).
 static const char *tvSetUrl(const char *v) {
   char u[sizeof(tvUrl)];
   size_t n = strlen(v);
@@ -58,7 +72,8 @@ static const char *tvSetUrl(const char *v) {
   if (n && strncmp(u, "https://", 8) && strncmp(u, "http://", 7)) return "the address starts with https://";
   if (n && n < 10) return "address too short";
   tvLoad();
-  if (strcmp(u, tvUrl)) { strcpy(tvUrl, u); tvTok[0] = 0; tvSave(); }
+  if (!n && strlen(tvDefaultUrl) < sizeof(u)) strcpy(u, tvDefaultUrl);
+  if (strcmp(u, tvUrl)) { strcpy(tvUrl, u); tvTok[0] = 0; tvNtok[0] = 0; tvSave(); }
   return NULL;
 }
 
@@ -290,9 +305,10 @@ static bool tvPinEntry(char *pin) {
   return false;
 }
 
-static bool tvPair() {
-  char path[120], pin[12], why[48];
-  for (;;) {                                          // does the server answer?
+// does the server answer? Else: try again or another address; false = left
+static bool tvReach() {
+  char why[48];
+  for (;;) {
     tvTitle(TR("TV SERVER", "TV-SERVER"));
     char b[60];
     snprintf(b, sizeof(b), "%.48s", tvUrl);
@@ -302,7 +318,7 @@ static bool tvPair() {
     int st = 0;
     const char *r = tvAsk("/api/ping", false, &st);
     if (st < 0) return false;
-    if (r && strstr(r, "\"ok\"")) break;
+    if (r && strstr(r, "\"ok\"")) return true;
     if (st) snprintf(why, sizeof(why), TR("the server said %d", "der Server sagt %d"), st);
     else snprintf(why, sizeof(why), TR("no answer", "keine Antwort"));
     btnClear();
@@ -313,7 +329,7 @@ static bool tvPair() {
       if (btn(B_LEFT)) {
         if (!tvTypeUrl()) return false;
         tvNetStop();
-        if (!tvNetStart(tvUrl, tvTok)) return false;
+        if (!tvNetStart(tvUrl, tvStartTok())) return false;
         break;
       }
       tvTitle(TR("TV SERVER", "TV-SERVER"));
@@ -325,7 +341,12 @@ static bool tvPair() {
       gfx.send();
     }
   }
-  for (;;) {                                          // the PIN
+}
+
+// the server's PIN typed, the console's own token back; false = left
+static bool tvPinPair() {
+  char path[120], pin[12];
+  for (;;) {
     if (tvPinRam[0]) { strcpy(pin, tvPinRam); tvPinRam[0] = 0; }
     else if (!tvPinEntry(pin)) return false;
     int k = snprintf(path, sizeof(path), "/api/pair?code=%s&pin=%s&name=", tvConsoleCode(), pin);
@@ -338,6 +359,7 @@ static bool tvPair() {
     char tok[sizeof(tvTok)] = "";
     if (r && jsStr(r, r + strlen(r), "token", tok, sizeof(tok)) && tok[0]) {
       strcpy(tvTok, tok);
+      tvNtok[0] = 0;                                  // internet play's token: became this one
       tvSave();
       tvNetToken(tvTok);
       sfx(1400, 120);
@@ -351,6 +373,8 @@ static bool tvPair() {
     if (!go) return false;
   }
 }
+
+static bool tvPair() { return tvReach() && tvPinPair(); }
 
 // ---------------- the player ----------------
 // the server's reason (plain text, e.g. YouTube's pause) for the screen
@@ -923,7 +947,7 @@ void tvRun() {
   pollHook = tvHook;
   if (tvOnline()) {
     while (tvUrl[0] || tvTypeUrl()) {
-      if (!tvNetStart(tvUrl, tvTok)) { tvSay("TV", TR("not enough memory", "zu wenig Speicher"), NULL); break; }
+      if (!tvNetStart(tvUrl, tvStartTok())) { tvSay("TV", TR("not enough memory", "zu wenig Speicher"), NULL); break; }
       if (!tvTok[0] && !tvPair()) break;
       bool left = tvBrowse();                          // false: the pairing is gone (or a new server)
       tvThumbFree();

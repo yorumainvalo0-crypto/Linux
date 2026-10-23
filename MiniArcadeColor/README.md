@@ -384,14 +384,22 @@ colour consoles (an OLED console is marked "OLED" in the list). Real-time
 games run in lockstep on both consoles; only the keys go over the radio
 (Kart GP sends the karts' states instead, see Kart GP).
 
-**Internet** plays through your own MiniArcade server - the TV's server, with
-the TV's pairing: a console paired for TV is ready, one that is not goes
-through the same address and PIN screens first. The lobby lists the consoles
-online on that server and your friends (online or not, a `*` in front);
-friends are added once with their 6 character **friend code** (no 0/O or
-1/I/L), shown under OK on your own row ("my code"; "add a friend by code" is
-an on-screen code entry), or with RIGHT on a console in the list. OK on a
-free console challenges it like nearby; all eleven games work, Chess and Kart GP included.
+**Internet** plays through your own MiniArcade server - the TV's server,
+built in (`ARCADE_DEFAULT_SERVER` in menuconfig, `https://vid.dev.a-b-cloud.de`
+by default; changed under TV > Setup or Settings > tv server, empty = the
+built-in one). No setup: a console without a token asks the server for one
+(`/api/net/hello`, good for internet play only) and goes straight to the
+lobby; a console paired for the TV plays with its token. Only a server that
+wants its PIN (`NET_OPEN=0`) gets the TV's address and PIN screens. A console
+nobody named yet is called "MA" and its code (e.g. `MAQX7K`); OK on your own
+row changes the name. The lobby lists everybody online on that server at
+once - name, free or busy, the game they would like - the free ones first,
+then (grey) the consoles seen in the last 10 minutes, then the friends that
+are offline. OK on a free console challenges it like nearby, no friendship
+needed; all eleven games work, Chess and Kart GP included. Friends are only
+a mark (`*`, first among the free ones, kept in the list when offline): RIGHT
+on a console, or their 6 character **friend code** (no 0/O or 1/I/L) under OK
+on your own row ("friends: my code", "friends: add by code").
 The packets of the same protocol (`linkcore.h`) go over the server's relay
 instead of the radio (`main/inetcore.h`, polls on the TV's one HTTPS
 connection, no WebSocket). Real-time games get a longer input delay there,
@@ -399,7 +407,8 @@ picked by the server from both consoles' round trips: about 1.25 times both
 round trips plus 40 ms, 120 to 480 ms - at a round trip of 50 ms each that
 is 180 ms. They stay at full speed up to about 200 ms round trip; beyond, they
 slow down rather than freeze. Errors are said in the lobby's language:
-server unreachable (the lobby keeps trying), not paired, a friend offline,
+server unreachable (the lobby keeps trying), the server forgot the console
+(it connects anew), a console offline,
 connection lost in a game (after 10 s without the server: back to the
 lobby), the other one gone (the server notices after 12 s). Server side:
 `../MiniArcadeServer`, "Mehrspieler übers Internet".

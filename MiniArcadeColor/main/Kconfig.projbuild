@@ -12,6 +12,14 @@ menu "MiniArcade Color"
         string "Firmware file in that release"
         default "miniarcade-color-s3.bin" if IDF_TARGET_ESP32S3
         default "miniarcade-color-c3.bin"
+    config ARCADE_DEFAULT_SERVER
+        string "MiniArcade server used until another one is set (TV, internet play)"
+        default "https://vid.dev.a-b-cloud.de"
+        help
+            Internet play works with it at once, without typing an address;
+            the TV still pairs there with the server's PIN. Changed on the
+            console (TV > Setup, Settings > tv server) or the phone page.
+            Empty = the address is asked for the first time.
     config ARCADE_WIFI_TX_POWER
         int "WLAN transmit power limit (0.25 dBm steps, 0 = no limit)"
         default 34 if IDF_TARGET_ESP32C3

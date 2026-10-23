@@ -9,7 +9,7 @@ g++ -std=c++17 -O1 -DARCADE_TRACE -I. -I../main -I../../MiniArcade/test -I../../
 fail=0
 for s in menu wizard ladder ladder4 ladder5 ladderpair ladderbat uploadask updgithub updupload updfail updnowlan updnonet updask plain2 tilt settings sdcard fps snake snakeover tetris pong flappy breakout invaders rocks shooter lander palace palacecont palacelogic palaceshots pumpkin pumpkinkeys pmeditor pmlogic cave doom mine mine3d mine3dfree mine3dlogic tunnel pacman bomber g2048 g2logic mines mslogic sokoban sklevels sudoku lightsout match3 pzlogic blocks blocksadv blockspz blockslogic fruit fruitlogic dino dinofair racer racerfair frogger frogroll jump jrfair stack boardlogic c4 ttt bship bshipown checkers maumau skat skatlogic minigolf chess chesscpu chesssave chesslogic fxlogic pause tvdecode tvui \
          online mpchess mpc4 mpttt mppong mpsnake mppac mpship mpdame mpmau mpbomb mpchessgame \
-         inetc4 inetpong inetfriend inetlost inetall \
+         inetc4 inetpong inetfriend inetlost inetall inetfirst inetpin inetlobby \
          kart kartmenu karttilt kartghost kartlogic mpkart mpkartgone inetkart; do
   ./colorsim "$s" || fail=1
 done
@@ -18,7 +18,7 @@ done
 rm -f frames/lang_de.txt
 for s in menu settings pause wizard ladder ladder5 ladderpair plain2 tilt sdcard fps frogger tvui pumpkin pumpkinkeys pmeditor \
          updgithub updupload updfail updnowlan updnonet \
-         inetc4 inetfriend inetlost kartmenu; do
+         inetc4 inetfriend inetlost inetfirst inetpin inetlobby kartmenu; do
   SPRACHE=de ./colorsim "$s" || fail=1
 done
 ./colorsim sprache || fail=1

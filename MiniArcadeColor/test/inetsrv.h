@@ -4,7 +4,9 @@
 // pretend tvnet.h) and the bot console ANNA - a second NetLink
 // (main/inetcore.h) whose LinkCore is link.h's bot (simPeer), so the bot
 // plays every game over the relay as it does on the radio. BOB is paired
-// but never online, CARL is online and always busy.
+// but never online, CARL is online and always busy. fsExtra(): DAVE and EVE
+// online and free, FRED seen 4 minutes ago. /api/net/hello gives our
+// console a token without the PIN while simNetOpen (the server's NET_OPEN).
 #pragma once
 #include <map>
 #include <deque>
@@ -16,6 +18,9 @@
 
 static uint32_t simNetMs = 25, simNetJit = 10;          // one way: this much plus up to jit
 static bool     simNetDown = false;                     // nothing gets through (requests fail after 1.5 s)
+static bool     simNetOpen = true;                      // NET_OPEN: /api/net/hello gives a token without the PIN
+static uint32_t simNetHellos = 0;
+static std::string simNetHelloPath;                     // the last one asked
 static uint32_t simNetMsgs = 0, simNetPolls[2] = { 0, 0 }, simNetHeld = 0, simNetLead = 0, simNetSessions = 0;
 static uint32_t simNetMaxQ = 0;                         // the longest queue for one side
 static std::vector<std::string> simNetLog;              // every request but the polls
@@ -23,7 +28,8 @@ static std::vector<std::string> simNetLog;              // every request but the
 struct FsCon {
   std::string tok, code, name;
   uint32_t seen = 0;
-  bool     on = false, fakeBusy = false;
+  bool     on = false, fakeBusy = false, fakeOn = false;   // fakeOn: online and free, never answers
+  uint8_t  fakeAgo = 0;                                 // seen this many minutes ago (offline now)
   uint8_t  game = 0;
   uint16_t rtt = 100;
   uint32_t ver = 0, sentVer = 0xFFFFFFFF;
@@ -48,6 +54,7 @@ static uint32_t fsRnd = 4321;
 static uint32_t fsRand() { fsRnd ^= fsRnd << 13; fsRnd ^= fsRnd >> 17; fsRnd ^= fsRnd << 5; return fsRnd; }
 
 static const char SIM_ME_TOK[] = "TOKEN-1234567890-abcdefghijklmnop";   // the pretend tvnet.h's pairing
+static const char SIM_NET_TOK[] = "NTOK-0987654321-internet-only";        // /api/net/hello's
 static void fsSetup() {
   fsCon.clear(); fsInv.clear(); fsSes.clear(); fsOf.clear();
   FsCon me;   me.tok = SIM_ME_TOK;   me.code = "MY3CDE"; me.name = "PLAYER";
@@ -56,9 +63,21 @@ static void fsSetup() {
   FsCon carl; carl.tok = "TOK-CARL"; carl.code = "CRL567"; carl.name = "CARL"; carl.fakeBusy = true; carl.game = 10;
   for (FsCon *c : { &me, &anna, &bob, &carl }) fsCon[c->code] = *c;
 }
+static void fsExtra() {                                 // more consoles: two free ones, one seen lately
+  FsCon dave; dave.tok = "TOK-DAVE"; dave.code = "DV5W8X"; dave.name = "DAVE"; dave.fakeOn = true; dave.game = 3;
+  FsCon eve;  eve.tok = "TOK-EVE";   eve.code = "EV6Y9Z";  eve.name = "EVE";   eve.fakeOn = true;
+  FsCon fred; fred.tok = "TOK-FRED"; fred.code = "FR7D2M"; fred.name = "FRED"; fred.fakeAgo = 4;
+  for (FsCon *c : { &dave, &eve, &fred }) fsCon[c->code] = *c;
+}
 static FsCon *fsByTok(const std::string &t) { for (auto &kv : fsCon) if (kv.second.tok == t) return &kv.second; return NULL; }
 static FsCon *fsByCode(const std::string &c) { auto it = fsCon.find(c); return it == fsCon.end() ? NULL : &it->second; }
-static bool fsOnline(const FsCon &c, uint32_t now) { return c.fakeBusy || (c.on && now - c.seen < 30000); }
+static bool fsOnline(const FsCon &c, uint32_t now) { return c.fakeBusy || c.fakeOn || (c.on && now - c.seen < 30000); }
+// offline, seen in the last 10 minutes: minutes ago, -1 = no
+static int fsAgo(const FsCon &c, uint32_t now) {
+  if (fsOnline(c, now)) return -1;
+  if (c.fakeAgo) return c.fakeAgo;
+  return c.on && now - c.seen < 600000 ? (int)((now - c.seen) / 60000) : -1;
+}
 static FsSes *fsSessionOf(const std::string &c) {
   auto it = fsOf.find(c);
   if (it == fsOf.end()) return NULL;
@@ -125,7 +144,7 @@ static void fsSesJson(std::string &o, const FsSes &s, int i) {
 }
 
 // the answer to a poll (net.py's Relay.answer)
-static std::string fsAnswer(FsCon &c, uint16_t sid, uint32_t got, bool lists, uint32_t held, uint32_t now) {
+static std::string fsAnswer(FsCon &c, uint16_t sid, uint32_t got, int lists, uint32_t held, uint32_t now) {
   c.sentVer = c.ver;
   char b[256];
   snprintf(b, sizeof(b), "{\"me\":\"%s\",\"h\":%u", c.code.c_str(), held);
@@ -160,12 +179,12 @@ static std::string fsAnswer(FsCon &c, uint16_t sid, uint32_t got, bool lists, ui
     }
   }
   if (lists) {
-    std::string lob, fr;
-    for (int pass = 0; pass < 2; pass++)
+    std::string lob, fr, rc;
+    for (int pass = 0; pass < 4; pass++)                // free ones first, friends first among them
       for (auto &kv : fsCon) {
         const FsCon &x = kv.second;
         bool f = std::find(c.fr.begin(), c.fr.end(), x.code) != c.fr.end();
-        if (x.code == c.code || !fsOnline(x, now) || f != (pass == 0)) continue;
+        if (x.code == c.code || !fsOnline(x, now) || fsBusy(x) != (pass >= 2) || f != (pass % 2 == 0)) continue;
         snprintf(b, sizeof(b), "%s{\"c\":\"%s\",\"n\":\"%s\",\"g\":%u,\"b\":%d,\"f\":%d}", lob.empty() ? "" : ",",
                  x.code.c_str(), x.name.c_str(), x.game, fsBusy(x) ? 1 : 0, f ? 1 : 0);
         lob += b;
@@ -178,6 +197,18 @@ static std::string fsAnswer(FsCon &c, uint16_t sid, uint32_t got, bool lists, ui
       fr += b;
     }
     o += ",\"lob\":[" + lob + "],\"fr\":[" + fr + "]";
+    if (lists >= 2) {                                   // newer consoles: the ones seen lately
+      for (auto &kv : fsCon) {
+        const FsCon &x = kv.second;
+        int ago = fsAgo(x, now);
+        if (x.code == c.code || ago < 0) continue;
+        bool f = std::find(c.fr.begin(), c.fr.end(), x.code) != c.fr.end();
+        snprintf(b, sizeof(b), "%s{\"c\":\"%s\",\"n\":\"%s\",\"f\":%d,\"m\":%d}", rc.empty() ? "" : ",",
+                 x.code.c_str(), x.name.c_str(), f ? 1 : 0, ago);
+        rc += b;
+      }
+      o += ",\"rc\":[" + rc + "]";
+    }
   }
   return o + "}";
 }
@@ -195,7 +226,7 @@ struct FsReq {
   std::string tok, path, body, resp;
   uint32_t arrive = 0, holdUntil = 0, respAt = 0, wait = 0, got = 0;
   uint16_t sid = 0;
-  bool lists = false;
+  int lists = 0;
   int status = 0;
 };
 static FsReq fsReq[2];                                  // 0 = our console, 1 = ANNA
@@ -212,7 +243,7 @@ static bool fsPoll(FsReq &r, FsCon &c, uint32_t now) {
   r.wait = (uint32_t)jsInt(b, e, "wait", 0);
   r.sid = (uint16_t)jsInt(b, e, "sid", 0);
   r.got = (uint32_t)jsInt(b, e, "got", 0);
-  r.lists = jsInt(b, e, "l", 0) != 0;
+  r.lists = (int)jsInt(b, e, "l", 0);
   auto it = fsSes.find(r.sid);
   if (r.sid && it != fsSes.end() && it->second.idx(c.code) >= 0 && !it->second.left[it->second.idx(c.code)]) {
     FsSes &s = it->second;
@@ -352,7 +383,20 @@ static void fsPump(uint32_t now) {
     if (!r.processed && now >= r.arrive) {
       r.processed = true;
       FsCon *c = fsByTok(r.tok);
-      if (!c) { r.status = 401; r.resp = "not paired"; r.respAt = now + fsLat(); }
+      if (r.path.compare(0, 15, "/api/net/hello?") == 0) {   // no token needed: our console gets one (NET_OPEN)
+        simNetHellos++;
+        simNetHelloPath = r.path;
+        simNetLog.push_back("hello " + r.path);
+        if (!simNetOpen) { r.status = 403; r.resp = "closed - pair with the PIN"; }
+        else {
+          FsCon &me = fsCon["MY3CDE"];
+          me.tok = SIM_NET_TOK;
+          std::string n = fsQ(r.path, "name");
+          if (!n.empty()) me.name = n;
+          r.status = 200; r.resp = std::string("{\"token\":\"") + SIM_NET_TOK + "\",\"id\":\"c9\",\"me\":\"MY3CDE\"}";
+        }
+        r.respAt = now + fsLat();
+      } else if (!c) { r.status = 401; r.resp = "not paired"; r.respAt = now + fsLat(); }
       else if (r.path == "/api/net/poll") {
         simNetPolls[w]++;
         if (fsPoll(r, *c, now)) { r.status = 200; r.resp = fsAnswer(*c, r.sid, r.got, r.lists, 0, now); r.respAt = now + fsLat(); }
