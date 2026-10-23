@@ -1,10 +1,15 @@
 // MiniArcade Color: online play over the internet, through the own
-// MiniArcade server - the one the TV uses, with its pairing (address, PIN,
-// the console's token): a console paired for the TV can play at once.
+// MiniArcade server - the one the TV uses (CONFIG_ARCADE_DEFAULT_SERVER
+// until another one is set). No setup: without a token the console asks
+// the server for one (/api/net/hello, the server's NET_OPEN) and keeps it;
+// only a server that wants its PIN gets the TV's pairing screens. A console
+// paired for the TV plays with that token.
 // Part of console.cpp, which includes it after tv.h - not compiled on its own.
-/* The lobby lists the consoles that are online on the server and the
-   friends (added once by their 6 character code, online or not). OK on a
-   free one challenges it, like nearby; the games are multiplayer.h's.
+/* The lobby lists every console online on the server (free ones first),
+   then the ones seen in the last minutes (grey, offline) and the friends
+   that are offline. OK on a free one challenges it, like nearby; the
+   games are multiplayer.h's. Friends (added by their 6 character code or
+   RIGHT on a row) are only a mark - nothing needs them.
    What goes over the wire is inetcore.h's, on the TV's one HTTPS
    connection (tvnet.cpp). Real-time games get the input delay the server
    picks from both round trips (MiniArcadeServer/tvserver/net.py).     */
@@ -14,8 +19,9 @@
 #define IN_ACCENT rgb(40, 110, 230)
 #define IN_BODY   1200                                  // the longest poll (16 packets)
 #define IN_TITLE  "INTERNET"
+#define IN_ROWS   (IN_LIST * 2 + IN_SEEN)               // rows of the lobby at most (without the own one)
 
-enum : uint8_t { IW_NONE, IW_LOBBY, IW_INVITED, IW_INVITING, IW_CODE, IW_MYCODE, IW_MENU, IW_WAIT, IW_GAMES };
+enum : uint8_t { IW_NONE, IW_LOBBY, IW_INVITED, IW_INVITING, IW_CODE, IW_MYCODE, IW_MENU, IW_WAIT, IW_GAMES, IW_JOIN };
 static uint8_t inWhere = IW_NONE;                       // which screen is up (for the host tests)
 
 struct InState {
@@ -158,37 +164,42 @@ static void inFriend(const char *code, bool on) {
   mpNote(l1, l2, IN_TITLE);
 }
 
-// the own row's menu: the code, a friend by code, the name, the game we would like
+// the own row's menu: the name, the game we would like; the friends' code (nothing needs them)
 static void inMenu() {
   NetLink &N = inS->n;
   for (;;) {
-    char o0[32], o2[32], o3[40];
-    snprintf(o0, sizeof(o0), TR("my code  %s", "mein Code  %s"), N.me[0] ? N.me : "...");
-    snprintf(o2, sizeof(o2), TR("my name  %s", "mein Name  %s"), linkName());
-    snprintf(o3, sizeof(o3), TR("I'd like: %s", "Lieber: %s"), N.want ? mpGameName(N.want) : TR("any game", "egal"));
-    const char *const OPT[4] = { o0, TR("add a friend by code", "Freund per Code"), o2, o3 };
+    char o0[32], o1[40], o2[40];
+    snprintf(o0, sizeof(o0), TR("my name  %s", "mein Name  %s"), linkName());
+    snprintf(o1, sizeof(o1), TR("I'd like: %s", "Lieber: %s"), N.want ? mpGameName(N.want) : TR("any game", "egal"));
+    snprintf(o2, sizeof(o2), TR("friends: my code  %s", "Freunde: mein Code  %s"), N.me[0] ? N.me : "...");
+    const char *const OPT[4] = { o0, o1, o2, TR("friends: add by code", "Freunde: per Code") };
     inWhere = IW_MENU;
     uint8_t k = chooseMode(IN_TITLE, OPT, 4, IN_ACCENT);
-    if (k == 0) inMyCode();
-    else if (k == 1) { char c[IN_CODE + 1]; if (inCodeEntry(c)) inFriend(c, true); }
-    else if (k == 2) { mpName(); linkCore().setName(linkName()); }
-    else if (k == 3) N.want = (uint8_t)((N.want + 1) % (MP_GAMES_N + 1));   // the next one, round
-    if (k != 3) break;
+    if (k == 0) { mpName(); linkCore().setName(linkName()); }
+    else if (k == 1) N.want = (uint8_t)((N.want + 1) % (MP_GAMES_N + 1));   // the next one, round
+    else if (k == 2) inMyCode();
+    else if (k == 3) { char c[IN_CODE + 1]; if (inCodeEntry(c)) inFriend(c, true); }
+    if (k != 1) break;
   }
   btnClear();
 }
 
 // ---------------- the lobby ----------------
 struct InRow { InPeer p; };
-// online friends, the others online, then the friends that are not
+// everybody online (the free ones first, in the server's order), the ones seen
+// lately, then the friends that are offline
 static uint8_t inRows(InRow *rows, uint8_t max) {
   NetLink &N = inS->n;
   uint8_t n = 0;
   for (uint8_t pass = 0; pass < 2; pass++)
     for (uint8_t i = 0; i < N.nLob && n < max; i++)
-      if (N.lob[i].friendly == (pass == 0)) { rows[n].p = N.lob[i]; rows[n].p.online = true; n++; }
+      if (N.lob[i].busy == (pass == 1)) { rows[n].p = N.lob[i]; rows[n].p.online = true; n++; }
+  for (uint8_t i = 0; i < N.nSeen && n < max; i++)
+    if (N.find(N.lob, N.nLob, N.seen[i].code) < 0) { rows[n].p = N.seen[i]; rows[n].p.online = false; n++; }
   for (uint8_t i = 0; i < N.nFr && n < max; i++)
-    if (N.find(N.lob, N.nLob, N.fr[i].code) < 0) { rows[n].p = N.fr[i]; rows[n].p.friendly = true; rows[n].p.online = false; n++; }
+    if (N.find(N.lob, N.nLob, N.fr[i].code) < 0 && N.find(N.seen, N.nSeen, N.fr[i].code) < 0) {
+      rows[n].p = N.fr[i]; rows[n].p.friendly = true; rows[n].p.online = false; rows[n].p.ago = 255; n++;
+    }
   return n;
 }
 
@@ -222,7 +233,7 @@ static uint8_t inLobby() {
     N.lists = inWhere == IW_LOBBY;                      // the polls bring the lists while they are shown
     bool alive = poll();
     uint32_t now = linkNow();
-    if (N.unpaired) { mpNote(TR("not paired any more", "nicht gekoppelt"), TR("pair again with the PIN", "neu mit der PIN koppeln"), IN_TITLE); ret = 1; break; }
+    if (N.unpaired) { mpNote(TR("the server forgot us", "nicht mehr bekannt"), TR("connecting anew", "verbinde neu"), IN_TITLE); ret = 1; break; }
     LkState st = L.state;
     if (st == LK_OVER) {                                // the game is over: why
       if (gameEnd == 1) mpNote(TR("you left the game", "Spiel verlassen"), NULL, IN_TITLE);
@@ -265,9 +276,9 @@ static uint8_t inLobby() {
     // ---- the list ----
     if (!alive) break;                                  // hold OK = back to the games
     inWhere = IW_LOBBY;
-    InRow rows[IN_LIST * 2];
+    InRow rows[IN_ROWS];
     bool down = inDown();
-    uint8_t n = down ? 0 : inRows(rows, IN_LIST * 2);   // unreachable: only the own row
+    uint8_t n = down ? 0 : inRows(rows, IN_ROWS);       // unreachable: only the own row
     int8_t sel = 0;                                     // 0 = own row, 1.. = the others
     for (uint8_t i = 0; i < n; i++) if (inSelCode[0] && !strcmp(rows[i].p.code, inSelCode)) sel = i + 1;
     if (btn(B_UP)   && sel > 0) { sel--; sfx(700, 15); }
@@ -311,7 +322,7 @@ static uint8_t inLobby() {
           col c = C::LTGREY;
           if (down) { l1 = TR("server unreachable", "Server nicht erreichbar"); l2 = TR("trying again ...", "versuche es weiter ..."); c = C::ORANGE; }
           else if (!N.everOk) { l1 = TR("connecting ...", "verbinde ..."); l2 = NULL; }
-          else { l1 = TR("nobody online right now", "gerade niemand online"); l2 = TR("friends: OK on your own row", "Freunde: OK in deiner Zeile"); }
+          else { l1 = TR("nobody online right now", "gerade niemand online"); l2 = TR("the others show up here by themselves", "die anderen erscheinen hier von selbst"); }
           gfx.text(30, y + 4, l1, c);
           if (l2) gfx.text(30, y + 32, l2, C::GREY, F_SMALL);
           if (down) {
@@ -332,14 +343,19 @@ static uint8_t inLobby() {
         continue;
       }
       const InPeer &p = rows[row - 1].p;
-      if (p.friendly) gfx.text(12, y + 4, "*", C::YELLOW);
+      if (p.friendly) gfx.text(12, y + 4, "*", p.online ? C::YELLOW : C::GREY);
       gfx.text(30, y + 4, p.name, p.online ? C::WHITE : C::GREY);
-      gfx.text(100, y + 4, p.code, C::LTGREY);
+      gfx.text(100, y + 4, p.code, p.online ? C::LTGREY : C::GREY);
       const char *s = !p.online ? TR("offline", "offline") : (p.busy ? TR("busy", "spielt") : TR("free", "frei"));
       gfx.text(186, y + 4, s, !p.online ? C::GREY : (p.busy ? C::ORANGE : C::LIME));
       if (p.online && p.game >= LKG_C4 && p.game <= MP_GAMES_N) gfx.right(SCR_W - 12, y + 8, mpGameName(p.game), C::GREY, F_SMALL);
+      else if (!p.online && p.ago != 255) {                // seen lately: how long ago
+        char a[12];
+        snprintf(a, sizeof(a), "%u min", p.ago);
+        gfx.right(SCR_W - 12, y + 8, a, C::GREY, F_SMALL);
+      }
     }
-    const char *hint = !sel ? TR("OK = code, friends, name   hold OK = back", "OK = Code, Freunde, Name   halten = zurück")
+    const char *hint = !sel ? TR("OK = name, game, friends   hold OK = back", "OK = Name, Spiel, Freunde   halten = zurück")
                      : rows[sel - 1].p.friendly ? TR("OK = challenge   RIGHT = no friend   hold = back", "OK = fordern   RIGHT = kein Freund   halten = zurück")
                      : TR("OK = challenge   RIGHT = friend   hold = back", "OK = fordern   RIGHT = Freund   halten = zurück");
     gfx.center(SCR_H - 16, hint, C::GREY, F_SMALL);
@@ -349,20 +365,83 @@ static uint8_t inLobby() {
   return ret;
 }
 
+// ---------------- no setup: a token without the PIN ----------------
+static const char *inHost() { const char *h = strstr(tvUrl, "://"); return h ? h + 3 : tvUrl; }
+
+static void inJoinScreen(const char *l1, col c) {
+  inWhere = IW_JOIN;
+  inTitle(IN_TITLE);
+  char b[60];
+  snprintf(b, sizeof(b), "%.48s", inHost());
+  gfx.center(70, l1, c);
+  gfx.center(100, b, C::CYAN, F_SMALL);
+  snprintf(b, sizeof(b), TR("you play as %s", "du spielst als %s"), linkName());
+  gfx.center(140, b, C::WHITE);
+  gfx.center(166, TR("(the name: OK on your own row)", "(der Name: OK in deiner Zeile)"), C::GREY, F_SMALL);
+  gfx.send();
+}
+
+/* The server is asked for a token for internet play (NET_OPEN): no PIN, no
+   typing. A server that cannot be reached gets the TV's screens (try again,
+   another address); one that wants its PIN (NET_OPEN=0, an older server)
+   the PIN - that token is the TV's too. false = left with hold OK.       */
+static bool inJoin() {
+  bool reached = false;
+  for (;;) {
+    inJoinScreen(TR("connecting to the server ...", "verbinde mit dem Server ..."), C::WHITE);
+    char path[96];
+    int k = snprintf(path, sizeof(path), "/api/net/hello?code=%s&name=", tvConsoleCode());
+    for (const char *c = linkName(); *c && k < (int)sizeof(path) - 2; c++)
+      if (isalnum((unsigned char)*c) || *c == ' ') path[k++] = *c == ' ' ? '+' : *c;
+    path[k] = 0;
+    int st = 0;
+    const char *r = tvAsk(path, true, &st);
+    if (st < 0) return false;
+    char tok[sizeof(tvNtok)] = "";
+    if (r && jsStr(r, r + strlen(r), "token", tok, sizeof(tok)) && tok[0]) {
+      strcpy(tvNtok, tok);
+      tvSave();
+      tvNetToken(tvNtok);
+      sfx(1400, 120);
+      for (uint32_t t0 = millis(); millis() - t0 < 1500 && poll(); )        // a moment to read it
+        inJoinScreen(TR("connected", "verbunden"), C::LIME);
+      return true;
+    }
+    if (st == 429) {                                    // many new consoles from this address
+      if (!tvSay(IN_TITLE, TR("too many new consoles here", "zu viele neue Konsolen"), TR("try again later", "später nochmal"),
+                 TR("OK = try again", "OK = nochmal"))) return false;
+      continue;
+    }
+    if ((st == 0 || st >= 500) && !reached) {           // not reached: try again, or another address
+      reached = true;
+      if (!tvReach()) return false;
+      continue;
+    }
+    if (!tvSay(IN_TITLE, TR("the server asks for its PIN", "der Server will seine PIN"),
+               TR("pair it with the server PIN", "mit der Server-PIN koppeln"), TR("(the TV uses the same)", "(gilt auch für TV)"))) return false;
+    return tvPinPair();
+  }
+}
+
+// a console nobody named yet: a name the others can tell apart, MA and its code
+static void inDefaultName() {
+  if (strcmp(linkName(), "PLAYER")) return;
+  char n[LK_NAME + 1];
+  snprintf(n, sizeof(n), "MA%.4s", tvConsoleCode());
+  linkSetName(n);
+}
+
 // ---------------- the page ----------------
 void inetRun() {
   tvLoad();
+  inDefaultName();
   bool wasLinked = phoneLink;
   phoneLink = false;
   pollHook = tvHook;
   if (tvOnline(IN_TITLE)) {
     while (tvUrl[0] || tvTypeUrl()) {
-      if (!tvNetStart(tvUrl, tvTok)) { mpNote(TR("not enough memory", "zu wenig Speicher"), NULL, IN_TITLE); break; }
-      if (!tvTok[0]) {                                  // the TV's pairing: once for both
-        if (!tvSay(IN_TITLE, TR("not paired with the server", "nicht mit dem Server gekoppelt"),
-                   TR("pair it with the server PIN", "mit der Server-PIN koppeln"), TR("(the TV uses the same)", "(gilt auch für TV)"))) break;
-        if (!tvPair()) break;
-      }
+      if (!tvNetStart(tvUrl, tvStartTok())) { mpNote(TR("not enough memory", "zu wenig Speicher"), NULL, IN_TITLE); break; }
+      if (!tvStartTok()[0] && !inJoin()) break;         // first time: a token without the PIN (or the PIN)
       void *mem = malloc(sizeof(InState));
       if (!mem) { mpNote(TR("not enough memory", "zu wenig Speicher"), NULL, IN_TITLE); break; }
       inS = new (mem) InState();
@@ -381,7 +460,7 @@ void inetRun() {
       linkCore().toLobby();
       tvNetStop();
       if (r != 1) break;
-      tvForget();                                       // the server forgot us: pair again
+      if (tvTok[0]) tvForget(); else tvForgetNet();     // the server forgot us: a new token
     }
   }
   tvNetStop();

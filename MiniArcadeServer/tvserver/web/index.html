@@ -82,10 +82,10 @@ var ST=['bereit','spielt','Pause','zu Ende','Fehler'];
 function state(s){$('now').textContent=s?(ST[s.s]+(s.t?' - '+s.t:'')+(s.s==1||s.s==2?' '+dur(Math.floor(s.pos/1000))+(s.d?' / '+dur(s.d):''):'')+(s.fps?' - '+s.fps+' fps':'')+(s.msg?' ('+s.msg+')':'')):''}
 function poll(){if(target())api('/api/web/state?console='+target()).then(state).catch(function(){})}
 function consoles(){return api('/api/web/consoles').then(function(d){cons=d.consoles;var sel=target();
- $('target').innerHTML=cons.map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+' ('+c.code+')</option>'}).join('');
+ $('target').innerHTML=cons.filter(function(c){return !c.net}).map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+' ('+c.code+')</option>'}).join('');
  if(sel)$('target').value=sel;
  $('cons').innerHTML=cons.length?cons.map(function(c){return '<div class="it"><div><div class="t">'+esc(c.name)+' <span class="m">'+c.code+'</span></div>'+
- '<div class="m">'+(c.online?'TV ist offen':'nicht verbunden')+'</div></div><button class="r" onclick="removeC(\''+c.id+'\')">Entfernen</button></div>'}).join(''):'<p class="m">Noch keine Konsole gekoppelt.</p>';poll()})}
+ '<div class="m">'+(c.net?'nur Mehrspieler (ohne PIN)':c.online?'TV ist offen':'nicht verbunden')+'</div></div><button class="r" onclick="removeC(\''+c.id+'\')">Entfernen</button></div>'}).join(''):'<p class="m">Noch keine Konsole gekoppelt.</p>';poll()})}
 function removeC(id){if(confirm('Konsole entfernen? Sie muss danach neu gekoppelt werden.'))api('/api/web/remove',{console:id}).then(consoles)}
 function start(){api('/api/web/me').then(function(d){show(true);$('spin').textContent=d.pin;var w=d.blocked;$('warn').textContent=w;$('warn').classList.toggle('hide',!w);
  $('cats').innerHTML=d.cats.map(function(n,k){return '<button onclick="feed('+k+')">'+esc(n)+'</button>'}).join('');

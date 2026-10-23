@@ -12,7 +12,7 @@ import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
-from tvserver import app as tvapp, net, youtube  # noqa: E402
+from tvserver import app as tvapp, net, store as tvstore, youtube  # noqa: E402
 from tvserver.store import FC_ALPHA, Store  # noqa: E402
 
 FAKE = [sys.executable, os.path.join(HERE, 'fake_ytdlp.py')]
@@ -30,17 +30,22 @@ class Clock:
         return self.t
 
 
-@pytest.fixture
-async def cli(aiohttp_client, tmp_path):
-    cfg = tvapp.Config({'ADMIN_PASSWORD': 'geheim', 'DATA_DIR': str(tmp_path), 'YTDLP_UPDATE_HOURS': '0',
-                        'BASE_PATH': '/tv', 'CONSOLE_PIN': '13572468'})
-    app = tvapp.make_app(cfg, yt=youtube.YouTube(60, FAKE), thumb_fetch=no_thumb)
+async def make_cli(aiohttp_client, tmp_path, **env):
+    e = {'ADMIN_PASSWORD': 'geheim', 'DATA_DIR': str(tmp_path), 'YTDLP_UPDATE_HOURS': '0',
+         'BASE_PATH': '/tv', 'CONSOLE_PIN': '13572468'}
+    e.update(env)
+    app = tvapp.make_app(tvapp.Config(e), yt=youtube.YouTube(60, FAKE), thumb_fetch=no_thumb)
     c = await aiohttp_client(app)
     c.srv = app['srv']
     c.clock = Clock()
     c.srv.net.clock = c.clock
     c.dir = tmp_path
     return c
+
+
+@pytest.fixture
+async def cli(aiohttp_client, tmp_path):
+    return await make_cli(aiohttp_client, tmp_path)
 
 
 class Con:
@@ -83,6 +88,18 @@ async def pair(cli, code, name):
     r = await cli.post('/tv/api/pair', params={'code': code, 'name': name, 'pin': '13572468'})
     assert r.status == 200
     return Con(cli, (await r.json())['token'])
+
+
+async def hello(cli, code, name='', status=200, headers=None):
+    """A console without the PIN (NET_OPEN): its token for internet play."""
+    r = await cli.post('/tv/api/net/hello', params={'code': code, 'name': name}, headers=headers or {})
+    assert r.status == status, await r.text()
+    if status != 200:
+        return None
+    j = await r.json()
+    c = Con(cli, j['token'])
+    c.code = j['me']
+    return c
 
 
 async def two(cli):
@@ -369,7 +386,10 @@ async def test_cleanup(cli):
     assert cli.srv.net.sessions == {}
     cli.clock.t += 200
     cli.srv.net.sweep()
-    assert cli.srv.net.pres == {} and cli.srv.net.invites == {}
+    assert len(cli.srv.net.pres) == 2 and cli.srv.net.invites == {}   # seen lately: still known
+    cli.clock.t += 400
+    cli.srv.net.sweep()
+    assert cli.srv.net.pres == {}
 
 
 async def test_new_game_after_one(cli):
@@ -451,3 +471,139 @@ async def test_messages_not_kept(cli, tmp_path):
     for f in tmp_path.rglob('*'):
         if f.is_file():
             assert b'deadbeef' not in f.read_bytes(), f
+
+
+# ---------------- NET_OPEN: internet play without the PIN ----------------
+async def test_hello_open(cli):
+    a = await hello(cli, 'aa11', 'Anna')
+    assert len(a.code) == 6 and set(a.code) <= set(FC_ALPHA)
+    j = await a.poll(n='ANNA', l=1)
+    assert j['me'] == a.code and j['lob'] == []
+    r = await cli.get('/tv/api/net/me', headers=a.h)
+    assert r.status == 200 and (await r.json())['n'] == 'ANNA'
+    for path in ('/tv/api/cats', '/tv/api/feed', '/tv/api/list', '/tv/api/tv/now'):   # the TV: only with the PIN
+        r = await cli.get(path, headers=a.h)
+        assert r.status == 401, path
+    r = await cli.post('/tv/api/tv/play', params={'id': 'dQw4w9WgXcQ'}, headers=a.h)
+    assert r.status == 401
+    b = await hello(cli, 'BB22')                                       # no name: one is made up from the code
+    st = cli.srv.store
+    assert st.console(st.by_token(b.h['X-Token']))['name'] == 'MABB22'
+    assert (await (await cli.get('/tv/api/net/me', headers=b.h)).json())['n'] == 'MABB22'
+    assert st.scope(st.by_token(a.h['X-Token'])) == 'net'
+    p = await pair(cli, 'CC33', 'CARL')                                # a paired console: TV and internet
+    assert st.scope(st.by_token(p.h['X-Token'])) == ''
+    assert (await cli.get('/tv/api/cats', headers=p.h)).status == 200
+    await p.poll(n='CARL')
+    oid = (await a.post('invite', to=p.code, g=1))['oid']              # both kinds play together
+    iid = (await p.poll())['inv']['iid']
+    j = await p.post('answer', iid=iid, yes=1)
+    assert j['ses']['oc'] == a.code and (await a.poll())['out'] == {'oid': oid, 'st': 'ok'}
+
+
+async def test_hello_closed(aiohttp_client, tmp_path):
+    cli = await make_cli(aiohttp_client, tmp_path, NET_OPEN='0')
+    r = await cli.post('/tv/api/net/hello', params={'code': 'AA11', 'name': 'ANNA'})
+    assert r.status == 403
+    assert cli.srv.store.consoles() == {}
+    cid, tok = cli.srv.store.add_console('BB22', 'BEN', scope='net')   # from the time it was open
+    r = await cli.post('/tv/api/net/poll', json={}, headers={'X-Token': tok})
+    assert r.status == 401                                             # closed: the PIN is needed again
+    a = await pair(cli, 'AA11', 'ANNA')                                # the PIN works as before
+    assert (await a.poll(n='ANNA'))['me']
+    for v in ('0', 'no', 'off', 'false'):
+        assert not tvapp.Config({'NET_OPEN': v}).net_open
+    assert tvapp.Config({}).net_open and tvapp.Config({'NET_OPEN': '1'}).net_open
+
+
+async def test_hello_rate(aiohttp_client, tmp_path):
+    cli = await make_cli(aiohttp_client, tmp_path, TRUSTED_PROXIES='127.0.0.1')
+    x = {'X-Forwarded-For': '203.0.113.7'}
+    for k in range(tvapp.HELLO_BURST):
+        await hello(cli, 'AA%d' % k, headers=x)
+    await hello(cli, 'AA9', status=429, headers=x)                     # the same address: slowed down
+    await hello(cli, 'BB1', headers={'X-Forwarded-For': '198.51.100.9'})   # another one behind the proxy: fine
+    assert len(cli.srv.store.consoles()) == tvapp.HELLO_BURST + 1
+
+
+async def test_hello_rate_untrusted(aiohttp_client, tmp_path):
+    cli = await make_cli(aiohttp_client, tmp_path)                     # no TRUSTED_PROXIES: the header counts for nothing
+    for k in range(tvapp.HELLO_BURST):
+        await hello(cli, 'AA%d' % k, headers={'X-Forwarded-For': '203.0.113.%d' % k})
+    await hello(cli, 'AA9', status=429, headers={'X-Forwarded-For': '198.51.100.9'})
+
+
+async def test_hello_then_pin(cli):
+    """A console that played online without the PIN pairs for the TV: the same console."""
+    a = await hello(cli, 'AA11', 'ANNA')
+    b = await pair(cli, 'BB22', 'BEN')
+    await a.poll()
+    await b.poll()
+    await a.post('friend', c=b.code, on=1)
+    st = cli.srv.store
+    ida = st.by_token(a.h['X-Token'])
+    r = await cli.post('/tv/api/pair', params={'code': 'AA11', 'name': 'ANNA', 'pin': '13572468'}, headers=a.h)
+    j = await r.json()
+    assert r.status == 200 and j['id'] == ida
+    new = Con(cli, j['token'])
+    assert (await cli.get('/tv/api/cats', headers=new.h)).status == 200      # the TV now
+    assert (await new.poll(l=1))['me'] == a.code                            # the same code ...
+    assert [f['c'] for f in (await new.poll(l=1))['fr']] == [b.code]       # ... and friends
+    assert (await cli.post('/tv/api/net/poll', json={}, headers=a.h)).status == 401   # the old token is gone
+    assert st.scope(ida) == '' and len(st.consoles()) == 2
+    r = await cli.post('/tv/api/pair', params={'code': 'CC33', 'pin': '13572468'}, headers=b.h)
+    assert (await r.json())['id'] != st.by_token(b.h['X-Token'])            # a paired one: a new console as before
+
+
+async def test_hello_limit_kept(cli, monkeypatch):
+    monkeypatch.setattr(tvstore, 'NET_CONSOLES_MAX', 3)
+    cons = [await hello(cli, 'AA%d' % k) for k in range(4)]
+    await pair(cli, 'PP11', 'PAUL')                                    # paired ones never go
+    st = cli.srv.store
+    assert len(st.consoles()) == 4
+    assert st.by_token(cons[0].h['X-Token']) is None and st.by_token(cons[3].h['X-Token'])
+
+
+async def test_lobby_everybody(cli):
+    """Everybody online is in the lobby without friends: the free ones first."""
+    a = await hello(cli, 'AA11')
+    b = await hello(cli, 'BB22')
+    c = await hello(cli, 'CC33')
+    d = await hello(cli, 'DD44')
+    for x, n, g in ((a, 'ANNA', 0), (b, 'BEN', 3), (c, 'CARL', 0), (d, 'DORA', 5)):
+        await x.poll(n=n, g=g)
+    oid = (await a.post('invite', to=c.code, g=1))['oid']              # ANNA and CARL play
+    iid = (await c.poll())['inv']['iid']
+    await c.post('answer', iid=iid, yes=1)
+    assert (await a.poll())['out'] == {'oid': oid, 'st': 'ok'}
+    j = await b.poll(l=2)
+    assert [(x['n'], x['b'], x['f']) for x in j['lob']] == [('DORA', 0, 0), ('ANNA', 1, 0), ('CARL', 1, 0)]
+    assert j['lob'][0]['g'] == 5 and j['fr'] == [] and j['rc'] == []
+    await b.post('friend', c=d.code, on=1)
+    oid = (await b.post('invite', to=d.code, g=2))['oid']              # a challenge needs no friendship
+    assert (await d.poll())['inv']['ic'] == b.code
+
+
+async def test_lobby_recent(cli):
+    a = await hello(cli, 'AA11')
+    b = await hello(cli, 'BB22')
+    c = await hello(cli, 'CC33')
+    await a.poll(n='ANNA')
+    await c.poll(n='CARL')
+    cli.clock.t += 25
+    await b.poll(n='BEN')
+    cli.clock.t += 100                                                 # ANNA and CARL went away
+    j = await b.poll(l=2)
+    assert j['lob'] == []
+    assert sorted((x['n'], x['m'], x['f']) for x in j['rc']) == [('ANNA', 2, 0), ('CARL', 2, 0)]
+    assert 'rc' not in await b.poll(l=1)                               # older consoles: as before
+    cli.clock.t += 60
+    await c.poll()                                                     # CARL is back: online, not "seen lately"
+    j = await b.poll(l=2)
+    assert [x['n'] for x in j['lob']] == ['CARL'] and [(x['n'], x['m']) for x in j['rc']] == [('ANNA', 3)]
+    cli.clock.t += 600                                                 # 10 minutes: forgotten
+    await b.poll()
+    await c.poll()
+    cli.srv.net.sweep()
+    j = await b.poll(l=2)
+    assert j['rc'] == [] and [x['n'] for x in j['lob']] == ['CARL']

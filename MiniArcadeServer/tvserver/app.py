@@ -27,6 +27,8 @@ WEB = Path(__file__).parent / 'web'
 THUMB_W, THUMB_H = 80, 45
 PIN_TRIES = 5                      # wrong PINs in a row (per address and per console) ...
 PIN_LOCK_S = 600                   # ... lock pairing for this long
+HELLO_BURST = 5                    # new consoles for internet play without the PIN (NET_OPEN): per address
+HELLO_PER_H = 20                   # ... so many at once, then so many per hour
 DEFAULT_CATS = 'Beliebt=;Musik=musik;Gaming=gaming;News=nachrichten;Sport=sport highlights'
 
 
@@ -38,6 +40,8 @@ class Config:
         self.base = ('/' + bp.lstrip('/')) if bp else ''
         self.password = e.get('ADMIN_PASSWORD', '')
         self.pin = ''.join(ch for ch in e.get('CONSOLE_PIN', '') if ch.isdigit())
+        # internet play open to every console without the PIN (POST /api/net/hello); the TV keeps the PIN
+        self.net_open = e.get('NET_OPEN', '1').strip().lower() not in ('0', 'no', 'false', 'off', '')
         self.data = e.get('DATA_DIR', '/data')
         self.cache_s = int(float(e.get('CACHE_MINUTES', '10')) * 60)
         self.thumb_mb = float(e.get('THUMB_CACHE_MB', '50'))
@@ -151,6 +155,9 @@ class Server:
         if not tok and req.headers.get('Authorization', '').startswith('Bearer '):
             tok = req.headers['Authorization'][7:]
         cid = self.store.by_token(tok.strip())
+        # a token from /api/net/hello: internet play only, and only while NET_OPEN is on
+        if cid and self.store.scope(cid) == 'net' and not (net and self.cfg.net_open):
+            cid = None
         if not cid:
             raise web.HTTPUnauthorized(text='not paired')
         # internet play polls often while a real-time game runs: its own, wider limit
@@ -263,9 +270,28 @@ class Server:
             raise web.HTTPForbidden(text='wrong PIN')
         for k in keys:
             self.fails.pop(k, None)
+        old = self.store.by_token((req.headers.get('X-Token') or '').strip())
+        if old and self.store.scope(old) == 'net':     # it played online already: the same console, now for all
+            tok = self.store.upgrade(old, name)
+            log.info('console %s (%s) paired (was online without the PIN)', code, name)
+            return self.j({'token': tok, 'id': old})
         cid, tok = self.store.add_console(code, name)
         log.info('console %s (%s) paired', code, name)
         return self.j({'token': tok, 'id': cid})
+
+    async def n_hello(self, req):
+        """NET_OPEN: a console gets a token for internet play without the PIN (the TV
+        still needs the PIN). Limited per client address."""
+        if not self.cfg.net_open:
+            raise web.HTTPForbidden(text='closed - pair with the PIN')
+        if not self.limits.ok(('h', self.ip(req)), HELLO_PER_H / 3600, HELLO_BURST):
+            raise web.HTTPTooManyRequests(text='too many new consoles - wait a while')
+        d = await self.body(req)
+        code = ''.join(ch for ch in str(d.get('code', '')).upper() if ch.isalnum())[:4] or '????'
+        name = youtube.ascii_safe(str(d.get('name', '')), 12) or 'MA' + code
+        cid, tok = self.store.add_console(code, name, scope='net')
+        log.info('console %s (%s) joined internet play', code, name)
+        return self.j({'token': tok, 'id': cid, 'me': self.store.friend_code(cid)})
 
     async def cats(self, req):
         self.console(req)
@@ -642,6 +668,7 @@ class Server:
         for cid, c in self.store.consoles().items():
             p = self.hub.players.get(cid)
             out.append({'id': cid, 'name': c['name'], 'code': c['code'], 'since': c['since'],
+                        'net': 1 if c.get('scope') == 'net' else 0,
                         'state': p.state_json() if p else None,
                         'online': bool(p and now() - p.last_pull < 20)})
         return self.j({'consoles': out})
@@ -707,6 +734,7 @@ class Server:
         r.add_get('/api/tv/now', self.tv_now)
         r.add_route('*', '/api/tv/ctl', self.tv_ctl)
         r.add_get('/api/tv/stream', self.tv_stream)
+        r.add_post('/api/net/hello', self.n_hello)
         r.add_post('/api/net/poll', self.n_poll)
         r.add_get('/api/net/me', self.n_me)
         r.add_post('/api/net/invite', self.n_invite)
