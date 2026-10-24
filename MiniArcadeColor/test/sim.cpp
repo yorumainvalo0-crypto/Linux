@@ -175,6 +175,13 @@ static size_t simHeap = 100000;                  // what the heap has for the SD
 static const char *simSdRoot() { return simSdIn ? simSdDir.c_str() : "frames/no-sd-card"; }
 #define SD_ROOT simSdRoot()
 #define SDL_ROOM(n) ((size_t)(n) + 16384 <= simHeap)
+static size_t simMagHeap = 200000;               // what the heap has for an SD game (maglogic, magerr lower it)
+#define MAG_ROOM(n) ((size_t)(n) + 16384 <= simMagHeap)
+static std::map<std::string, int32_t> magSyms;  // the variables of the SD game compiled last: where they are
+#define MAG_TRACE_SYM(n, k, v) do { if ((k) == SY_VAR || (k) == SY_ARR) magSyms[n] = (v); } while (0)
+static long magProbeTop = 0, magProbeLow = 0;    // the compiler's stack: where it began, the deepest it went
+#define MAG_CSTACK 6144                         // x86-64 frames are about 1.5 times the C3's (4096 there)
+#define MAG_PROBE() do { volatile char here_; if ((long)&here_ < magProbeLow) magProbeLow = (long)&here_; } while (0)
 
 #include "Arduino.h"
 #include "net.h"                   // pretend network, before the console finds main/net.h
@@ -3584,7 +3591,7 @@ static void sdPlayBlocks() {                     // the block bot until the goal
 // files of the card
 static void sdCard(const std::string &dir, bool samples) {
   std::string cmd = "rm -rf " + dir + " frames/no-sd-card && mkdir -p " + dir + "/MINIARC/levels";
-  if (samples) cmd += " && cp ../sdcard/MINIARC/levels/*.txt " + dir + "/MINIARC/levels/";
+  if (samples) cmd += " && cp ../sdcard/MINIARC/levels/*.txt " + dir + "/MINIARC/levels/ && mkdir -p " + dir + "/MINIARC/games && cp ../sdcard/MINIARC/games/* " + dir + "/MINIARC/games/";
   if (system(cmd.c_str())) printf("      could not make the card %s\n", dir.c_str());
 }
 static void sdWrite(const std::string &path, const std::string &text) {
@@ -3791,6 +3798,8 @@ static void sdLogic() {
   sdlEnd();
   check("nothing of the SD levels in the console's flash", sdNvsSame());
 }
+
+#include "magsim.h"                                             // the SD games (MAG script)
 
 // ---------------- the translations ----------------
 static uint32_t sprSwitch = 0, sprBack = 0;      // "sprache": when the language was switched there and back
@@ -4256,6 +4265,11 @@ int main(int argc, char **argv) {
     simBot = pmEditorBot; botFrom = e + 400; pmeT = e + 1800;
     pmbKeys = true;
     captureMs = { e + 1500, e + 2600, e + 4200 };
+  } else if (scenario == "maglogic") {
+    printf("== %s\n", scenario.c_str());
+    magLogic();
+    return failures ? 1 : 0;
+  } else if (magScenario(M)) {
   } else if (scenario == "sdlogic") {
     printf("== %s\n", scenario.c_str());
     sdLogic();
@@ -5313,6 +5327,7 @@ int main(int argc, char **argv) {
     check("pumpkin editor: the own level is listed and played", seen("GRAVE RUN") && pmbLevelsWon >= 1 && pmSv.stars[PM_LEVELS] >= 1 && seen("OWN LEVEL 1"));
     check("pumpkin editor: in the home WLAN the link has its address and the WLAN stays on", seen("192.168.1.50/maze") && pmeHomeOut == NET_ONLINE);
   }
+  magChecks();
   check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "karttilt" || scenario == "menu" || scenario == "settings" || scenario == "batglitch" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;

@@ -1,0 +1,527 @@
+-- Pixel Quest: a side-scrolling platformer for MiniArcade Color, in MAG script.
+-- Run, jump over pits and spikes, stomp the walkers, collect coins and
+-- reach the flag at the end of each of the three worlds.
+-- Shows a big game: the worlds are much wider than the screen and are
+-- never loaded into RAM - drawmap() and mget() read them from the card
+-- as the camera moves (only the part on the screen is read). Coins and
+-- walkers are picked up from the map column by column as they come into
+-- view and then live in arrays.
+game "Pixel Quest"
+author "MiniArcade"
+info "LEFT/RIGHT run, UP or OK jumps. Stomp the walkers, avoid spikes and pits, reach the flag."
+fps 30
+
+const TILE = 16
+const Q = 16                 -- the player's position and speed in 1/16 pixel
+const OY = 32                -- the map's top edge on the screen (13 rows of 16 = 208)
+const ROWS = 13
+const RUN = 40               -- top speed (2.5 pixels a frame)
+const GRAV = 8
+const JUMP = 112
+const MAXC = 64              -- coins kept at once
+const MAXE = 16              -- walkers kept at once
+
+var world                    -- 1..3
+var m                        -- its map (a level block)
+var px, py, vx, vy           -- the player: top left of its 10 x 14 box, in 1/16 pixel
+var onground, face, anim, lives, points, coins
+var camx                     -- the camera's left edge in pixels
+var scan                     -- the next map column to look at for coins and walkers
+var state, timer             -- state 0 playing, 1 hit, 2 world clear, 3 won
+var startx, starty
+array cx[MAXC]               -- coins: pixel position in the world, 1 = taken
+array cy[MAXC]
+array cg[MAXC]
+var nc
+array ex[MAXE]               -- walkers: pixel position, direction, 0 free / 1 walking / 2+ squashed
+array ey[MAXE]
+array ed[MAXE]
+array es[MAXE]
+
+func init()
+  world = 1
+  lives = 3
+  points = 0
+  coins = 0
+  score(0)
+  begin()
+end
+
+-- the world from its start: nothing loaded, the first screen looked at
+func begin()
+  m = level(world)
+  nc = 0
+  for i = 0, MAXE - 1 do es[i] = 0 end
+  startx = 2 * TILE
+  starty = 8 * TILE
+  scan = 0
+  camx = 0
+  lookahead()
+  px = startx * Q
+  py = starty * Q
+  vx = 0
+  vy = 0
+  face = 0
+  state = 0
+  timer = 0
+end
+
+-- the columns that come into view: coins, walkers and the start
+func lookahead()
+  while scan < mapw(m) and scan <= camx / TILE + 21 do
+    for y = 0, ROWS - 1 do
+      local c = mget(m, scan, y)
+      if c == 'o' and nc < MAXC then
+        cx[nc] = scan * TILE + 4
+        cy[nc] = y * TILE + 4
+        cg[nc] = 0
+        nc = nc + 1
+      elif c == 'e' then
+        addwalker(scan * TILE, y * TILE)
+      elif c == 'P' then
+        startx = scan * TILE + 3
+        starty = y * TILE + 2
+      end
+    end
+    scan = scan + 1
+  end
+end
+
+func addwalker(x, y)
+  for i = 0, MAXE - 1 do
+    if es[i] == 0 then
+      ex[i] = x
+      ey[i] = y
+      ed[i] = -1
+      es[i] = 1
+      return
+    end
+  end
+end
+
+func solid(tx, ty)
+  local c = mget(m, tx, ty)
+  return c == '#' or c == '=' or c == 'B'
+end
+
+-- does the player's box at x, y (pixels) touch a solid tile?
+func hits(x, y)
+  for ty = y / TILE, (y + 13) / TILE do
+    for tx = x / TILE, (x + 9) / TILE do
+      if solid(tx, ty) then return true end
+    end
+  end
+  return false
+end
+
+-- is any tile under the box character c?
+func touches(x, y, c)
+  return mget(m, (x + 5) / TILE, (y + 7) / TILE) == c or mget(m, (x + 5) / TILE, (y + 13) / TILE) == c
+end
+
+func hurt()
+  state = 1
+  timer = 0
+  vy = -JUMP
+  sfx(140, 400)
+end
+
+func update()
+  timer = timer + 1
+  if state == 1 then
+    vy = vy + GRAV
+    py = py + vy
+    if timer > 50 then
+      lives = lives - 1
+      if lives <= 0 then
+        gameover(points)
+      else
+        begin()
+      end
+    end
+    return
+  end
+  if state == 2 then
+    if timer > 60 then
+      world = world + 1
+      begin()
+    end
+    return
+  end
+  if state == 3 then
+    if timer > 90 then gameover(points + lives * 500) end
+    return
+  end
+  -- running
+  local want = 0
+  if btn(LEFT) then want = -RUN end
+  if btn(RIGHT) then want = RUN end
+  if want == 0 and tiltx() != 0 then want = clamp(tiltx() * RUN / 50, -RUN, RUN) end
+  if want < vx then vx = max(want, vx - 6) end
+  if want > vx then vx = min(want, vx + 6) end
+  if want < 0 then face = 1 end
+  if want > 0 then face = 0 end
+  -- jumping: higher while UP is held
+  if (btnp(UP) or btnp(OK)) and onground then
+    vy = -JUMP
+    sfx(900, 40)
+  end
+  if vy < -40 and not btn(UP) and not btn(OK) then vy = -40 end
+  -- move sideways, then up or down; a solid tile stops the box at its edge
+  px = max(0, px + vx)
+  if hits(px / Q, py / Q) then
+    if vx > 0 then px = ((px / Q + 9) / TILE * TILE - 10) * Q else px = ((px / Q) / TILE + 1) * TILE * Q end
+    vx = 0
+  end
+  vy = min(vy + GRAV, 160)
+  py = py + vy
+  if py > 0 and hits(px / Q, py / Q) then
+    if vy > 0 then
+      py = (((py / Q) + 13) / TILE * TILE - 14) * Q
+    else
+      py = ((py / Q) / TILE + 1) * TILE * Q
+    end
+    vy = 0
+  end
+  -- standing: a solid tile right under the feet (not only in the frames that hit it)
+  onground = vy >= 0 and py > 0 and hits(px / Q, py / Q + 1)
+  if vx != 0 and onground then anim = anim + 1 end
+  local x = px / Q
+  local y = py / Q
+  if y > ROWS * TILE or touches(x, y, '^') then
+    hurt()
+    return
+  end
+  if touches(x, y, '|') or touches(x, y, 'F') then
+    points = points + 100
+    state = 2
+    if world == levels() then state = 3 end
+    timer = 0
+    sfx(1600, 300)
+    return
+  end
+  -- coins
+  for i = 0, nc - 1 do
+    if cg[i] == 0 and x + 10 > cx[i] and x < cx[i] + 8 and y + 14 > cy[i] and y < cy[i] + 8 then
+      cg[i] = 1
+      coins = coins + 1
+      points = points + 10
+      sfx(1900, 40)
+    end
+  end
+  -- walkers: only those near the screen move
+  for i = 0, MAXE - 1 do
+    if es[i] == 1 and ex[i] > camx - 64 and ex[i] < camx + SCREEN_W + 64 then
+      local nx = ex[i] + ed[i]
+      local front = nx
+      if ed[i] > 0 then front = nx + 15 end
+      if solid(front / TILE, (ey[i] + 8) / TILE) or not solid(front / TILE, (ey[i] + 16) / TILE) then
+        ed[i] = -ed[i]
+      else
+        ex[i] = nx
+      end
+      if x + 10 > ex[i] + 2 and x < ex[i] + 14 and y + 14 > ey[i] + 4 and y < ey[i] + 16 then
+        if vy > 0 and y + 14 < ey[i] + 12 then
+          es[i] = 2
+          vy = -70
+          points = points + 50
+          sfx(600, 80)
+        else
+          hurt()
+          return
+        end
+      end
+    elif es[i] >= 2 then
+      es[i] = es[i] + 1
+      if es[i] > 20 then es[i] = 0 end
+    end
+  end
+  camx = clamp(x - 120, 0, mapw(m) * TILE - SCREEN_W)
+  lookahead()
+  score(points)
+end
+
+func draw()
+  cls(col(110, 170, 255))
+  -- hills far away move slower than the world
+  for i = 0, 5 do
+    local hx = (i * 90 - camx / 4) % 540 - 60
+    disc(hx, SCREEN_H - 40, 60, col(90, 190, 110))
+  end
+  drawmap(m, land, -camx, OY)
+  for i = 0, nc - 1 do
+    if cg[i] == 0 then
+      local sx = cx[i] - camx
+      if sx > -8 and sx < SCREEN_W then spr(coin, sx, cy[i] + OY + (timer / 4 + i) % 4 / 2) end
+    end
+  end
+  for i = 0, MAXE - 1 do
+    if es[i] == 1 then
+      spr(walker, ex[i] - camx, ey[i] + OY, 1, timer / 8 % 2)
+    elif es[i] >= 2 then
+      spr(flat, ex[i] - camx, ey[i] + OY + 8)
+    end
+  end
+  local frame = hero
+  if not onground then
+    frame = herojump
+  elif vx != 0 then
+    frame = hero + anim / 4 % 2
+  end
+  spr(frame, px / Q - 3 - camx, py / Q - 2 + OY, 1, face)
+  for i = 1, lives do spr(heart, SCREEN_W - 4 - i * 12, BAR_H + 4) end
+  spr(coin, 6, BAR_H + 4)
+  num(18, BAR_H + 4, coins, WHITE, 1)
+  if timer < 45 and state == 0 then
+    text(110, 100, "WORLD", WHITE, 3)
+    num(200, 100, world, YELLOW, 3)
+  end
+  if state == 2 then text((SCREEN_W - textw("WORLD CLEAR!", 3)) / 2, 100, "WORLD CLEAR!", YELLOW, 3) end
+  if state == 3 then text((SCREEN_W - textw("YOU WIN!", 4)) / 2, 96, "YOU WIN!", YELLOW, 4) end
+end
+
+-- the map characters: tiles are 16 pixels, drawn from 8 x 8 sprites at twice the size;
+-- o (coin), e (walker) and P (start) are picked up by lookahead() and not drawn
+tiles land 16
+  "#" = dirt
+  "=" = grass
+  "B" = brick
+  "^" = spikes
+  "|" = pole
+  "F" = flag
+  "c" = cloud
+  "b" = bush
+end
+
+sprite dirt 8 8
+"nnnnnnnn"
+"nnnnnann"
+"nannnnnn"
+"nnnnnnnn"
+"nnnannnn"
+"nnnnnnnn"
+"annnnnna"
+"nnnnnnnn"
+
+sprite grass 8 8
+"gggggggg"
+"gggdgggg"
+"dgdddgdg"
+"nddnnddn"
+"nnnnnnnn"
+"nnnnnann"
+"nannnnnn"
+"nnnnnnnn"
+
+sprite brick 8 8
+"oooooook"
+"onnnnnnk"
+"kkkkkkkk"
+"oook.ooo"
+"nnnkonnn"
+"kkkkkkkk"
+"oooooook"
+"onnnnnnk"
+
+sprite spikes 8 8
+"........"
+"........"
+"...w...w"
+"..ws..ws"
+"..ws..ws"
+".wss.wss"
+".wss.wss"
+"ssssssss"
+
+sprite pole 8 8
+"...ss..."
+"...ws..."
+"...ws..."
+"...ws..."
+"...ws..."
+"...ws..."
+"...ws..."
+"...ws..."
+
+sprite flag 8 8
+"...yy..."
+"...wsrrr"
+"...wsrrr"
+"...wsrr."
+"...wsr.."
+"...ws..."
+"...ws..."
+"...ws..."
+
+sprite cloud 8 8
+"........"
+"..www..."
+".wwwwww."
+"wwwwwwww"
+"wwwwwwww"
+".wwwwww."
+"........"
+"........"
+
+sprite bush 8 8
+"........"
+"........"
+"..gg.g.."
+".gggggg."
+"ggdggggg"
+"gggggdgg"
+"gdgggggg"
+"dddddddd"
+
+sprite coin 8 8
+"..yyyy.."
+".yywwyy."
+"yyywyyyo"
+"yyywyyyo"
+"yyywyyyo"
+"yyyyyyyo"
+".yyyyoo."
+"..oooo.."
+
+sprite heart 8 7
+".rr..rr."
+"rrrrrrrr"
+"rwrrrrrr"
+"rrrrrrrr"
+".rrrrrr."
+"..rrrr.."
+"...rr..."
+
+-- the hero: two running frames (hero, hero2 = hero + 1) and a jump
+sprite hero 16 16
+"....rrrrr......."
+"...rrrrrrrrr...."
+"...nnntttk......"
+"..ntnttttktt...."
+"..ntnntttttttt.."
+"..nntttttkkkk..."
+"....ttttttt....."
+"...rrbrrrr......"
+"..rrrbrrbrrr...."
+".rrrrbbbbrrrr..."
+".ttrbybbybrtt..."
+".tttbbbbbbttt..."
+"...bbbbbbbb....."
+"..bbbb..bbbb...."
+".nnn......nnn..."
+"nnnn......nnnn.."
+
+sprite hero2 16 16
+"....rrrrr......."
+"...rrrrrrrrr...."
+"...nnntttk......"
+"..ntnttttktt...."
+"..ntnntttttttt.."
+"..nntttttkkkk..."
+"....ttttttt....."
+"..rrrrbrr......."
+".rrrrrbbrrr....."
+".rrrrbbybbtt...."
+"..ttbbbbbbtt...."
+"...bbbbbbbb....."
+"...bbbbbbb......"
+"....bbbbbb......"
+"....nnnnn......."
+"....nnnnnn......"
+
+sprite herojump 16 16
+"....rrrrr...ttt."
+"...rrrrrrrrrttt."
+"...nnntttk..rr.."
+"..ntnttttkttrr.."
+"..ntnntttttttr.."
+"..nntttttkkkkr.."
+"....ttttttt.rr.."
+"..rrrrbrrrrrr..."
+".rrrrrbbrrr....."
+"ttrrrbbybb......"
+"ttt.bbbbbbb....."
+"tt.bbbbbbbbbnn.."
+"..bbbbbbbbbbnn.."
+".bbbbbb.....n..."
+".nnn............"
+"nnnn............"
+
+sprite walker 16 16
+"................"
+"......nnnn......"
+"....nnnnnnnn...."
+"...nnnnnnnnnn..."
+"..nnwwnnnnwwnn.."
+"..nwwkwnnwkwwn.."
+".nnwwkwnnwkwwnn."
+".nnnwwnnnnwwnnn."
+".nnnnnnnnnnnnnn."
+"..nnnnnnnnnnnn.."
+"....tttttttt...."
+"...tttttttttt..."
+"...tttttttttt..."
+"..kkk......kkk.."
+".kkkk......kkkk."
+"................"
+
+sprite flat 16 8
+"................"
+"......nnnn......"
+"...nnnnnnnnnn..."
+".nnwkwnnnnwkwnn."
+"nnnnnnnnnnnnnnnn"
+"..tttttttttttt.."
+".kkkk......kkkk."
+"................"
+
+-- The worlds: '=' grass, '#' dirt, 'B' brick, '^' spikes, '|' 'F' the flag,
+-- 'c' cloud, 'b' bush, 'o' coin, 'e' walker, 'P' start. 13 rows each.
+-- world 1
+level 200 13
+"   cc         cc         cc                               cc                                                     cc                                          cc                               cc        "
+"                                    cc         cc                                                                           cc                                                                    F     "
+"                                                                                                                                       cc         cc                    cc         cc             |     "
+"                                                                     cc         cc         cc         cc                                                                                          |     "
+"                                                                                                                                        oooo                         ooo            oooo          |     "
+"                                                                                                                                        BBBB                         BBB            BBBB          |     "
+"                                                       ooo                                                                                     ooo             ooo                                |     "
+"                                                       BBB              ooo                                    ooo                            o   o           o   o                               |     "
+"         ooo  ooo  ooo  ooo  ooo                                               ooo                            o   o         ^          b          b        e b          b      e   b          b   |     "
+"        o   oo   oo   oo   oo   o                                             o   o               ^^  b   ^      b   ==================================================================================="
+"  Pb          b          b          b      ^   b          b         eb          b          b=========================###################################################################################"
+"=========================================================================  =================############################################################################################################"
+"#########################################################################  #############################################################################################################################"
+
+-- world 2
+level 224 13
+"   cc         cc                    cc                                          cc                                                                                      cc         cc                                           "
+"                                                                                                                                       cc                    cc                                          cc                     "
+"                                               cc         cc         cc                    cc         cc         cc                               cc                                                                cc          "
+"                         cc                                                                                                 cc                                                                cc                          F     "
+"                                                                                                                                                                                                                          |     "
+"                                                                                                                                                                                                                          |     "
+"          ooo                                  oooo                                                                                                                                                                       |     "
+"          BBB                                  BBBB       oooo                                                 ooo           oooo    oooo            ooo                   oooo           ooo               ooo           |     "
+"                             ooo                                                ooo                                                                                                              ooo                      |     "
+"                            o   o                                              o   o                                                                                                            o   o                     |     "
+"  Pb          b          e          e     e    b          b          b      e   b      ^^  b  e       b    e             e  b                  ^^ b          b^        eb          b ^        b         eb          b     |     "
+"===========================================================   ==================================================  ============   =====   =============  ====================   ============  ================  ================="
+"###########################################################   ##################################################  ############   #####   #############  ####################   ############  ################  #################"
+
+-- world 3
+level 245 13
+"                                                                                cc                               cc         cc                               cc                                                     cc         cc                    "
+"                         cc                    cc         cc                                                                                      cc                               cc                                                     cc         "
+"   cc         cc                                                     cc                                                                cc                                                     cc         cc                                          "
+"                                    cc                                                     cc         cc                                                                cc                                                                     F     "
+"                                                                                                                                                                                                                                               |     "
+"                                                                                                                                                                                                                                               |     "
+"                                                                                                                                                                                                                                               |     "
+"              ooo                           ooo            oooo                           ooo                                             ooo                                                                                    ooo           |     "
+"         ooo              ooo          ooo                                                                                                       ooo                                                                ooo                        |     "
+"        o   o            o   o        o   o                                                                                                     o   o                                                              o   o                       |     "
+"  Pb          b       e  b         eb          b     ^^   b          b e       eb    ^                b        e b   ^^     b^^      ^ b          b    e     b  ^^      b        e b   ^     eb    e     be     e   b      ^^  b          b    |     "
+"===============  ============================  =============   ============================  ==============================================  =====================================================================================  ================="
+"###############  ############################  #############   ############################  ##############################################  #####################################################################################  #################"
+

@@ -53,11 +53,12 @@ struct SdLevels {
 static SdLevels sdl;
 static bool sdlSeen = false;             // levels came from the card since the start: a missing card is told
 
-// the card as it is now; one put back in is mounted again on its saved pin (once a minute at most)
-static bool sdNow() {
+// the card as it is now; one put back in is mounted again on its saved pin (once a minute at most,
+// or every `every` ms: the SD games ask while they wait for it)
+static bool sdNow(uint32_t every = 60000) {
   static uint32_t tried = 0;
   if (sdReady()) return true;
-  if (tried && millis() - tried < 60000) return false;
+  if (tried && millis() - tried < every) return false;
   tried = millis() | 1;
   prefs.begin("arcade", true);
   uint16_t saved = prefs.getUShort("sdcs", 0);

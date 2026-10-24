@@ -1,0 +1,641 @@
+-- Ice Slide: a sliding puzzle for MiniArcade Color, in MAG script.
+-- The penguin slides over the ice until something stops it: a wall, a
+-- closed exit, or snow (:). Collect every gem, then the exit opens.
+-- Shows: many levels as level blocks, loadmap() / mget() / mset(),
+-- a tile set, and save() / load() for the level reached.
+game "Ice Slide"
+author "MiniArcade"
+info "Slide over the ice, collect every gem, then reach the exit. 20 levels, progress is saved."
+fps 30
+
+const TILE = 16
+const OX = 32                -- the map's left edge on the screen (16 x 12 tiles)
+const OY = 44                -- its top edge
+const STEP = 4               -- pixels per frame while sliding
+
+var lv                       -- the level shown or played, 1..levels()
+var reached                  -- the highest level that is open (save slot 0)
+var mode                     -- 0 title, 1 playing, 2 level clear, 3 all done
+var m                        -- the map of the level being played
+var px, py                   -- the penguin's tile
+var ox, oy                   -- how far it slid towards the next tile, in pixels
+var dx, dy                   -- the direction it slides (0, 0 = standing)
+var ex, ey                   -- the exit's tile
+var gems                     -- gems still to collect
+var moves, timer, face
+
+func init()
+  reached = clamp(load(0), 1, levels())
+  lv = reached
+  mode = 0
+  timer = 0
+  face = 0
+end
+
+-- level lv from the card into RAM; the penguin's start is taken off the map
+func start()
+  m = level(lv)
+  loadmap(m)
+  gems = 0
+  for y = 0, maph() - 1 do
+    for x = 0, mapw() - 1 do
+      local c = mget(m, x, y)
+      if c == '@' then
+        px = x
+        py = y
+        mset(m, x, y, '.')
+      elif c == '*' then
+        gems = gems + 1
+      elif c == 'E' then
+        ex = x
+        ey = y
+      end
+    end
+  end
+  ox = 0
+  oy = 0
+  dx = 0
+  dy = 0
+  moves = 0
+  timer = 0
+  mode = 1
+end
+
+-- what stops the penguin: walls, the edge, the exit while gems are left
+func blocked(x, y)
+  local c = mget(m, x, y)
+  return c == '#' or c == 0 or (c == 'E' and gems > 0)
+end
+
+-- start sliding in direction x, y (when something is not right in the way)
+func go(x, y)
+  if x != 0 then face = x < 0 end
+  if blocked(px + x, py + y) then
+    sfx(150, 30)
+    return
+  end
+  dx = x
+  dy = y
+  moves = moves + 1
+  sfx(500, 20)
+end
+
+func update()
+  timer = timer + 1
+  if mode == 0 then
+    if btnp(LEFT) and lv > 1 then
+      lv = lv - 1
+      sfx(700, 20)
+    end
+    if btnp(RIGHT) and lv < reached then
+      lv = lv + 1
+      sfx(700, 20)
+    end
+    if btnp(OK) then
+      sfx(1200, 60)
+      start()
+    end
+    return
+  end
+  if mode == 2 then
+    if timer > 45 then
+      if lv < levels() then
+        lv = lv + 1
+        start()
+      else
+        mode = 3
+      end
+    end
+    return
+  end
+  if mode == 3 then
+    if btnp(OK) then
+      lv = 1
+      mode = 0
+    end
+    return
+  end
+  -- playing: a new move only while standing
+  if dx == 0 and dy == 0 then
+    if btnp(OK) then
+      sfx(400, 80)
+      start()
+    elif btnp(UP) then
+      go(0, -1)
+    elif btnp(DOWN) then
+      go(0, 1)
+    elif btnp(LEFT) then
+      go(-1, 0)
+    elif btnp(RIGHT) then
+      go(1, 0)
+    end
+    return
+  end
+  ox = ox + dx * STEP
+  oy = oy + dy * STEP
+  if abs(ox) < TILE and abs(oy) < TILE then return end
+  -- on the next tile now
+  px = px + dx
+  py = py + dy
+  ox = 0
+  oy = 0
+  local c = mget(m, px, py)
+  if c == '*' then
+    mset(m, px, py, '.')
+    gems = gems - 1
+    sfx(1500 + gems * 150, 60)
+  end
+  if c == 'E' then
+    mode = 2
+    timer = 0
+    reached = max(reached, min(lv + 1, levels()))
+    save(0, reached)
+    sfx(2000, 200)
+    return
+  end
+  if c == ':' or blocked(px + dx, py + dy) then
+    dx = 0
+    dy = 0
+    sfx(300, 30)
+  end
+end
+
+func title()
+  cls(DKBLUE)
+  text((SCREEN_W - textw("ICE SLIDE", 4)) / 2, 24, "ICE SLIDE", WHITE, 4)
+  spr(penguin, 128, 70, 4, timer / 30 % 2)
+  local w = textw("LEVEL", 2) + 12 + numw(lv, 3)
+  text((SCREEN_W - w) / 2, 148, "LEVEL", LTGREY, 2)
+  num((SCREEN_W - w) / 2 + textw("LEVEL", 2) + 12, 145, lv, YELLOW, 3)
+  if lv > 1 then tri(70, 157, 80, 149, 80, 165, WHITE) end
+  if lv < reached then tri(250, 157, 240, 149, 240, 165, WHITE) end
+  text((SCREEN_W - textw("LEFT/RIGHT: level   OK: start", 1)) / 2, 190, "LEFT/RIGHT: level   OK: start", GREY, 1)
+  text((SCREEN_W - textw("collect the gems, then reach the exit", 1)) / 2, 206, "collect the gems, then reach the exit", GREY, 1)
+end
+
+func draw()
+  if mode == 0 then
+    title()
+    return
+  end
+  cls(NAVY)
+  drawmap(m, ice, OX, OY)
+  if gems == 0 then spr(open, OX + ex * TILE, OY + ey * TILE) end
+  spr(penguin, OX + px * TILE + ox, OY + py * TILE + oy, 1, face)
+  text(OX, 8, "LEVEL", LTGREY, 2)
+  num(OX + 62, 8, lv, WHITE, 2)
+  spr(gem, OX + 110, 6)
+  num(OX + 130, 8, gems, WHITE, 2)
+  text(OX + 170, 8, "MOVES", LTGREY, 2)
+  num(OX + 230, 8, moves, WHITE, 2)
+  text(OX, 30, "OK: try again   hold OK: menu", GREY, 1)
+  if mode == 2 then
+    rect(60, 100, 200, 40, DKGREEN)
+    box(60, 100, 200, 40, WHITE)
+    text((SCREEN_W - textw("LEVEL CLEAR!", 3)) / 2, 108, "LEVEL CLEAR!", YELLOW, 3)
+  end
+  if mode == 3 then
+    rect(30, 90, 260, 60, PURPLE)
+    box(30, 90, 260, 60, WHITE)
+    text((SCREEN_W - textw("ALL LEVELS DONE!", 3)) / 2, 100, "ALL LEVELS DONE!", YELLOW, 3)
+    text((SCREEN_W - textw("OK: back to the title", 1)) / 2, 132, "OK: back to the title", WHITE, 1)
+  end
+end
+
+-- what each character of a level shows; '@' (the start) is taken off the map
+tiles ice 16
+  "#" = wall
+  "." = floor
+  ":" = snow
+  "*" = gem
+  "E" = door
+end
+
+sprite floor 16 16
+"cccccccccccccccc"
+"cwcccccccccccccc"
+"ccwccccccccccccc"
+"cccccccccccccccc"
+"cccccccccccwcccc"
+"ccccccccccwccccc"
+"cccccccccccccccc"
+"cccccccccccccccc"
+"cccccccccccccccc"
+"ccccwccccccccccc"
+"cccwcccccccccccc"
+"cccccccccccccccc"
+"cccccccccccccccc"
+"cccccccccccccwcc"
+"ccccccccccccwccc"
+"cccccccccccccccc"
+
+sprite wall 16 16
+"wwwwwwwwwwwwwwwk"
+"wbbbbbbbbbbbbbbk"
+"wbwwbbbbbbbbbbbk"
+"wbwbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"wbbbbbbbbbbbbbbk"
+"kkkkkkkkkkkkkkkk"
+
+sprite snow 16 16
+"wwwwwwwwwwwwwwww"
+"wwwwwwwwwwwswwww"
+"wwswwwwwwwwwwwww"
+"wwwwwwwwwwwwwwww"
+"wwwwwwwswwwwwwww"
+"wwwwwwwwwwwwwwsw"
+"wwwwwwwwwwwwwwww"
+"wswwwwwwwwwwwwww"
+"wwwwwwwwwwswwwww"
+"wwwwwwwwwwwwwwww"
+"wwwwswwwwwwwwwww"
+"wwwwwwwwwwwwwsww"
+"wwwwwwwwwwwwwwww"
+"wwwwwwwswwwwwwww"
+"wswwwwwwwwwwwwww"
+"wwwwwwwwwwwwwwww"
+
+sprite gem 16 16
+"cccccccccccccccc"
+"cccccccccccccccc"
+"ccccccppppcccccc"
+"cccccpmmmmpccccc"
+"ccccpmwmmmmpcccc"
+"cccpmwmmmmmmpccc"
+"ccpmmmmmmmmmmpcc"
+"ccppppppppppppcc"
+"cccpmmmmmmmmpccc"
+"ccccpmmmmmmpcccc"
+"cccccpmmmmpccccc"
+"ccccccpmmpcccccc"
+"cccccccppccccccc"
+"cccccccccccccccc"
+"cccccccccccccccc"
+"cccccccccccccccc"
+
+sprite door 16 16
+"cccnnnnnnnnnnccc"
+"ccnnnnnnnnnnnncc"
+"cnnaaaaaaaaaannc"
+"cnaannnnnnnnaanc"
+"cnannnnnnnnnnanc"
+"cnannnnnnnnnnanc"
+"cnannnnnnnnnnanc"
+"cnannnnnnnnyyanc"
+"cnannnnnnnnyyanc"
+"cnannnnnnnnnnanc"
+"cnannnnnnnnnnanc"
+"cnannnnnnnnnnanc"
+"cnannnnnnnnnnanc"
+"cnannnnnnnnnnanc"
+"cnaaaaaaaaaaaanc"
+"cnnnnnnnnnnnnnnc"
+
+sprite open 16 16
+"cccyyyyyyyyyyccc"
+"ccyyyyyyyyyyyycc"
+"cyykkkkkkkkkkyyc"
+"cyykkkkkkkkkkyyc"
+"cykkkkkkkkkkkkyc"
+"cykkkkkkkkkkkkyc"
+"cykkkkkkkkkkkkyc"
+"cykkkkkkkkkkkkyc"
+"cykkkkkkkkkkkkyc"
+"cykkkkkkkkkkkkyc"
+"cykkkkkkkkkkkkyc"
+"cykkkkkkkkkkkkyc"
+"cykkkkkkkkkkkkyc"
+"cykkkkkkkkkkkkyc"
+"cyyyyyyyyyyyyyyc"
+"cyyyyyyyyyyyyyyc"
+
+sprite penguin 16 16
+"......kkkk......"
+".....kkkkkk....."
+"....kkkkkwkk...."
+"....kkkkkkkoo..."
+"....kkwwwwkk...."
+"...kkwwwwwwkk..."
+"...kwwwwwwwwk..."
+"..kkwwwwwwwwkk.."
+"..kwwwwwwwwwwk.."
+"..kwwwwwwwwwwk.."
+"..kwwwwwwwwwwk.."
+"..kkwwwwwwwwkk.."
+"...kwwwwwwwwk..."
+"...kkwwwwwwkk..."
+"....kkkkkkkk...."
+"...oooo..oooo..."
+
+-- The levels: '#' wall, '.' ice, ':' snow, '*' gem, 'E' exit, '@' start.
+-- Every one can be solved; the comment says in how many moves at best.
+-- level 1: 4 moves at best
+level 16 12
+"################"
+"#.....#.#....#.#"
+"#.:.........*:##"
+"#...#...#......#"
+"#..##.#......#.#"
+"#...:#...#.#...#"
+"#..:...#.......#"
+"#....#...#....##"
+"#.:...........##"
+"##@.........:#.#"
+"#..#..#.....E..#"
+"################"
+
+-- level 2: 4 moves at best
+level 16 12
+"################"
+"#...........E..#"
+"#....#.#.......#"
+"#.....#@....#.##"
+"#.###....##....#"
+"#...*.....#....#"
+"#....:.#..#:...#"
+"#..:#..........#"
+"#..............#"
+"#.............##"
+"#.#..........#.#"
+"################"
+
+-- level 3: 5 moves at best
+level 16 12
+"################"
+"#.##..#.E...#..#"
+"#........#..#:##"
+"#.#..#.........#"
+"#.#...........##"
+"#........:....:#"
+"#...#@........##"
+"#...#.#..:..#.##"
+"#.....##.......#"
+"##........#....#"
+"#..........*.#.#"
+"################"
+
+-- level 4: 5 moves at best
+level 16 12
+"################"
+"##.#..#...E....#"
+"#....#.....#..##"
+"##..#.......:.##"
+"#......#..@.#..#"
+"#.#.#....#..#..#"
+"#......#....:..#"
+"#.###......#..##"
+"#.......##.....#"
+"##.............#"
+"#.#..#*........#"
+"################"
+
+-- level 5: 6 moves at best
+level 16 12
+"################"
+"#..#.......#.#.#"
+"#...:..........#"
+"#........*#....#"
+"#.............@#"
+"#.#...#.#....*:#"
+"#.....##.#:.##.#"
+"#.....##.#.##.E#"
+"#...:.#........#"
+"##...#..#...#..#"
+"#.....##.....#.#"
+"################"
+
+-- level 6: 6 moves at best
+level 16 12
+"################"
+"#...:#....#..#.#"
+"#.....#...#....#"
+"#..#...###....##"
+"##..........E..#"
+"#...#..##...:..#"
+"#.#...#...#.#..#"
+"#:..#.#........#"
+"#...#....:.#.#.#"
+"##.#...#.@....##"
+"#........:*.*..#"
+"################"
+
+-- level 7: 7 moves at best
+level 16 12
+"################"
+"#..#.*.........#"
+"#....##........#"
+"#....#...#.....#"
+"#..#...#.......#"
+"#..........:..##"
+"#.##...E..#....#"
+"##.##...#..#..##"
+"###....#..#....#"
+"#...#.......#.*#"
+"#:..##...:.##.@#"
+"################"
+
+-- level 8: 7 moves at best
+level 16 12
+"################"
+"#.......###...##"
+"#......#..#...##"
+"#.#.*.......#..#"
+"##*#.........@.#"
+"##.#....#.#..#.#"
+"#......#..#...##"
+"#.......#......#"
+"##.............#"
+"#...#.#.#....#.#"
+"#...........E..#"
+"################"
+
+-- level 9: 8 moves at best
+level 16 12
+"################"
+"#.......*....#.#"
+"#...#....#.....#"
+"#.#...#..#..*E##"
+"#.#...#.....#.##"
+"#.........#....#"
+"#:...#......#..#"
+"#...#..........#"
+"#..........*.:.#"
+"#.@...........##"
+"#..##.......:..#"
+"################"
+
+-- level 10: 8 moves at best
+level 16 12
+"################"
+"#...........#..#"
+"#.....#..@.....#"
+"#..........*..##"
+"#...#..........#"
+"#.#.....#......#"
+"#*...E.......*##"
+"#.#....##..#...#"
+"#....#..##.....#"
+"#...#..##.#....#"
+"#.........#....#"
+"################"
+
+-- level 11: 9 moves at best
+level 16 12
+"################"
+"#......#.......#"
+"#.........#...##"
+"#.....#........#"
+"##.....*E#.....#"
+"#.........##...#"
+"#*...#.........#"
+"#*.........#...#"
+"#..............#"
+"#...##:........#"
+"#@....#.....#.##"
+"################"
+
+-- level 12: 9 moves at best
+level 16 12
+"################"
+"#:........##.#.#"
+"#..............#"
+"#.....#..#.....#"
+"#...#*:...#....#"
+"#........#.....#"
+"#*..........*@##"
+"#........#.#...#"
+"#....#.........#"
+"#.........#....#"
+"#......#.E....##"
+"################"
+
+-- level 13: 10 moves at best
+level 16 12
+"################"
+"#......E.......#"
+"#..#..*.:.....*#"
+"##..*..#......*#"
+"#:...:.#....#..#"
+"#............#.#"
+"##......#..#..##"
+"#......#...#...#"
+"#.....#........#"
+"#......#.#@....#"
+"#...#..........#"
+"################"
+
+-- level 14: 10 moves at best
+level 16 12
+"################"
+"#.:........E...#"
+"#.....#..#...#.#"
+"#......#.......#"
+"#......#...:.#.#"
+"#.......#....#.#"
+"#...#.....:*:..#"
+"#..#.*.:.......#"
+"#.....#..:.....#"
+"#...@.#..#.....#"
+"#.#......*....*#"
+"################"
+
+-- level 15: 11 moves at best
+level 16 12
+"################"
+"#.......E...#..#"
+"#....#.........#"
+"#..:.......#...#"
+"#.#......#.....#"
+"#.*.....*..*...#"
+"#.#.....:...@#.#"
+"#..#.#*.....:.##"
+"#..#.........:.#"
+"#.........#..#.#"
+"#.#....#..##...#"
+"################"
+
+-- level 16: 11 moves at best
+level 16 12
+"################"
+"#.......#...#..#"
+"#..:....*..*#..#"
+"##..@..........#"
+"##.#.......:...#"
+"##....#...#.:..#"
+"#..E...#.......#"
+"#.#.##.........#"
+"#..**.....###..#"
+"#........#...#.#"
+"#..........:.:.#"
+"################"
+
+-- level 17: 12 moves at best
+level 16 12
+"################"
+"##............##"
+"#..##..##.:..*.#"
+"#:..#.......#..#"
+"#.....#......*.#"
+"#...#..........#"
+"##.#...E.....###"
+"#....#...#.*@*.#"
+"#.*..##.#...#..#"
+"#.#........#...#"
+"#....#..#......#"
+"################"
+
+-- level 18: 12 moves at best
+level 16 12
+"################"
+"#..#.#.........#"
+"#.....#*.#...#.#"
+"#.......@......#"
+"#.*#........E.:#"
+"#.........#....#"
+"#*.............#"
+"#........#*....#"
+"#..#.......#...#"
+"#....#.....#...#"
+"#.....*.#....#.#"
+"################"
+
+-- level 19: 14 moves at best
+level 16 12
+"################"
+"###....:*.*#...#"
+"#..........:...#"
+"#.....##......*#"
+"#.#....#...#.#.#"
+"#..*#...E.#....#"
+"#..............#"
+"#......#.#..@..#"
+"#.*:.....#.....#"
+"#.........#.##.#"
+"#.....#........#"
+"################"
+
+-- level 20: 14 moves at best
+level 16 12
+"################"
+"#......:.......#"
+"#..#...*....#..#"
+"##*..........#@#"
+"#...*...*E..#..#"
+"#..............#"
+"#.......#...#..#"
+"#............*.#"
+"#....#........##"
+"#..#.......#...#"
+"#...#....#..#..#"
+"################"
+

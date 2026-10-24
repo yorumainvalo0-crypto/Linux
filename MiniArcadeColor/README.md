@@ -14,7 +14,8 @@ the CPU or two players on one console (and online, see below). Plus
 Mine 3D, a block world in first person, Palace, a platformer, Block Puzzle,
 Fruit Pot, Pumpkin Maze, a tilt labyrinth with a level editor on the phone,
 Kart GP, a kart racer in the style of the 16-bit consoles,
-Skat against two CPU players (all below), and Chess with all
+Skat against two CPU players (all below), games of your own from the SD
+card (MAG script, see "SD games"), and Chess with all
 rules (castling, en passant, promotion, check, mate, stalemate, 50 moves),
 against the CPU, for two players on one console or online (the board can
 turn round for black):
@@ -363,6 +364,54 @@ another level (e.g. keys on the pin's own pull-up) are simply not used.
 Free on the C3 with the wiring above: GPIO1..4, 6, 7 and 20; ladder keys and
 the battery need one of GPIO1..4 (ADC). The plans use: ladder keys GPIO4,
 RIGHT GPIO3, battery GPIO1, buzzer GPIO20, gyroscope GPIO6/7, GPIO2 free.
+
+## SD games
+
+Games of your own, as text on the SD card: `/MINIARC/games/NAME.MAG`
+(8.3 names) in MAG script, a small Lua/BASIC-like language made to be easy
+to write - also for an AI - and strictly checked. The library entry
+"SD games" lists the games on the card (title, author and info come from
+the first lines of each file only) and starts one: the console compiles it
+there and then into bytecode for a small stack VM, with
+`line N: reason` and the line itself on the screen for the first mistake.
+Then it runs `init()` once and `update()` and `draw()` 30 (or 60) times a
+second; the pause menu, quitting and the game over screen are the console's
+own. The language reference is `sdcard/MINIARC/games/LANGUAGE.md` (give it
+to whoever writes a game), `sdcard/MINIARC/games/README.txt` says how to
+copy the files. Three examples come with it: Meteor Dodge (arcade), Ice
+Slide (a sliding puzzle with 20 levels, its progress saved on the card) and
+Pixel Quest (a platformer whose three worlds scroll over many screens).
+
+- Integers only (32 bit); `const`, `var`, global `array`s, `func` with
+  locals, `if/elif/else`, `while`, `for`, `break`, `continue`; sprites, maps,
+  `level` blocks and tile sets written as rows of characters in the same
+  file; about 45 built-ins for drawing, maps, keys, tilt, sound, score,
+  game over and 16 save slots.
+- Safe: every array index, division, colour and map access is checked; each
+  frame has a budget of 150000 instructions, so an endless loop ends the
+  game with "script too slow or endless loop in update()" and its line
+  instead of hanging; recursion, the stack, the compiler's own nesting and
+  every table have limits with a message. A bad game never crashes the
+  console.
+- Code (at most 24 kB) and variables (at most 8 kB) are in RAM; sprites,
+  maps and levels stay on the card: the compiler keeps only where their
+  rows start, the game reads them through a page cache (64 pages of 64
+  bytes) and keeps sprites decoded (6 kB) - so a game can have hundreds of
+  levels or worlds much wider than the screen. A card pulled during a game
+  matters only when a page is missing: the game waits with "insert the SD
+  card", mounts the card again, checks that the file is the same (size and
+  a hash of its first 512 bytes) and goes on; holding OK leaves.
+- Everything is on the heap only while an SD game runs (about 20 kB for
+  the examples, about 40 kB while compiling) and is checked against the
+  largest free block first ("not enough memory" otherwise). High score and
+  save slots go to `/MINIARC/save/NAME.SAV`, written as .tmp and renamed;
+  nothing else is written to the card, nothing to the flash.
+- Simulator: `maglogic` (compiler and VM: every documented error at its
+  line, the budget, runtime errors, limits, the page cache, a changed file,
+  the examples' levels solvable), `magplay` (the launcher; each example
+  played by a bot, the puzzle's progress on the card, the platformer
+  scrolling and streaming), `magpull` (the card pulled in the platformer),
+  `magnone` (no card), `magerr` (the error screens).
 
 ## Building it on a perfboard
 
