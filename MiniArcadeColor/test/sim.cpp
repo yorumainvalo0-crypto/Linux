@@ -1199,6 +1199,7 @@ static uint32_t inWait = 0, inNoteT = 0, inGameT = 0, inEvent = 0;
 static bool     inChose = false, inDownNext = false, inGoneNext = false, inDownSeen = false, inBack = false;
 static int      inGames = 0;
 static uint32_t inTicks = 0, inGameMs = 0, inLastGame = 0;
+static bool     inRb = false;                   // a real-time game played with rollback
 static std::vector<int> inResults;                               // ours, as ANNA counts them: 1 she won, 2 she lost, 3 draw
 static std::string inTyping;                                     // the code being typed
 static std::string inRowsAtEnd;                                  // the lobby when leaving: "NAME:state ..."
@@ -1247,7 +1248,7 @@ static void inetDriver(uint32_t t) {
     if (!inGameT) { inGameT = t; inGames++; }
     if (inDownNext && t > inGameT + 4000) { inDownNext = false; simNetDown = true; printf("      the server goes away at %u ms\n", t); }
     if (inGoneNext && t > inGameT + 4000) { inGoneNext = false; annaStop(); printf("      ANNA is switched off at %u ms\n", t); }
-    if (LinkCore::realtime(L.game)) { inTicks = L.syncTick(); inGameMs = t - inGameT; }
+    if (LinkCore::realtime(L.game)) { inTicks = L.syncTick(); inGameMs = t - inGameT; if (L.rollback) inRb = true; }
     mpPlay(t);
     return;
   }
@@ -4228,10 +4229,12 @@ int main(int argc, char **argv) {
     uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
     inetScenario("Ic1i2axc1nc2ybq", t);
     captureMs = { t + 3500 };
-  } else if (scenario == "inetpong") {
-    // internet: Pong to its end over a relay 40-70 ms each way
+  } else if (scenario == "inetpong" || scenario == "inetponglock") {
+    // internet: Pong to its end over a relay 40-70 ms each way; with rollback, and
+    // (lock) as with a server of before: in lockstep
     uint32_t t = openGameNamed("Online", M); simEnd = t + 900000;
     simNetMs = 40; simNetJit = 30;
+    simNetNoRb = scenario == "inetponglock";
     inetScenario("Ic3q", t);
     captureMs = { t + 9000 };
   } else if (scenario == "inetfriend") {
@@ -4534,13 +4537,18 @@ int main(int argc, char **argv) {
     check("a no, no answer, a busy one", seen("ANNA said no") && seen("no answer from ANNA") && seen("CARL is busy"));
     check("the moves went through the relay, numbered", simNetMsgs > 20 && simNetSessions == 2);
   }
-  if (scenario == "inetpong") {
+  if (scenario == "inetpong" || scenario == "inetponglock") {
     double tps = inGameMs ? inTicks * 1000.0 / inGameMs : 0;
-    printf("      input delay %u ticks (%u ms), round trip %u ms, %.1f ticks/s, %u of %u frames waiting\n", simNetLead,
-           simNetLead * RT_TICK_MS, inS ? 0 : annaNet.rtt, tps, inStalled, inFrames);
+    printf("      input delay %u ticks (%u ms), round trip %u ms, %.1f ticks/s, %u of %u frames waiting, rollback %s (at most %u ticks guessed)\n",
+           simNetLead, simNetLead * RT_TICK_MS, inS ? 0 : annaNet.rtt, tps, inStalled, inFrames, inRb ? "on" : "off", mpRbDeep);
     check("pong over the relay to its end, the same result on both", seen("PONG") && mpOver && simBotGames == 1 &&
           ((seen("YOU WIN") && simBotResult == 2) || (seen("YOU LOST") && simBotResult == 1)));
-    check("a longer input delay for the internet, from the round trips", simNetLead >= 10 && simNetLead <= 18);
+    if (scenario == "inetpong") {
+      check("rollback: both can, so a short input delay; the rest guessed", inRb && simNetLead >= 3 && simNetLead <= 5 &&
+            mpRbDeep >= 2 && mpRbDeep < LK_RB_AHEAD);
+    } else {
+      check("lockstep (a server of before): a longer input delay, from the round trips", !inRb && simNetLead >= 10 && simNetLead <= 18);
+    }
     check("smooth: nearly full speed, hardly ever waiting", tps > 44 && inStalled * 20 < inFrames);
   }
   if (scenario == "inetfriend" || scenario == "inetfirst") {

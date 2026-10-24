@@ -117,6 +117,39 @@ static RtBomb   botRb;
 static uint32_t botRtNext = 0, botRnd = 5;
 static bool     botRt = false;
 
+// the bot's keys for the next tick, from its copy of the game
+static uint8_t botRtMine(uint8_t me, bool pong, bool pac, bool bomb) {
+  uint8_t mine;
+  if (bomb) {                                        // the CPU player of the game itself
+    mine = botRb.ai(me);
+  } else if (pac) {                                         // wander: a new open way now and then
+    const RmEnt &e = botPm.pac[me];
+    mine = botPm.want[me];
+    if (!mine || rtRand(botRnd) % 40 == 0 || RtPac::wallAt(e.x + RtPac::dx(mine), e.y + RtPac::dy(mine)))
+      for (int t = 0; t < 8; t++) {
+        uint8_t d = 1 + rtRand(botRnd) % 4;
+        if (!RtPac::wallAt(e.x + RtPac::dx(d), e.y + RtPac::dy(d))) { mine = d; break; }
+      }
+  } else if (pong) {                                        // follow the ball, not too well
+    int c = botPg.pad[me] + RP_PH / 2, b = botPg.by >> 4;
+    mine = (rtRand(botRnd) % 5 < 2) ? 0 : (b < c - 2 ? 1 : (b > c + 2 ? 2 : 0));
+  } else {                                           // keep going, turn before a wall
+    static const int8_t DX[5] = { 0, 0, 0, -1, 1 }, DY[5] = { 0, -1, 1, 0, 0 };
+    mine = botSn.dir[me];
+    for (int t = 0; t < 8; t++) {
+      uint8_t d = t ? (uint8_t)(1 + rtRand(botRnd) % 4) : mine;
+      int nx = botSn.x[me][0] + DX[d], ny = botSn.y[me][0] + DY[d];
+      if (nx >= 0 && nx < RS_W && ny >= 0 && ny < RS_H && !botSn.body(nx, ny)) { mine = d; break; }
+    }
+  }
+  return mine;
+}
+
+static void botRtStep(const uint8_t in[2], bool pong, bool pac, bool bomb) {
+  if (pong) botPg.step(in); else if (pac) botPm.step(in); else if (bomb) botRb.step(in); else botSn.step(in);
+}
+
+static uint32_t botAheadAt = 0;
 static void simBotRealtime(uint32_t now) {
   LinkCore &B = simBot;
   bool pong = B.game == LKG_PONG, pac = B.game == LKG_PAC, bomb = B.game == LKG_BOMB;
@@ -126,36 +159,28 @@ static void simBotRealtime(uint32_t now) {
     uint32_t seed = B.session() * 2654435761u;
     if (pong) botPg.begin(seed); else if (pac) botPm.begin(seed, 2); else if (bomb) botRb.begin(seed, 2); else botSn.begin(seed);
     botRtNext = now;
+    botAheadAt = now + 500;
   }
-  for (int k = 0; k < 3 && lkDue(now, botRtNext); k++) {
-    uint8_t in[2];
-    if (!B.syncStep(&in[me], &in[1 - me])) break;
-    if (pong) botPg.step(in); else if (pac) botPm.step(in); else if (bomb) botRb.step(in); else botSn.step(in);
-    uint8_t mine;
-    if (bomb) {                                        // the CPU player of the game itself
-      mine = botRb.ai(me);
-    } else if (pac) {                                         // wander: a new open way now and then
-      const RmEnt &e = botPm.pac[me];
-      mine = botPm.want[me];
-      if (!mine || rtRand(botRnd) % 40 == 0 || RtPac::wallAt(e.x + RtPac::dx(mine), e.y + RtPac::dy(mine)))
-        for (int t = 0; t < 8; t++) {
-          uint8_t d = 1 + rtRand(botRnd) % 4;
-          if (!RtPac::wallAt(e.x + RtPac::dx(d), e.y + RtPac::dy(d))) { mine = d; break; }
-        }
-    } else if (pong) {                                        // follow the ball, not too well
-      int c = botPg.pad[me] + RP_PH / 2, b = botPg.by >> 4;
-      mine = (rtRand(botRnd) % 5 < 2) ? 0 : (b < c - 2 ? 1 : (b > c + 2 ? 2 : 0));
-    } else {                                           // keep going, turn before a wall
-      static const int8_t DX[5] = { 0, 0, 0, -1, 1 }, DY[5] = { 0, -1, 1, 0, 0 };
-      mine = botSn.dir[me];
-      for (int t = 0; t < 8; t++) {
-        uint8_t d = t ? (uint8_t)(1 + rtRand(botRnd) % 4) : mine;
-        int nx = botSn.x[me][0] + DX[d], ny = botSn.y[me][0] + DY[d];
-        if (nx >= 0 && nx < RS_W && ny >= 0 && ny < RS_H && !botSn.body(nx, ny)) { mine = d; break; }
-      }
+  if (B.rollback) {                                    // like the colour console: keys at once, the game
+    for (int k = 0; k < 3 && lkDue(now, botRtNext); k++) {   // where both are known (the bot needs no guess)
+      if (!B.rbPut(botRtMine(me, pong, pac, bomb), now)) break;
+      botRtNext += RT_TICK_MS;
     }
-    B.syncPut(mine, now);
-    botRtNext += RT_TICK_MS;
+    if (lkDue(now, botAheadAt)) {
+      botAheadAt = now + 500;
+      int32_t a = B.ahead() / 2;
+      if (a > 0) botRtNext += RT_TICK_MS * (uint32_t)(a > 4 ? 4 : a);
+    }
+    uint8_t in[2];
+    while (B.syncTick() < B.mineTick() - B.lead && B.syncStep(&in[me], &in[1 - me])) botRtStep(in, pong, pac, bomb);
+  } else {
+    for (int k = 0; k < 3 && lkDue(now, botRtNext); k++) {
+      uint8_t in[2];
+      if (!B.syncStep(&in[me], &in[1 - me])) break;
+      botRtStep(in, pong, pac, bomb);
+      B.syncPut(botRtMine(me, pong, pac, bomb), now);
+      botRtNext += RT_TICK_MS;
+    }
   }
   uint8_t w = pong ? botPg.winner : (pac ? botPm.winner : (bomb ? (botRb.winner == RB_DRAW ? 3 : botRb.winner) : botSn.winner));
   if (w) {

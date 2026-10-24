@@ -605,18 +605,20 @@ static void mpSnakeDraw(const char *msg) {
   gfx.send();
 }
 
-// apple bits where a snake ate, a burst and a shake where one crashed
+// apple bits where a snake ate, a burst and a shake where one crashed (once)
+static bool mpSnBoom = false;
 static void mpSnakeFx(const uint8_t lenBefore[2]) {
   const RtSnake &g = mpRt->sn;
   for (uint8_t p = 0; p < 2; p++) {
     int16_t x = g.x[p][0] * 10 + 5, y = MP_SNY + g.y[p][0] * 10 + 5;
     if (g.len[p] > lenBefore[p]) { fxBurst(x, y, 8, C::RED, rgb(102, 0, 0), 90, 400, 30, 2); fxText(x, y - 12, "+1", C::YELLOW); }
-    if (g.winner && g.winner != p + 1) {
+    if (g.winner && g.winner != p + 1 && !mpSnBoom) {
       fxBurst(x, y, 12, C::WHITE, p == mpMe ? C::LIME : C::ORANGE, 140, 450, 0, 1, FX_STREAK);
       fxBurst(x, y, 5, C::YELLOW, C::RED, 60, 500, 0, 4, FX_DRAG | FX_GROW);
       fxShake(5, 400);
     }
   }
+  if (g.winner) mpSnBoom = true;
 }
 
 // Pac-Man: the colour game's maze; ours yellow, theirs green
@@ -675,18 +677,73 @@ static void mpBombDraw(const char *msg) {
   gfx.send();
 }
 
+enum : uint8_t { MPK_PONG, MPK_SNAKE, MPK_PAC, MPK_BOMB };
+
+// one tick of the game; the events of the game's step
+static uint8_t mpRtStep(MpRt &g, uint8_t kind, const uint8_t in[2]) {
+  switch (kind) {
+  case MPK_PONG: return g.pg.step(in);
+  case MPK_PAC:  return g.pm.step(in);
+  case MPK_BOMB: return g.rb.step(in);
+  default:       return g.sn.step(in);
+  }
+}
+
+// sounds and sparks for the events of a tick (lenBefore: Snake's lengths before it)
+static void mpRtFx(uint8_t kind, uint8_t ev, const uint8_t lenBefore[2]) {
+  if (kind == MPK_BOMB) {
+    if (ev & RB_EV_BOOM)  sfx((uint16_t)(90 + random(40)), 120);
+    if (ev & RB_EV_BOMB)  sfx(500, 20);
+    if (ev & RB_EV_POWER) sfx(1300, 60);
+    if (ev & RB_EV_DEAD)  sfx(200, 250);
+    return;
+  }
+  bool pac = kind == MPK_PAC;
+  if (kind == MPK_PONG) mpPongFx(ev);
+  else if (kind == MPK_SNAKE) mpSnakeFx(lenBefore);
+  if (ev & RT_EV_HIT)   sfx(pac ? 1300 : 750, pac ? 60 : 30);
+  if (ev & RT_EV_EAT)   sfx(pac ? (mpRt->pm.t % 2 ? 880 : 660) : 1100, pac ? 12 : 45);
+  if (ev & RT_EV_POINT) sfx(300, 120);
+}
+
+static uint8_t mpRtWinner(const MpRt &g, uint8_t kind) {
+  switch (kind) {
+  case MPK_PONG: return g.pg.winner;
+  case MPK_PAC:  return g.pm.winner;
+  case MPK_BOMB: return g.rb.winner == RB_DRAW ? 3 : g.rb.winner;
+  default:       return g.sn.winner;
+  }
+}
+
+/* Rollback (internet play, LinkCore::rollback): our keys count at once -
+   only the server's small input delay (lead) - instead of waiting for the
+   other console's. mpRtOk is the game at the last tick both inputs are
+   known for; every frame the game is computed on from there to our
+   newest tick, with the other's last input as the guess for the ticks
+   still missing (Bomberman: without its bomb key, that one is pressed
+   once). A wrong guess just puts the other one right a moment later.
+   Both consoles end with the same game: only mpRtOk decides.          */
+static MpRt     *mpRtOk = NULL;
+static uint32_t  mpRbShown = 0, mpRbDeep = 0;           // newest tick drawn; most ticks guessed at once (tests)
+
 /* 0 = decided or the other one left, 1 = we gave up, 2 = broken */
 static uint8_t mpRealtime() {
   LinkCore &L = linkCore();
   bool pong = L.game == LKG_PONG, pac = L.game == LKG_PAC, bomb = L.game == LKG_BOMB;
+  uint8_t kind = pong ? MPK_PONG : pac ? MPK_PAC : bomb ? MPK_BOMB : MPK_SNAKE;
+  bool rb = L.rollback;
   mpRt = (MpRt *)malloc(sizeof(MpRt));
-  if (!mpRt) { L.cancel(); mpNote("not enough memory", NULL); return 2; }
+  mpRtOk = rb ? (MpRt *)malloc(sizeof(MpRt)) : NULL;
+  if (!mpRt || (rb && !mpRtOk)) { free(mpRt); free(mpRtOk); mpRt = mpRtOk = NULL; L.cancel(); mpNote("not enough memory", NULL); return 2; }
   mpMe = L.iStart ? 0 : 1;
   uint32_t seed = L.session() * 2654435761u;             // the same on both consoles
   if (pong) mpRt->pg.begin(seed);
   else if (pac) mpRt->pm.begin(seed, 2);
   else if (bomb) mpRt->rb.begin(seed, 2);
   else mpRt->sn.begin(seed);
+  if (rb) memcpy(mpRtOk, mpRt, sizeof(MpRt));
+  mpRbShown = 0; mpRbDeep = 0;
+  mpSnBoom = false;
   mpRbWho[mpMe] = "YOU"; mpRbWho[1 - mpMe] = L.opp.name;
   bombWho = mpRbWho; bombMe = mpMe;
   mpFace[0] = mpFace[1] = 3;
@@ -694,7 +751,7 @@ static uint8_t mpRealtime() {
   void (*draw)(const char *) = pong ? mpPongDraw : (pac ? mpPacDraw : (bomb ? mpBombDraw : mpSnakeDraw));
   uint8_t  latch = 0;                                     // snake, pac-man: last direction pressed
   bool     bombKey = false;                               // bomberman: OK waits for the next input
-  uint32_t next = millis(), lastStep = millis();
+  uint32_t next = millis(), lastStep = millis(), nextAhead = millis() + 500;
   const char *end = NULL;
   uint8_t ret = 0;
   mpStalled = false;
@@ -709,44 +766,60 @@ static uint8_t mpRealtime() {
     if (bomb && btnTap(B_OK)) bombKey = true;
     uint32_t now = millis();
     for (uint8_t k = 0; k < 3 && lkDue(now, next); k++) {
-      uint8_t in[2];
-      if (!L.syncStep(&in[mpMe], &in[1 - mpMe])) break;
-      uint8_t ev;
-      if (bomb) {
-        uint8_t bev = mpRt->rb.step(in);
-        if (bev & RB_EV_BOOM)  sfx((uint16_t)(90 + random(40)), 120);
-        if (bev & RB_EV_BOMB)  sfx(500, 20);
-        if (bev & RB_EV_POWER) sfx(1300, 60);
-        if (bev & RB_EV_DEAD)  sfx(200, 250);
-        ev = 0;
-      } else if (pong) { ev = mpRt->pg.step(in); mpPongFx(ev); }
-      else if (pac) ev = mpRt->pm.step(in);
-      else {
-        uint8_t len[2] = { mpRt->sn.len[0], mpRt->sn.len[1] };
-        ev = mpRt->sn.step(in);
-        mpSnakeFx(len);
+      uint8_t in[2], ev = 0, len[2] = { mpRt->sn.len[0], mpRt->sn.len[1] };
+      if (!rb) {                                          // lockstep: the tick both inputs are there for
+        if (!L.syncStep(&in[mpMe], &in[1 - mpMe])) break;
+        ev = mpRtStep(*mpRt, kind, in);
       }
       uint8_t mine = pong ? (uint8_t)((btnHeld(B_UP) ? 1 : 0) | (btnHeld(B_DOWN) ? 2 : 0)) :
                      bomb ? (uint8_t)(bombHeld() | (bombKey ? 8 : 0)) : latch;
+      if (rb) { if (!L.rbPut(mine, linkNow())) break; }   // too far ahead of the other: wait
+      else L.syncPut(mine, linkNow());
       bombKey = false;
-      L.syncPut(mine, linkNow());
       next += RT_TICK_MS;
       lastStep = now;
-      if (ev & RT_EV_HIT)   sfx(pac ? 1300 : 750, pac ? 60 : 30);
-      if (ev & RT_EV_EAT)   sfx(pac ? (mpRt->pm.t % 2 ? 880 : 660) : 1100, pac ? 12 : 45);
-      if (ev & RT_EV_POINT) sfx(300, 120);
+      if (!rb) mpRtFx(kind, ev, len);
     }
     if ((int32_t)(now - next) > 100) next = now;          // do not race to catch up
+    if (rb && lkDue(now, nextAhead)) {                    // the one ahead waits half the difference
+      nextAhead = now + 500;
+      int32_t a = L.ahead() / 2;
+      if (a > 0) next += RT_TICK_MS * (uint32_t)(a > 4 ? 4 : a);
+    }
+    if (rb) {
+      uint32_t upTo = L.mineTick() - L.lead;              // our newest input counts from here
+      uint8_t in[2];
+      while (L.syncTick() < upTo && L.syncStep(&in[mpMe], &in[1 - mpMe])) mpRtStep(*mpRtOk, kind, in);
+      memcpy(mpRt, mpRtOk, sizeof(MpRt));
+      uint8_t ev = 0, len[2] = { 0, 0 };
+      if (upTo - L.syncTick() > mpRbDeep) mpRbDeep = upTo - L.syncTick();
+      for (uint32_t t = L.syncTick() + 1; t <= upTo; t++) {
+        if (t == mpRbShown + 1) { len[0] = mpRt->sn.len[0]; len[1] = mpRt->sn.len[1]; }
+        in[mpMe] = L.mineAt(t);
+        in[1 - mpMe] = (uint8_t)(L.oppAt(t) & ((bomb && t > L.oppTick()) ? ~8 : 0xFF));
+        uint8_t e = mpRtStep(*mpRt, kind, in);
+        if (t > mpRbShown) ev |= e;
+      }
+      if (upTo > mpRbShown) {                             // sounds for the ticks new on the screen
+        if (mpRbShown < L.syncTick()) { len[0] = mpRtOk->sn.len[0]; len[1] = mpRtOk->sn.len[1]; }
+        mpRtFx(kind, ev, len);
+        mpRbShown = upTo;
+      }
+    }
     mpStalled = now - lastStep > 400;
-    uint8_t w = pong ? mpRt->pg.winner : (pac ? mpRt->pm.winner :
-                (bomb ? (mpRt->rb.winner == RB_DRAW ? 3 : mpRt->rb.winner) : mpRt->sn.winner));
-    if (w) { end = mpResult(w, mpMe); break; }
+    uint8_t w = mpRtWinner(rb ? *mpRtOk : *mpRt, kind);
+    if (w) {
+      if (rb) memcpy(mpRt, mpRtOk, sizeof(MpRt));         // the end as it really was
+      end = mpResult(w, mpMe);
+      break;
+    }
     draw(NULL);
   }
   if (end) { mpStalled = false; mpFinish(draw, end); }
   bombWho = BOMB_NAMES; bombMe = 0;
   free(mpRt);
-  mpRt = NULL;
+  free(mpRtOk);
+  mpRt = mpRtOk = NULL;
   return ret;
 }
 
