@@ -239,8 +239,8 @@ struct Skat {
    or Grand - trumps, Buben, aces, tens beside them, empty suits. From
    SKT_TH (Grand SKT_THG) on it is a game; Null needs every suit safe
    (its i-th lowest card at most 7 9 B K: the others cannot force it). */
-#define SKT_TH  30
-#define SKT_THG 36
+#define SKT_TH  28
+#define SKT_THG 30
 static int16_t sktEval(uint32_t h, uint8_t g) {
   int16_t s;
   if (g == SG_GRAND) {
@@ -545,16 +545,24 @@ static void sktGameName(char *b, size_t n, uint8_t g, uint8_t fl) {
                 fl & SKF_OUV ? " Ouvert" : (fl & SKF_SCHW ? " Schwarz" : (fl & SKF_SCHN ? " Schneider" : "")));
 }
 
+/* The four-colour deck of the Skat tournaments: Kreuz black, Pik green,
+   Herz red, Karo orange - Kreuz and Pik look alike in black on a small
+   screen. The corner sign is bigger than Mau-Mau's too.               */
+static col sktSuitCol(uint8_t s) {
+  static const col SC[4] = { C::BLACK, rgb(0, 140, 40), rgb(220, 0, 0), rgb(235, 130, 0) };
+  return SC[s & 3];
+}
+
 // a card face up (as Mau-Mau's, with the German letters B D K)
 static void sktCard(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t c, bool hi = false) {
   uint8_t s = sktSuit(c), r = sktRank(c);
-  col sc = mmSuitCol(s);
+  col sc = sktSuitCol(s);
   gfx.rbox(x + 2, y + 2, w, h, 4, rgb(0, 40, 0));
   gfx.rbox(x, y, w, h, 4, C::WHITE);
   gfx.rframe(x, y, w, h, 4, hi ? C::YELLOW : C::GREY);
   if (hi) gfx.rframe(x + 1, y + 1, w - 2, h - 2, 4, C::YELLOW);
   gfx.text(x + 3, y + 3, SKT_RN[r], sc, F_BOLD);
-  mmSuit(x + 9, y + 33, s, 4, sc);
+  mmSuit(x + 10, y + 35, s, 6, sc);
   if (r >= SR_B && r <= SR_K) {
     bool big = w >= 40;
     int16_t bw = big ? 22 : 16, bh = big ? 30 : 22, bx = x + w - bw - 3, by = y + h - bh - 3;
@@ -565,11 +573,11 @@ static void sktCard(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t c, bool 
   } else mmSuit(x + w / 2 + 5, y + h / 2 + 10, s, r == SR_A ? 9 : 7, sc);
 }
 static void sktMini(int16_t x, int16_t y, uint8_t c) {
-  col sc = mmSuitCol(sktSuit(c));
+  col sc = sktSuitCol(sktSuit(c));
   gfx.rbox(x, y, 18, 26, 3, C::WHITE);
   gfx.rframe(x, y, 18, 26, 3, C::GREY);
   gfx.text(x + 2, y + 2, SKT_RN[sktRank(c)], sc, F_SMALL);
-  mmSuit(x + 9, y + 17, sktSuit(c), 3, sc);
+  mmSuit(x + 9, y + 18, sktSuit(c), 4, sc);
 }
 
 // your cards in order: Buben, the trump suit, the others (Null: by suit, A K D B 10 9 8 7)
@@ -866,7 +874,11 @@ static bool sktHumanDeclare() {
       bool on = r == sktSel, bad = rg == SG_NULL && sktPreview(rg, rf).value < skt.bid;
       int16_t y = 62 + r * 13;
       if (on) gfx.rbox(48, y - 2, 224, 13, 3, C::YELLOW);
-      gfx.text(56, y, b, on ? C::BLACK : (bad ? C::GREY : C::WHITE), F_SMALL);
+      if (rg < SG_GRAND) {                                // the suit in its colour, on a white chip
+        gfx.rbox(52, y - 1, 11, 11, 2, C::WHITE);
+        mmSuit(57, y + 4, rg, 3, sktSuitCol(rg));
+      }
+      gfx.text(68, y, b, on ? C::BLACK : (bad ? C::GREY : C::WHITE), F_SMALL);
       if (on && hand && r <= SG_GRAND) gfx.text(240, y, "< >", C::BLACK, F_SMALL);
     }
     char b[40];
