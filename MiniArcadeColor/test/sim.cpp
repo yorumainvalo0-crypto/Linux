@@ -256,6 +256,8 @@ static void palRecFrame(uint32_t ms, const uint8_t *px) {
   fwrite(hd, 1, sizeof(hd), palRec);
   fwrite(px, 1, SCR_W * SCR_H, palRec);
 }
+static uint32_t tiltOffAt = 0;                                  // tilt: when to look whether it is switched off ...
+static bool     tiltOffSeen = false;                            // ... and saved so, no key left pressed
 static uint8_t batMinWobble = 255, batLast = 255;               // batglitch: what the battery showed
 static int mine3dCols = 0, mine3dDug = 0, mine3dPut = 0;
 void Gfx::begin() {}
@@ -267,6 +269,10 @@ void Gfx::send() {
   if (overlay) overlay();
   frames++;
   if (mpRt) { inFrames++; if (mpStalled) inStalled++; }      // real-time online: frames that waited
+  if (tiltOffAt && clockUs / 1000 >= tiltOffAt) {
+    tiltOffSeen = !cfgTilt && !gyroReady && simNvsU16["tilt"] == 0 && !tiltKey[B_UP];
+    tiltOffAt = 0;
+  }
   if (simBatWobble && batShown != 255) {                         // batglitch: the lowest shown while the wire wobbled
     if (clockUs / 1000 < 150000) { if (batShown < batMinWobble) batMinWobble = batShown; }
     else batLast = batShown;
@@ -4151,7 +4157,8 @@ int main(int argc, char **argv) {
   } else if (scenario == "tilt") {
     // settings -> tilt control on: sensor found, all four ways learned (LEFT, UP and DOWN
     // each first tilted a wrong way and asked again; LEFT not as far as RIGHT); level saved;
-    // then Snake: the pause menu offers a new level, tilting steers
+    // then Snake: the pause menu offers a new level, tilting steers; the pause menu switches tilt
+    // control off and on again (saved), the game goes on with it
     simGyro = true; simNvsU16["snd"] = 255;                      // GPIO7 is the gyroscope's here
     press(M, UP); press(M + 400, OK, 80);
     for (int i = 0; i < 9; i++) press(M + 800 + 220 * i, DN);
@@ -4163,13 +4170,17 @@ int main(int argc, char **argv) {
                   { M + 19000, 0, -8000 }, { M + 20000, 0, 0 },  // UP (away)
                   { M + 21500, 0, -8000 }, { M + 22500, 0, 0 },  // DOWN asked, away again: once more
                   { M + 26000, 0, 7000 }, { M + 27000, 0, 0 },   // DOWN
-                  { M + 40000, 0, -8000 } };                     // the last one: tilt up in the game
+                  { M + 43000, 0, -8000 } };                     // the last one: tilt up in the game
     press(M + 29800, DN); press(M + 30200, OK, 80);              // "tilt level": save it
     press(M + 35200, OK, 900);                                   // leave the settings
     press(M + 36500, DN); press(M + 36900, OK, 80);              // Snake
-    press(M + 38000, OK, 900);                                   // pause ...
-    press(M + 39500, OK, 80);                                    // ... continue
-    simEnd = M + 41000;
+    press(M + 38000, OK, 900);                                   // pause: down to "tilt control: on"
+    for (int i = 0; i < 4; i++) press(M + 39300 + 300 * i, DN);
+    press(M + 40600, OK, 80);                                    // off ...
+    tiltOffAt = M + 41000;
+    press(M + 41400, OK, 80);                                    // ... on again (levels here)
+    press(M + 41900, DN); press(M + 42300, OK, 80);              // down wraps to "continue"
+    simEnd = M + 43500;
     setenv("GRAB", "TILT SETUP", 1);
   } else if (scenario == "sdcard") {
     // a card on GPIO20 is found at the first start; the settings show it
@@ -5147,6 +5158,8 @@ int main(int argc, char **argv) {
     check("level saved in the settings", seen("LEVEL SAVED") && cfgTiltFix);
     check("pause menu offers a new level", seen("tilt: level here"));
     check("tilting up presses UP in the game", seen("SNAKE") && tiltKey[B_UP] && !tiltKey[B_DOWN]);
+    check("pause menu: tilt control switched off and on again, saved", seen("tilt control: off") && seen("tilt control: on") &&
+          tiltOffSeen && cfgTilt && simNvsU16["tilt"] == 1);
     printf("   stepless: up %d, left-right %d\n", keyAxis(B_DOWN, B_UP), keyAxis(B_LEFT, B_RIGHT));
     check("stepless tilt: nearly full up, nothing sideways", keyAxis(B_DOWN, B_UP) > 200 && keyAxis(B_LEFT, B_RIGHT) == 0);
     // each side as far as it went when learned answers the same; LEFT (learned shorter) answers more for the same tilt

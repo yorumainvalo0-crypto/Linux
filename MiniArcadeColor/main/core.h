@@ -185,6 +185,8 @@ static bool   cfgTilt = false;           // tilt control switched on (saved as "
 static bool   gyroReady = false;         // ... and the sensor answers
 static bool   tiltGame = false;          // tilting counts only in a game
 static void   tiltLevel();               // tilt.h: the way it is held now counts as level
+static bool   tiltLearned();             // tilt.h: the axes are known (set up once in the settings)
+static void   tiltSwitch();              // tilt.h: on / off from the pause menu (saved)
 
 bool rawPressed(uint8_t i) {
   uint32_t u = vKeyUntil[i];
@@ -674,10 +676,11 @@ uint8_t chooseMode(const char *title, const char *const *opts, uint8_t n, col ac
   return 255;
 }
 
+/* continue, restart, quit; with tilt control set up once also "tilt
+   control on / off" (saved, the game goes on with it) and, while it is
+   on, "level here".                                                   */
+enum { PM_GO, PM_RESTART, PM_QUIT, PM_LEVEL, PM_TILT };
 static bool pauseMenu() {
-  const char *const OPT[4] = { TR("continue", "weiter"), TR("restart", "neu starten"), TR("quit to menu", "zum Menü"),
-                               TR("tilt: level here", "Nulllage hier") };
-  const uint8_t n = cfgTilt && gyroReady ? 4 : 3;       // with tilt control: set the level anew
   uint32_t t0 = millis();
   uint8_t sel = 0;
   NoPause np;
@@ -687,7 +690,17 @@ static bool pauseMenu() {
   gfx.dim(0, 0, SCR_W, SCR_H);                          // the game stays visible behind the menu
   btnClear();
   bool quit = false;
+  const uint8_t most = tiltLearned() ? 5 : 3;           // the panel keeps its size when a line goes
+  const int16_t ph = 52 + most * 28, py = (SCR_H - ph) / 2;
+  uint8_t keep = 0xFF;                                  // after a switch: the cursor stays on that line
   while (true) {
+    uint8_t id[5], n = 0;
+    id[n++] = PM_GO; id[n++] = PM_RESTART; id[n++] = PM_QUIT;
+    if (cfgTilt && gyroReady) id[n++] = PM_LEVEL;
+    if (tiltLearned()) id[n++] = PM_TILT;
+    for (uint8_t i = 0; i < n; i++) if (id[i] == keep) sel = i;
+    keep = 0xFF;
+    if (sel >= n) sel = n - 1;
     delay(16);
     btnUpdate();
     sfxUpdate();
@@ -697,16 +710,21 @@ static bool pauseMenu() {
     if (btn(B_DOWN)) { sel = (sel + 1) % n;        sfx(700, 15); }
     if (btn(B_OK))   {
       sfx(1200, 50);
-      if (sel == 1) { wantRestart = true; quit = true; }
-      if (sel == 2) quit = true;
-      if (sel == 3) tiltLevel();
+      if (id[sel] == PM_TILT) { tiltSwitch(); keep = PM_TILT; continue; }   // stays: the line shows the new state
+      if (id[sel] == PM_RESTART) { wantRestart = true; quit = true; }
+      if (id[sel] == PM_QUIT) quit = true;
+      if (id[sel] == PM_LEVEL) tiltLevel();
       break;
     }
-    panel(70, 40, 180, 110 + n * 30, "PAUSE", C::BLUE);
+    panel(70, py, 180, ph, "PAUSE", C::BLUE);
     for (uint8_t i = 0; i < n; i++) {
-      int16_t y = 82 + i * 30;
+      int16_t y = py + 42 + i * 28;
+      const char *t = id[i] == PM_GO ? TR("continue", "weiter") : id[i] == PM_RESTART ? TR("restart", "neu starten") :
+                      id[i] == PM_QUIT ? TR("quit to menu", "zum Menü") : id[i] == PM_LEVEL ? TR("tilt: level here", "Nulllage hier") :
+                      !cfgTilt ? TR("tilt control: off", "Kippen: aus") :
+                      gyroReady ? TR("tilt control: on", "Kippen: an") : TR("tilt: no sensor", "Kippen: kein Sensor");
       if (i == sel) gfx.rbox(82, y - 4, 156, 26, 5, C::CYAN);
-      gfx.center(y, OPT[i], i == sel ? C::BLACK : C::WHITE);
+      gfx.center(y, t, i == sel ? C::BLACK : C::WHITE);
     }
     gfx.send();
   }
