@@ -421,14 +421,24 @@ static bool batValid() { return adcPin(batPin); }
 static void batPinFree() { if (batValid()) pinMode(batPin, INPUT); }
 void saveBat() { prefs.begin("arcade", false); prefs.putUShort("bat", batPin); prefs.end(); }
 
-static uint16_t batMilliVolts() {              // the lowest of four quick pairs, x2 for the divider
+/* A loose contact on the divider reads far too low for a moment, down to
+   0 V. A reading under BAT_ODD_MV, or more than BAT_DROP_MV under the
+   smoothed value, only counts once it has lasted BAT_ODD_MS: an empty
+   cell stays low, a wobbly wire does not.                              */
+#define BAT_ODD_MV  2900
+#define BAT_DROP_MV  400
+#define BAT_ODD_MS 30000
+
+// the lowest of four quick pairs that looks like a cell (else the lowest), x2 for the divider
+static uint16_t batMilliVolts() {
   if (!batValid()) return 0;
-  uint16_t low = 0xFFFF;
+  uint16_t low = 0xFFFF, lowOk = 0xFFFF;
   for (uint8_t i = 0; i < 4; i++) {
     uint16_t v = (uint16_t)((analogReadMilliVolts(batPin) + analogReadMilliVolts(batPin)) / 2);
     if (v < low) low = v;
+    if (v * 2 >= BAT_ODD_MV && v < lowOk) lowOk = v;
   }
-  return (uint16_t)(low * 2);
+  return (uint16_t)((lowOk != 0xFFFF ? lowOk : low) * 2);
 }
 
 /* Samsung INR18650-30Q under the console's load (about 0.2 A, screen on):
@@ -494,12 +504,18 @@ static void batLearnTick(uint32_t now) {
 }
 void batLearnStop() { if (batLStarted) { batL.stop(); batLearnSave(); } }
 
+static uint32_t batOddSince = 0;                // a reading out of line since then (0 = none)
 void batTick() {
   if (!batValid()) return;
   uint32_t now = millis();
-  if (batLow && now - batAt < 250) return;
+  if ((batLow || batOddSince) && now - batAt < 250) return;
   batAt = now;
-  int32_t mv16 = (int32_t)batMilliVolts() * 16;
+  uint16_t mv = batMilliVolts();
+  if (mv < BAT_ODD_MV || (batLow && (uint32_t)mv + BAT_DROP_MV < batLow / 16)) {
+    if (!batOddSince) batOddSince = now ? now : 1;
+    if (now - batOddSince < BAT_ODD_MS) return;   // not yet: maybe just a loose contact
+  } else batOddSince = 0;
+  int32_t mv16 = (int32_t)mv * 16;
   if (!batLow) { batLow = (uint32_t)mv16; return; }
   int32_t d = mv16 - (int32_t)batLow;
   batLow = (uint32_t)((int32_t)batLow + (d < 0 ? d / 2 : d / 128));
@@ -508,21 +524,24 @@ void batTick() {
 uint16_t batSmoothMv() { batTick(); return (uint16_t)(batLow / 16); }
 // the shown value changes at most once a minute, so it does not flicker
 static uint32_t batShownAt = 0;
-uint8_t batPercent() {
+uint8_t batPercent() {                          // 255 = no trustworthy reading yet
   batLearnLoad();
-  uint8_t p = batL.percent(batSmoothMv());
+  uint16_t mv = batSmoothMv();
+  if (!mv) return 255;
+  uint8_t p = batL.percent(mv);
   if (batShown == 255 || millis() - batShownAt >= 60000) { batShown = p; batShownAt = millis(); }
   return batShown;
 }
-void batReset() { batLow = 0; batShown = 255; }
+void batReset() { batLow = 0; batShown = 255; batOddSince = 0; batAt = 0; }
 
 // battery as a number, right-aligned to the old 22 x 11 symbol at x, y
 void batIcon(int16_t x, int16_t y) {
   if (!batValid()) { gfx.text(x - 4, y + 1, "USB", C::LTGREY, F_SMALL); return; }
   uint8_t p = batPercent();
-  col c = p > 50 ? C::GREEN : (p > 20 ? C::YELLOW : C::RED);
+  col c = p == 255 ? C::LTGREY : p > 50 ? C::GREEN : (p > 20 ? C::YELLOW : C::RED);
   char t[6];
-  snprintf(t, sizeof(t), "%u%%", p);
+  if (p == 255) strcpy(t, "--%");
+  else snprintf(t, sizeof(t), "%u%%", p);
   gfx.text((int16_t)(x + 22 - Gfx::width(t, F_SMALL)), y + 1, t, c, F_SMALL);
 }
 

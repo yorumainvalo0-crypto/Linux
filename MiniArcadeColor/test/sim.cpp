@@ -88,9 +88,17 @@ void simCpuMhz(int) {}
 static bool toneOn = false;
 void simTone(int f) { if (f) toneCount++; toneOn = f != 0; }
 void simFrameSent(const uint8_t *, size_t) {}                   // the OLED's I2C (unused here)
+static bool simBatWobble = false;                               // batglitch: a loose contact, then an empty cell
+static int simBatMv() {
+  if (!simBatWobble) return 3900;
+  uint32_t ms = (uint32_t)(clockUs / 1000);
+  if (ms > 150000) return 3000;                                 // really low from here on
+  if (ms > 20000 && ms % 7000 < 3000) return (rand() & 1) ? 0 : 1200;   // the wire wobbles for 3 s every 7 s
+  return 3900;
+}
 int simAdcRaw(int ch) {
   bool down = pinMode_[ch] == 3;
-  if (ch == BAT) return 3900 / 2 * (down ? 62 : 100) / 100 * 4095 / 2500;
+  if (ch == BAT) return simBatMv() / 2 * (down ? 62 : 100) / 100 * 4095 / 2500;
   if (ch == LADDER) { int mv = (LADDER_R ? ladderRmv(ladder) : LADDER_MV[ladder]) + rand() % 17 - 8 + (toneOn && ladder ? 40 : 0);   // noisy, and the buzzer pulls
     if (mv < 0) mv = 0; return mv * 4095 / 2500 > 4095 ? 4095 : mv * 4095 / 2500; }
   if (pinPress[ch] || pinMode_[ch] == 2) return 4095;
@@ -241,6 +249,7 @@ static void palRecFrame(uint32_t ms, const uint8_t *px) {
   fwrite(hd, 1, sizeof(hd), palRec);
   fwrite(px, 1, SCR_W * SCR_H, palRec);
 }
+static uint8_t batMinWobble = 255, batLast = 255;               // batglitch: what the battery showed
 static int mine3dCols = 0, mine3dDug = 0, mine3dPut = 0;
 void Gfx::begin() {}
 void Gfx::setBacklight(uint8_t) {}
@@ -251,6 +260,10 @@ void Gfx::send() {
   if (overlay) overlay();
   frames++;
   if (mpRt) { inFrames++; if (mpStalled) inStalled++; }      // real-time online: frames that waited
+  if (simBatWobble && batShown != 255) {                         // batglitch: the lowest shown while the wire wobbled
+    if (clockUs / 1000 < 150000) { if (batShown < batMinWobble) batMinWobble = batShown; }
+    else batLast = batShown;
+  }
   if (pm && tiltGame && pm->st == PS_ROLL) {                     // Pumpkin Maze: what goes to the panel (per row: first to last changed block)
     for (int y = 0; y < SCR_H; y++) {
       int b0 = -1, b1 = -1;
@@ -4109,6 +4122,11 @@ int main(int argc, char **argv) {
     press(6700, 6 << 4, 700);                                    // UP + RIGHT: the supply
     script.push_back({ 13000, 7 << 4 });                         // DOWN + LEFT held to the end
     simEnd = 14000;
+  } else if (scenario == "batglitch") {
+    // the battery divider has a loose contact: for 3 s every 7 s it reads 0 or 1.2 V;
+    // from 150 s on the cell is really low (3.0 V)
+    simBatWobble = true; simNvsU16["slp"] = 0;
+    simEnd = 260000;
   } else if (scenario == "ladderbat") {
     // ladder keys on GPIO2, the battery divider on GPIO4 not known yet: it must not count as a key
     simNvsU16.erase("pset"); simNvsU16.erase("bat"); LADDER = 2; LADDER_R = true;
@@ -5165,6 +5183,11 @@ int main(int argc, char **argv) {
     check("the answer reached the web page (no, then yes)", simAnswer == 1);
     check("installing shown until the restart", seen("done - restarting"));
   }
+  if (scenario == "batglitch") {
+    printf("   lowest shown while the wire wobbled %u%%, at the end %u%%\n", batMinWobble, batLast);
+    check("a loose contact never shows a low battery", batMinWobble != 255 && batMinWobble >= 50);
+    check("a cell that stays low is shown after a while", batLast <= 5);
+  }
   if (scenario == "ladderbat") {
     printf("   battery on %u, keys on %u %u %u %u %u\n", batPin, BTN_PIN[0], BTN_PIN[1], BTN_PIN[2], BTN_PIN[3], BTN_PIN[4]);
     bool onLadder = true;
@@ -5290,7 +5313,7 @@ int main(int argc, char **argv) {
     check("pumpkin editor: the own level is listed and played", seen("GRAVE RUN") && pmbLevelsWon >= 1 && pmSv.stars[PM_LEVELS] >= 1 && seen("OWN LEVEL 1"));
     check("pumpkin editor: in the home WLAN the link has its address and the WLAN stays on", seen("192.168.1.50/maze") && pmeHomeOut == NET_ONLINE);
   }
-  check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "karttilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
+  check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "karttilt" || scenario == "menu" || scenario == "settings" || scenario == "batglitch" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }
