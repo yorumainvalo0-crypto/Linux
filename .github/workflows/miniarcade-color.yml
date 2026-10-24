@@ -1,6 +1,7 @@
 # Builds MiniArcade Color (the 320x240 colour console) for the ESP32-C3
-# SuperMini and the ESP32-S3. It has its own update channel, apart from the
-# OLED console:
+# SuperMini, with the ILI9341 and with the ST7789 display (the ESP32-S3 still
+# builds locally, but gets no release files). It has its own update channel,
+# apart from the OLED console:
 #   - every new MiniArcadeColor/version.txt on main becomes a release
 #     "color-v<version>", marked as prerelease so it never turns into the
 #     repository's "latest" release (that one belongs to the OLED console),
@@ -84,16 +85,6 @@ jobs:
             idf.py -B build-c3 -DSDKCONFIG=build-c3/sdkconfig build &&
             idf.py -B build-c3 -DSDKCONFIG=build-c3/sdkconfig merge-bin -o full.bin
 
-      - name: Build for the ESP32-S3
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          esp_idf_version: v5.3.2
-          target: esp32s3
-          path: MiniArcadeColor
-          command: >-
-            idf.py -B build-s3 -DSDKCONFIG=build-s3/sdkconfig build &&
-            idf.py -B build-s3 -DSDKCONFIG=build-s3/sdkconfig merge-bin -o full.bin
-
       - name: Build for the ESP32-C3 with the ST7789 display
         uses: espressif/esp-idf-ci-action@v1
         with:
@@ -104,28 +95,14 @@ jobs:
             idf.py -B build-c3st -DSDKCONFIG=build-c3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" build &&
             idf.py -B build-c3st -DSDKCONFIG=build-c3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" merge-bin -o full.bin
 
-      - name: Build for the ESP32-S3 with the ST7789 display
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          esp_idf_version: v5.3.2
-          target: esp32s3
-          path: MiniArcadeColor
-          command: >-
-            idf.py -B build-s3st -DSDKCONFIG=build-s3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" build &&
-            idf.py -B build-s3st -DSDKCONFIG=build-s3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" merge-bin -o full.bin
-
       - name: Collect the files
         run: |
           mkdir out
           B=MiniArcadeColor
           cp $B/build-c3/miniarcade-color.bin out/miniarcade-color-c3.bin
           cp $B/build-c3/full.bin             out/miniarcade-color-c3-full.bin
-          cp $B/build-s3/miniarcade-color.bin out/miniarcade-color-s3.bin
-          cp $B/build-s3/full.bin             out/miniarcade-color-s3-full.bin
           cp $B/build-c3st/miniarcade-color.bin out/miniarcade-color-c3-st7789.bin
           cp $B/build-c3st/full.bin             out/miniarcade-color-c3-st7789-full.bin
-          cp $B/build-s3st/miniarcade-color.bin out/miniarcade-color-s3-st7789.bin
-          cp $B/build-s3st/full.bin             out/miniarcade-color-s3-st7789-full.bin
           cp $B/version.txt out/
           ls -l out
 
@@ -160,8 +137,10 @@ jobs:
                 --prerelease --latest=false
           }
           retry channel
-          retry gh release upload color-latest $R --clobber out/miniarcade-color-c3.bin out/miniarcade-color-s3.bin \
-            out/miniarcade-color-c3-full.bin out/miniarcade-color-s3-full.bin \
-            out/miniarcade-color-c3-st7789.bin out/miniarcade-color-s3-st7789.bin \
-            out/miniarcade-color-c3-st7789-full.bin out/miniarcade-color-s3-st7789-full.bin
+          retry gh release upload color-latest $R --clobber out/miniarcade-color-c3.bin out/miniarcade-color-c3-full.bin \
+            out/miniarcade-color-c3-st7789.bin out/miniarcade-color-c3-st7789-full.bin
+          # the S3 files of earlier versions go: an S3 board would install them again and again
+          for f in miniarcade-color-s3.bin miniarcade-color-s3-full.bin miniarcade-color-s3-st7789.bin miniarcade-color-s3-st7789-full.bin; do
+            gh release delete-asset color-latest "$f" $R -y 2>/dev/null || true
+          done
           retry gh release upload color-latest $R --clobber out/version.txt
