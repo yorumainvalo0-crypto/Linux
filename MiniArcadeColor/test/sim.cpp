@@ -88,9 +88,17 @@ void simCpuMhz(int) {}
 static bool toneOn = false;
 void simTone(int f) { if (f) toneCount++; toneOn = f != 0; }
 void simFrameSent(const uint8_t *, size_t) {}                   // the OLED's I2C (unused here)
+static bool simBatWobble = false;                               // batglitch: a loose contact, then an empty cell
+static int simBatMv() {
+  if (!simBatWobble) return 3900;
+  uint32_t ms = (uint32_t)(clockUs / 1000);
+  if (ms > 150000) return 3000;                                 // really low from here on
+  if (ms > 20000 && ms % 7000 < 3000) return (rand() & 1) ? 0 : 1200;   // the wire wobbles for 3 s every 7 s
+  return 3900;
+}
 int simAdcRaw(int ch) {
   bool down = pinMode_[ch] == 3;
-  if (ch == BAT) return 3900 / 2 * (down ? 62 : 100) / 100 * 4095 / 2500;
+  if (ch == BAT) return simBatMv() / 2 * (down ? 62 : 100) / 100 * 4095 / 2500;
   if (ch == LADDER) { int mv = (LADDER_R ? ladderRmv(ladder) : LADDER_MV[ladder]) + rand() % 17 - 8 + (toneOn && ladder ? 40 : 0);   // noisy, and the buzzer pulls
     if (mv < 0) mv = 0; return mv * 4095 / 2500 > 4095 ? 4095 : mv * 4095 / 2500; }
   if (pinPress[ch] || pinMode_[ch] == 2) return 4095;
@@ -159,6 +167,15 @@ void simDelayMs(uint32_t ms) {
   }
 }
 
+// the SD card (an "sdcard" scenario, the sd... ones): its files are a folder on the PC, read and
+// written with plain stdio; while the card is out its path leads nowhere
+static bool simSd = false, simSdIn = false;
+static std::string simSdDir = "frames/sdcard";
+static size_t simHeap = 100000;                  // what the heap has for the SD levels' index
+static const char *simSdRoot() { return simSdIn ? simSdDir.c_str() : "frames/no-sd-card"; }
+#define SD_ROOT simSdRoot()
+#define SDL_ROOM(n) ((size_t)(n) + 16384 <= simHeap)
+
 #include "Arduino.h"
 #include "net.h"                   // pretend network, before the console finds main/net.h
 #include "link.h"
@@ -202,8 +219,7 @@ bool tftPinUsed(uint8_t p) {
 
 // the gyroscope: a sensor on GPIO20 (SDA) / GPIO7 (SCL) in the "tilt" scenario
 static bool    simGyro = false;
-// an SD card with its CS on GPIO20 in the "sdcard" scenario
-static bool simSd = false, simSdIn = false;
+// an SD card with its CS on GPIO20 in the "sdcard" scenario (and the sd... ones)
 bool sdMount(int8_t cs) { simSdIn = simSd && cs == 20; return simSdIn; }
 void sdUnmount() { simSdIn = false; }
 bool sdReady() { return simSdIn; }
@@ -233,6 +249,7 @@ static void palRecFrame(uint32_t ms, const uint8_t *px) {
   fwrite(hd, 1, sizeof(hd), palRec);
   fwrite(px, 1, SCR_W * SCR_H, palRec);
 }
+static uint8_t batMinWobble = 255, batLast = 255;               // batglitch: what the battery showed
 static int mine3dCols = 0, mine3dDug = 0, mine3dPut = 0;
 void Gfx::begin() {}
 void Gfx::setBacklight(uint8_t) {}
@@ -243,6 +260,10 @@ void Gfx::send() {
   if (overlay) overlay();
   frames++;
   if (mpRt) { inFrames++; if (mpStalled) inStalled++; }      // real-time online: frames that waited
+  if (simBatWobble && batShown != 255) {                         // batglitch: the lowest shown while the wire wobbled
+    if (clockUs / 1000 < 150000) { if (batShown < batMinWobble) batMinWobble = batShown; }
+    else batLast = batShown;
+  }
   if (pm && tiltGame && pm->st == PS_ROLL) {                     // Pumpkin Maze: what goes to the panel (per row: first to last changed block)
     for (int y = 0; y < SCR_H; y++) {
       int b0 = -1, b1 = -1;
@@ -453,7 +474,7 @@ static bool bkSimRound(uint8_t mode, uint8_t lv, int maxMoves, int rnd = 0) {
   bkStart(mode, lv, 1);
   for (int m = 0; m < maxMoves; m++) {
     if (bkWon()) return true;
-    if (mode == BKM_ADV && bk->moves >= BK_LEVELS[lv].moves) return false;
+    if (mode == BKM_ADV && bk->moves >= bkLevel(lv).moves) return false;
     uint8_t s = 0; int8_t r = 0, c = 0;
     if (!bkBest(s, r, c, rnd)) return false;
     bkPlace(bk->tray[s], r, c);
@@ -3441,6 +3462,336 @@ static void pmEditorBot(uint32_t t) {
   }
 }
 
+// ---------------- levels from the SD card ----------------
+/* The card is a folder: frames/sdcard a fresh copy of ../sdcard (the
+   sample packs) for each run, frames/sdbad one with broken lines and a
+   broken save file. A driver goes through steps; each is called every ms
+   (when no key is being pressed) until it says it is done.            */
+typedef std::function<bool(uint32_t)> SdStep;
+static std::vector<SdStep> sdSteps;
+static size_t   sdAt = 0;
+static uint32_t sdStepT = 0, sdMarkT = 0;        // when the step began; a time to compare with
+static std::map<std::string, uint16_t> sdNvsU16; // the flash when the scenario began
+static std::map<std::string, std::string> sdNvsBlob;
+static uint16_t sdSokMoves = 0;                  // the moves the Sokoban bot took
+static bool sdPulledOk = false;                  // the level went on after the card was pulled
+static void sdShot(const char *name) {           // frames/<scenario>_<name>.ppm, the last frame
+  static std::set<std::string> done;
+  if (!done.insert(name).second) return;
+  char fn[128];
+  snprintf(fn, sizeof(fn), "frames/%s%s_%s.ppm", framePre, scenario.c_str(), name);
+  FILE *f = fopen(fn, "wb");
+  if (!f) return;
+  fprintf(f, "P6\n%d %d\n255\n", SCR_W, SCR_H);
+  for (int i = 0; i < SCR_W * SCR_H; i++) { uint8_t v[3]; colToRgb(lastFrame[i], v[0], v[1], v[2]); fwrite(v, 1, 3, f); }
+  fclose(f);
+}
+static void sdDriver(uint32_t t) {
+  if (botBusy(t) || sdAt >= sdSteps.size()) return;
+  if (!sdStepT) sdStepT = t;
+  if (sdSteps[sdAt](t)) { sdAt++; sdStepT = 0; }
+}
+static void sdAdd(SdStep s) { sdSteps.push_back(s); }
+static void sdKey(uint8_t k, int n = 1, uint32_t len = 60) { for (int i = 0; i < n; i++) sdAdd([=](uint32_t t) { botPress(t, k, len); return true; }); }
+static void sdSee(std::string s) { sdAdd([=](uint32_t) { return recent(s.c_str()); }); }
+static void sdWait(uint32_t ms) { sdAdd([=](uint32_t t) { return t - sdStepT >= ms; }); }
+static void sdDo(std::function<void()> f) { sdAdd([=](uint32_t) { f(); return true; }); }
+static void sdSnap(const char *name) { sdAdd([=](uint32_t) { sdShot(name); return true; }); }
+static void sdMark() { sdDo([]() { sdMarkT = (uint32_t)(clockUs / 1000); }); }
+static bool sdSeenSince(const std::string &s) { auto it = textAt.find(s); return it != textAt.end() && it->second > sdMarkT; }
+// from the menu (on the game played last) to this game, then OK
+static void sdGame(const char *name) {
+  auto left = std::make_shared<int>(1000);
+  sdAdd([=](uint32_t t) {
+    if (*left == 1000) {
+      if (!recent("MiniArcade")) return false;
+      int to = 0;
+      for (uint8_t i = 0; i < GAME_COUNT; i++) if (!strcmp(GAMES[i].name, name)) to = i;
+      *left = to - curGame;
+    }
+    if (*left) { botPress(t, *left > 0 ? DN : UP, 60); *left += *left > 0 ? -1 : 1; return false; }
+    botPress(t, OK, 80);
+    return true;
+  });
+}
+#define DTR(en, de) (simDe ? (de) : (en))       // a scenario's text, before the console knows its language
+static void sdLeave() { sdKey(OK, 1, 900); sdWait(400); sdKey(OK, 1, 900); sdWait(600); }   // pause, then quit
+
+// Sokoban: the fewest moves for the level on the map (breadth first; small levels)
+static std::vector<uint8_t> skBfs() {
+  std::string b0;
+  for (int i = 0; i < SK_W * SK_H; i++) if (sk[i / SK_W][i % SK_W] & SK_BOX) b0 += (char)i;
+  auto key = [](int p, const std::string &b) { return std::string(1, (char)p) + b; };
+  std::unordered_map<std::string, std::pair<std::string, uint8_t>> prev;
+  std::deque<std::string> q;
+  std::string k0 = key(skY * SK_W + skX, b0);
+  prev[k0] = { "", 255 };
+  q.push_back(k0);
+  while (!q.empty()) {
+    std::string k = q.front(); q.pop_front();
+    int p = (uint8_t)k[0];
+    std::string b = k.substr(1);
+    bool done = true;
+    for (char c : b) if (!(sk[(uint8_t)c / SK_W][(uint8_t)c % SK_W] & SK_GOAL)) done = false;
+    if (done) {
+      std::vector<uint8_t> path;
+      for (std::string s = k; prev[s].second != 255; s = prev[s].first) path.insert(path.begin(), prev[s].second);
+      return path;
+    }
+    for (uint8_t d = 0; d < 4; d++) {
+      int x = p % SK_W + SK_DX[d], y = p / SK_W + SK_DY[d];
+      if (x < 0 || y < 0 || x >= SK_W || y >= SK_H || (sk[y][x] & SK_WALL)) continue;
+      std::string nb = b;
+      size_t at = nb.find((char)(y * SK_W + x));
+      if (at != std::string::npos) {
+        int bx = x + SK_DX[d], by = y + SK_DY[d];
+        if (bx < 0 || by < 0 || bx >= SK_W || by >= SK_H || (sk[by][bx] & SK_WALL) || nb.find((char)(by * SK_W + bx)) != std::string::npos) continue;
+        nb[at] = (char)(by * SK_W + bx);
+        std::sort(nb.begin(), nb.end());
+      }
+      std::string nk = key(y * SK_W + x, nb);
+      if (prev.count(nk)) continue;
+      prev[nk] = { k, d };
+      q.push_back(nk);
+    }
+  }
+  return {};
+}
+static void sdSolveSokoban() {
+  auto plan = std::make_shared<std::vector<uint8_t>>();
+  auto at = std::make_shared<size_t>(0);
+  auto made = std::make_shared<bool>(false);
+  sdAdd([=](uint32_t t) {
+    if (!*made) {
+      if (!sk || skMoves) return false;
+      *plan = skBfs(); *made = true;
+      sdSokMoves = (uint16_t)plan->size();
+      printf("      sokoban bot: %zu moves\n", plan->size());
+      if (plan->empty()) return true;
+    }
+    if (*at >= plan->size()) return true;
+    botPress(t, (uint8_t)(1 << (*plan)[(*at)++]), 50);
+    return false;
+  });
+}
+static void sdPlayPumpkin() {                    // the pumpkin bot through the keys, to the goal and OK on its box
+  sdAdd([](uint32_t t) { if (pmbLevelsWon >= 1 && !pmbOkAt) return true; pumpkinBot(t); return false; });
+}
+static void sdPlayBlocks() {                     // the block bot until the goal is reached
+  sdAdd([](uint32_t t) { if (bk && bkWon()) return true; blocksBot(t); return false; });
+}
+
+// files of the card
+static void sdCard(const std::string &dir, bool samples) {
+  std::string cmd = "rm -rf " + dir + " frames/no-sd-card && mkdir -p " + dir + "/MINIARC/levels";
+  if (samples) cmd += " && cp ../sdcard/MINIARC/levels/*.txt " + dir + "/MINIARC/levels/";
+  if (system(cmd.c_str())) printf("      could not make the card %s\n", dir.c_str());
+}
+static void sdWrite(const std::string &path, const std::string &text) {
+  FILE *f = fopen(path.c_str(), "wb");
+  if (f) { fwrite(text.data(), 1, text.size(), f); fclose(f); }
+}
+static std::string sdRead(const std::string &path) {
+  std::ifstream in(path, std::ios::binary);
+  std::stringstream ss; ss << in.rdbuf(); return ss.str();
+}
+static bool sdExists(const std::string &path) { FILE *f = fopen(path.c_str(), "rb"); if (f) fclose(f); return f != NULL; }
+// the level lines of a pack, as the console sees them
+static std::vector<std::string> sdLines(const std::string &path) {
+  std::vector<std::string> v;
+  std::ifstream in(path, std::ios::binary);
+  for (std::string l; std::getline(in, l); ) {
+    while (!l.empty() && strchr("\r\n \t", l.back())) l.pop_back();
+    if (!sdlComment(l.c_str())) v.push_back(l);
+  }
+  return v;
+}
+// what the save file keeps for a level line, 0 = nothing
+static uint16_t sdSaved(const std::string &dir, const char *game, const std::string &line) {
+  std::ifstream in(dir + "/MINIARC/save/" + game + ".sav");
+  uint32_t h = sdlHash(line.c_str());
+  for (std::string l; std::getline(in, l); ) { SdlProg r; if (sdlRecord(l.c_str(), r) && r.h == h) return r.v; }
+  return 0;
+}
+static bool sdNvsSame() {
+  simNvsBlob.erase("bcal"); sdNvsBlob.erase("bcal");                // the battery's own learning, on its own clock
+  bool same = simNvsU16 == sdNvsU16 && simNvsBlob == sdNvsBlob;
+  for (auto &kv : simNvsU16) if (!sdNvsU16.count(kv.first) || sdNvsU16[kv.first] != kv.second) printf("      flash: %s = %u\n", kv.first.c_str(), kv.second);
+  for (auto &kv : simNvsBlob) if (!sdNvsBlob.count(kv.first) || sdNvsBlob[kv.first] != kv.second) printf("      flash: blob %s\n", kv.first.c_str());
+  return same;
+}
+
+static const char *const SD_BAD_SOK =
+  "# broken lines on purpose\n"
+  "#####|#@$.#|#####\n"                          // good: one push
+  "#####|#@$.#|#@  #|#####\n"                    // two players
+  "#####|#@$..#|######\n"                        // more goals than boxes
+  "#####|#@$. |#####\n"                          // not closed
+  "#####|#@$X#|#####\n"                          // an unknown character
+  "######################|#@$.  #|######\n"      // too wide
+  "######|#@ $.#|######\n";                      // good
+static const char *const SD_BAD_PMZ_GOOD = "TEST ROOM|####################|#S.................#|#..................#|#................G.#|####################";
+
+static void sdBadCard() {
+  sdCard("frames/sdbad", false);
+  std::string sok = SD_BAD_SOK;
+  sok += std::string(400, '#') + "\n";            // longer than a line can be
+  sok += "#####|#@$.#|##";                         // cut off, no line end
+  sdWrite("frames/sdbad/MINIARC/levels/sokoban.txt", sok);
+  sdWrite("frames/sdbad/MINIARC/levels/pumpkin.txt", std::string("# one good, three broken\n") + SD_BAD_PMZ_GOOD + "\n" +
+          "NO GOAL|####################|#S.................#|####################\n"
+          "MUCH TOO LONG NAME|####################|#S...............G.#|####################\n"
+          "WALLED IN|####################|#S.......#.......G.#|####################\n");
+  sdWrite("frames/sdbad/MINIARC/levels/blocks.txt",
+          "gems 12 0 ........|........|........|........|........|........|xgxx.xxx|xxx.xgxx\n"
+          "gems 12 0 ........|........|........|........|........|........|xgxx.xxx\n"
+          "stars 10 0 ........|........|........|........|........|........|........|........\n"
+          "score 10 5000 ........|........|........|........|........|........|........|........\n");
+  if (system("mkdir -p frames/sdbad/MINIARC/save")) {}
+  sdWrite("frames/sdbad/MINIARC/save/sokoban.sav", "garbage line\nzzzzzzzz 12\ndeadbeef 7\n0000000a\n");
+}
+
+/* No screen: the sample packs as the console reads them (each level
+   checked by the game, solved / rolled through / won by the bots), the
+   checks of a level line, the save files, a full pack, a pulled card. */
+static void sdLogic() {
+  sdCard("frames/sdlogic", true);
+  simSdDir = "frames/sdlogic"; simSd = simSdIn = true;
+  const std::string L = "frames/sdlogic/MINIARC/levels/";
+  sdNvsU16 = simNvsU16; sdNvsBlob = simNvsBlob;
+  // Sokoban
+  check("sokoban: map on the heap", skAlloc());
+  std::vector<std::string> lines = sdLines(L + "sokoban.txt");
+  sdlOpen("sokoban", skValid);
+  printf("      sokoban.txt: %u levels, %u left out (%zu lines)\n", sdl.n, sdl.bad, lines.size());
+  check("sokoban pack: every line a level, 40 or so", sdl.st == SDL_OK && sdl.n == lines.size() && !sdl.bad && sdl.n >= 35);
+  int bad = 0, lastP = 0, order = 0;
+  for (uint16_t i = 0; i < sdl.n; i++) {
+    if (!sdlRead(i) || sdl.line != lines[i]) { bad++; continue; }
+    SkLevel S = skParse(sdl.line);
+    int p = skSolve(S);
+    if (p <= 0 || !skLoadText(sdl.line) || skW * skTile() > SCR_W || skH * skTile() > SK_Y1 - SK_Y0) { bad++; printf("      level %u: %d pushes, does not fit or load\n", i + 1, p); }
+    if (p < lastP) order++;
+    lastP = p;
+  }
+  check("sokoban pack: every level solved by the solver, fits the screen", !bad);
+  check("sokoban pack: easiest first (pushes never fewer than before)", !order);
+  static const char *const SK_NO[] = { "#####|#@$.#|#@  #|#####", "#####|#@$..#|######", "#####|#@$. |#####", "#####|#@$X#|#####",
+    "######################|#@$.  #|######", "#####|#@$.#|##", "####|#@.#|####", "#####|#@$.#", "###|#@#|#|#|#|#|#|#|###", "" };
+  bool ok = skValid("#####|#@$.#|#####") && skValid("#######|#.@ $ #|#  -_ #|#######") && skValid("######|#+*$ #|######");
+  if (!ok) printf("      a good line refused\n");
+  for (const char *s : SK_NO) if (skValid(s)) { ok = false; printf("      taken: %s\n", s); }
+  check("sokoban: a line from the card is checked (players, boxes = goals, walls round, size, characters)", ok);
+  skFree();
+  // Pumpkin Maze
+  lines = sdLines(L + "pumpkin.txt");
+  sdlOpen("pumpkin", pmValid);
+  printf("      pumpkin.txt: %u levels, %u left out\n", sdl.n, sdl.bad);
+  check("pumpkin pack: every line a level, 30 or so", sdl.st == SDL_OK && sdl.n == lines.size() && !sdl.bad && sdl.n >= 25);
+  pm = (PmState *)calloc(1, sizeof(PmState));
+  pmLuts();
+  bad = 0;
+  int lostAll = 0;
+  for (uint16_t i = 0; i < sdl.n; i++) {
+    int lost = 0;
+    long st = sdlRead(i) ? pmbRun(PM_SD, lost) : -1;
+    lostAll += lost;
+    if (st < 0) { bad++; printf("      level %u (%s) not rolled through\n", i + 1, pm->name); }
+  }
+  printf("      pumpkins lost on the way: %d\n", lostAll);
+  check("pumpkin pack: the bot rolls through every level", !bad);
+  check("pumpkin: a line from the card needs a name, a start, a goal it can reach",
+        pmValid(SD_BAD_PMZ_GOOD) && !pmValid("NO GOAL|####|#S.#|####") && !pmValid("WALLED IN|#######|#S.#.G#|#######") && !pmValid("|#SG#") && !pmValid("A|#SXG#"));
+  free(pm); pm = NULL;
+  // Block Puzzle
+  lines = sdLines(L + "blocks.txt");
+  sdlOpen("blocks", bkValid);
+  printf("      blocks.txt: %u levels, %u left out\n", sdl.n, sdl.bad);
+  check("blocks pack: every line a level, 20 or so", sdl.st == SDL_OK && sdl.n == lines.size() && !sdl.bad && sdl.n >= 15);
+  bk = (BkState *)calloc(1, sizeof(BkState));
+  bkSd = (BkSd *)malloc(sizeof(BkSd));
+  bad = 0;
+  for (uint16_t i = 0; i < sdl.n; i++) {
+    if (!sdlRead(i) || !bkParse(sdl.line, bkSd->L, bkSd->map)) { bad++; continue; }
+    int wins = 0;
+    for (int seed = 1; seed <= 12; seed++) { randomSeed((unsigned long)(seed * 77 + i)); if (bkSimRound(BKM_ADV, BK_SDLV, 200)) wins++; }
+    if (wins < 3) { bad++; printf("      level %u: won %d of 12\n", i + 1, wins); }
+  }
+  check("blocks pack: the greedy bot wins every level (3+ of 12 tries)", !bad);
+  BkLevel bl; char bm[64];
+  check("blocks: a line from the card is checked (goal, moves, 8 x 8, room, a goal there is)",
+        bkParse("gems 12 0 ........|........|........|........|........|........|xgxx.xxx|xxx.xgxx", bl, bm) && bl.goal == BKG_GEMS && bl.moves == 12 && bm[49] == 'g' &&
+        bkParse("score 10 300 ........|........|........|........|........|........|........|........", bl, bm) && bl.target == 300 &&
+        !bkValid("gems 12 0 ........|........|........|........|........|........|xgxx.xxx") && !bkValid("stars 10 0 ........|........|........|........|........|........|........|........") &&
+        !bkValid("score 10 5000 ........|........|........|........|........|........|........|........") && !bkValid("gems 12 0 ........|........|........|........|........|........|........|........") &&
+        !bkValid("blocks 0 0 s.......|........|........|........|........|........|........|........") && !bkValid("gems 12 0 xxxxxxxx|xxxxxxxx|xxxxxxxx|xxxxxxxx|xxxxxxxx|xxxxxxxx|xxxxxgxx|xxx.xgxx") &&
+        !bkValid("gems 12 0  .......|........|........|........|........|........|xgxx.xxx|xxx.xgxx"));
+  free(bk); bk = NULL;
+  // the save file: written only when something gets better, read back, broken lines and a left .tmp
+  const std::string S = "frames/sdlogic/MINIARC/save/";
+  sdlRead(0);
+  uint32_t h = sdl.hash;
+  uint16_t had = 99;
+  uint8_t r1 = sdlSave(30, sdlFewer, &had);
+  std::string f1 = sdRead(S + "blocks.sav");
+  uint8_t r2 = sdlSave(31, sdlFewer);
+  bool same = sdRead(S + "blocks.sav") == f1;
+  uint8_t r3 = sdlSave(20, sdlFewer);
+  printf("      saves: %u %u %u, file:\n%s", r1, r2, r3, sdRead(S + "blocks.sav").c_str());
+  check("save: written to the card, kept when worse, better kept", r1 == SDL_SAVED && had == 0 && r2 == SDL_SAME && same && r3 == SDL_SAVED &&
+        sdSaved("frames/sdlogic", "blocks", sdl.line) == 20 && !sdExists(S + "blocks.tmp"));
+  sdlOpen("blocks", bkValid);
+  check("save: read back when the list opens", sdlProg(h) == 20);
+  sdWrite(S + "blocks.sav", std::string("garbage\n") + "12345678 abc\n" + "1234567 5\n" + "abcdef01 0\n");
+  sdlOpen("blocks", bkValid);
+  bool broken = !sdl.nProg && !sdlProg(h);
+  sdlRead(0);
+  bool rewrote = sdlSave(25, sdlFewer) == SDL_SAVED && sdSaved("frames/sdlogic", "blocks", sdl.line) == 25 && sdRead(S + "blocks.sav").find("garbage") == std::string::npos;
+  check("save: a broken save file is no progress, and written anew", broken && rewrote);
+  remove((S + "blocks.sav").c_str());
+  char rec[32]; snprintf(rec, sizeof(rec), "%08lx 9\n", (unsigned long)h);
+  sdWrite(S + "blocks.tmp", rec);                 // a save cut off between the two files
+  sdlOpen("blocks", bkValid);
+  bool fromTmp = sdlProg(h) == 9;
+  sdlRead(0);
+  check("save: an interrupted save (only the .tmp) is read and finished", fromTmp && sdlSave(8, sdlFewer) == SDL_SAVED &&
+        sdSaved("frames/sdlogic", "blocks", sdl.line) == 8 && !sdExists(S + "blocks.tmp"));
+  check("pumpkin: stars and time merged (more stars, the better time)", pmMerge(2 << 14 | 300, 3 << 14 | 400) == (3 << 14 | 300) && pmMerge(0, 1 << 14 | 77) == (1 << 14 | 77) &&
+        pmMerge(3 << 14 | 300, 1 << 14 | 250) == (3 << 14 | 250));
+  std::string many = "# 1000 records\n";
+  for (int i = 0; i < 1000; i++) { char b[24]; snprintf(b, sizeof(b), "%08x %d\n", 0x10000000 + i, i + 1); many += b; }
+  sdWrite(S + "blocks.sav", many);
+  sdlRead(0);
+  sdlSave(5, sdlFewer);
+  std::string after = sdRead(S + "blocks.sav");
+  int recs = 0; for (char c : after) recs += c == '\n';
+  check("save: at most 999 records, the oldest go", recs == 1000 && after.find("10000000 1\n") == std::string::npos && after.find("100003e7 1000\n") != std::string::npos);
+  // a card that takes nothing: the save folder is a file; then a pulled card
+  if (system("rm -rf frames/sdlogic/MINIARC/save && touch frames/sdlogic/MINIARC/save")) {}
+  sdlRead(1);
+  uint8_t r4 = sdlSave(3, sdlFewer);
+  check("save: a card that cannot be written - nothing saved, no crash", r4 == SDL_FAIL && sdl.fail);
+  simSdIn = false;
+  uint8_t r5 = sdlSave(2, sdlFewer);
+  bool gone = !sdlRead(2) && sdl.st == SDL_GONE && !sdl.n;
+  check("pulled card: saving fails quietly, reading says the card is gone", r5 == SDL_FAIL && gone);
+  simSdIn = true;
+  // a pack of more than 999 levels: the first 999; a pack with no room for its index
+  std::string big;
+  for (int i = 0; i < 1005; i++) big += "#####|#@$.#|#####\n";
+  sdWrite(L + "sokoban.txt", big);
+  sdlOpen("sokoban", skValid);
+  uint16_t nBig = sdl.n;
+  simHeap = 16384 + 1000;
+  sdlEnd();
+  sdlOpen("sokoban", skValid);
+  uint8_t stMem = sdl.st;
+  simHeap = 100000;
+  check("a pack of 1005 levels: 999 indexed; no room: told, nothing indexed", nBig == SDL_MAX && stMem == SDL_MEM && !sdl.off);
+  sdlEnd();
+  check("nothing of the SD levels in the console's flash", sdNvsSame());
+}
+
 // ---------------- the translations ----------------
 static uint32_t sprSwitch = 0, sprBack = 0;      // "sprache": when the language was switched there and back
 static uint16_t sprLangSaved = 0;
@@ -3771,6 +4122,11 @@ int main(int argc, char **argv) {
     press(6700, 6 << 4, 700);                                    // UP + RIGHT: the supply
     script.push_back({ 13000, 7 << 4 });                         // DOWN + LEFT held to the end
     simEnd = 14000;
+  } else if (scenario == "batglitch") {
+    // the battery divider has a loose contact: for 3 s every 7 s it reads 0 or 1.2 V;
+    // from 150 s on the cell is really low (3.0 V)
+    simBatWobble = true; simNvsU16["slp"] = 0;
+    simEnd = 260000;
   } else if (scenario == "ladderbat") {
     // ladder keys on GPIO2, the battery divider on GPIO4 not known yet: it must not count as a key
     simNvsU16.erase("pset"); simNvsU16.erase("bat"); LADDER = 2; LADDER_R = true;
@@ -3900,6 +4256,113 @@ int main(int argc, char **argv) {
     simBot = pmEditorBot; botFrom = e + 400; pmeT = e + 1800;
     pmbKeys = true;
     captureMs = { e + 1500, e + 2600, e + 4200 };
+  } else if (scenario == "sdlogic") {
+    printf("== %s\n", scenario.c_str());
+    sdLogic();
+    return failures ? 1 : 0;
+  } else if (scenario == "sdlevels" || scenario == "sdpull" || scenario == "sdbad") {
+    // a card on GPIO20, found before (no search); all three games with their SD levels
+    bool bad = scenario == "sdbad", pull = scenario == "sdpull";
+    if (bad) { sdBadCard(); simSdDir = "frames/sdbad"; } else sdCard("frames/sdcard", true);
+    simSd = true; simNvsU16["sdcs"] = 21;
+    pmbKeys = true; bkBotRnd = 0;
+    simBot = sdDriver; botFrom = M;
+    sdDo([]() { sdNvsU16 = simNvsU16; sdNvsBlob = simNvsBlob; });   // the flash after the start
+    char b[64];
+    std::vector<std::string> sok = sdLines(simSdDir + "/MINIARC/levels/sokoban.txt");
+    // Sokoban: the list, DOWN to the card's levels, the first one played
+    sdGame("Sokoban");
+    sdSee("LEVEL 1 / 12");
+    if (bad) { snprintf(b, sizeof(b), DTR("SD card: %u levels, %u broken skipped", "SD-Karte: %u Level, %u kaputte übersprungen"), 2, 7); sdSee(b); sdSnap("sok_note"); }
+    sdKey(DN);
+    snprintf(b, sizeof(b), "SD 1 / %zu", bad ? (size_t)2 : sok.size());
+    sdSee(b); sdWait(300); sdSnap("sok_list");
+    sdKey(OK, 1, 80);
+    sdSee("SD 1");
+    if (pull) sdDo([]() { simSd = simSdIn = false; printf("      card pulled\n"); });
+    sdSolveSokoban();
+    sdSee("SOLVED!"); sdSnap("sok_solved");
+    if (pull) {                                  // not saved; the next level cannot be read: the list says why
+      sdDo([]() { sdPulledOk = skSolved(); });
+      sdSee(DTR("not saved: SD card", "nicht gespeichert: SD-Karte")); sdSnap("sok_notsaved");
+      sdSee(DTR("SD card removed: built-in levels only", "SD-Karte fehlt: nur eingebaute Level")); sdSnap("sok_gone");
+      sdMark(); sdKey(DN); sdKey(RT); sdWait(500);
+      sdKey(OK, 1, 900); sdWait(400); sdKey(OK, 1, 900); sdWait(600);
+      sdGame("Block Puzzle"); sdKey(DN); sdKey(OK, 1, 80);
+      sdSee(DTR("SD card removed", "SD-Karte fehlt")); sdSnap("blk_gone");
+      sdKey(DN); sdKey(OK, 1, 80); sdWait(300); sdSee(DTR("SD card removed", "SD-Karte fehlt"));
+      sdKey(OK, 1, 900); sdWait(600);
+      sdGame("Pumpkin Maze");
+      sdSee(DTR("SD card removed: built-in levels only", "SD-Karte fehlt: nur eingebaute Level")); sdSnap("pmz_gone");
+      sdKey(DN, 12); sdWait(300); sdSnap("pmz_own");
+      sdKey(OK, 1, 900); sdWait(600);
+    } else {
+      sdSee("SD 2");                              // on to the next one from the card
+      sdLeave();
+      sdGame("Sokoban"); sdSee("LEVEL 1 / 12"); sdMark(); sdKey(DN);
+      sdAdd([](uint32_t) { char t[24]; snprintf(t, sizeof(t), DTR("best %u", "beste %u"), sdSokMoves); return recent(t); });
+      sdSnap("sok_best");
+      sdKey(OK, 1, 900); sdWait(400); sdKey(OK, 1, 900); sdWait(600);
+      // Pumpkin Maze: DOWN past the 15 levels and the own ones to the card's page, the first one rolled through
+      sdGame("Pumpkin Maze");
+      sdKey(DN, 3); sdWait(200);
+      sdSee(DTR("UP: the 15 levels   DOWN: SD card   OK play", "UP: die 15 Level   DOWN: SD-Karte   OK spielen"));
+      sdKey(DN, 9);
+      sdSee(DTR("UP/DOWN choose   LEFT/RIGHT page   OK play", "UP/DOWN wählen   LEFT/RIGHT Seite   OK spielen")); sdWait(300); sdSnap("pmz_list");
+      if (bad) { snprintf(b, sizeof(b), DTR("%u broken lines skipped", "%u kaputte Zeilen übersprungen"), 3); sdSee(b); }
+      sdKey(OK, 1, 80);
+      sdSee("SD LEVEL 1"); sdSnap("pmz_title");
+      sdPlayPumpkin();
+      sdWait(800); sdSnap("pmz_after");
+      sdKey(OK, 1, 900); sdWait(600);
+      sdGame("Pumpkin Maze"); sdMark(); sdKey(DN, 12); sdWait(600); sdSnap("pmz_again");
+      sdKey(OK, 1, 900); sdWait(600);
+      // Block Puzzle: adventure, the card's entry, its picker, the first level won
+      sdGame("Block Puzzle"); sdKey(DN); sdKey(OK, 1, 80);
+      std::vector<std::string> blk = sdLines(simSdDir + "/MINIARC/levels/blocks.txt");
+      snprintf(b, sizeof(b), DTR("SD card: %u levels", "SD-Karte: %u Level"), bad ? 1u : (unsigned)blk.size());
+      sdSee(b); sdSnap("blk_adv");
+      sdKey(DN); sdKey(OK, 1, 80);
+      sdSee(DTR("SD CARD LEVELS", "SD-KARTEN-LEVEL")); sdSee(DTR("not played yet", "noch nicht gespielt"));
+      if (bad) { snprintf(b, sizeof(b), DTR("%u broken lines skipped", "%u kaputte Zeilen übersprungen"), 3); sdSee(b); }
+      sdWait(300); sdSnap("blk_pick");
+      sdKey(RT, 3); sdKey(LT, 3);                 // a look at a few, back to the first
+      sdKey(OK, 1, 80);
+      sdPlayBlocks();
+      sdSee("SD LEVEL 1 DONE"); sdSnap("blk_done");
+      sdKey(OK, 1, 900); sdWait(600);
+      sdGame("Block Puzzle"); sdKey(DN); sdKey(OK, 1, 80); sdKey(DN); sdKey(OK, 1, 80);
+      sdAdd([](uint32_t) {
+        std::vector<std::string> v = sdLines(simSdDir + "/MINIARC/levels/blocks.txt");
+        char t[40]; snprintf(t, sizeof(t), DTR("done in %u moves", "geschafft in %u Zügen"), v.empty() ? 0 : sdSaved(simSdDir, "blocks", v[0]));
+        return recent(t);
+      });
+      sdSnap("blk_again");
+      sdKey(OK, 1, 900); sdWait(300); sdKey(OK, 1, 900); sdWait(600);
+      if (bad) {                                  // no room for the index: told, the built-in levels still there
+        sdDo([]() { simHeap = 16384 + 100; });
+        sdGame("Sokoban"); sdSee(DTR("SD levels: not enough memory", "SD-Level: zu wenig Speicher")); sdSnap("sok_mem");
+        sdKey(OK, 1, 900); sdWait(400); sdKey(OK, 1, 900); sdWait(600);
+        sdGame("Block Puzzle"); sdKey(DN); sdKey(OK, 1, 80); sdSee(DTR("SD card: no memory", "SD: kein Speicher"));
+        sdKey(OK, 1, 900); sdWait(600);
+      }
+    }
+    sdAdd([](uint32_t t) { simEnd = t + 300; return true; });
+    simEnd = M + 400000;
+  } else if (scenario == "sdnone") {
+    // no card (searched for at the first start, none found): the three games as before, nothing of the SD levels anywhere
+    pmbKeys = true; simNvsU16["sdcs"] = 255;
+    simBot = sdDriver; botFrom = M;
+    sdGame("Sokoban"); sdSee("LEVEL 1 / 12"); sdKey(DN); sdKey(RT); sdWait(300); sdSee("LEVEL 1 / 12"); sdSnap("sok_list");
+    sdKey(OK, 1, 900); sdWait(400); sdKey(OK, 1, 900); sdWait(600);
+    sdGame("Pumpkin Maze"); sdKey(DN, 3 + PM_OWN + 3); sdWait(300);
+    sdSee(DTR("UP: the 15 levels   OK play / editor", "UP: die 15 Level   OK spielen / Editor")); sdSnap("pmz_own");
+    sdKey(OK, 1, 900); sdWait(600);
+    sdGame("Block Puzzle"); sdKey(DN); sdKey(OK, 1, 80);
+    sdSee("ADVENTURE"); sdWait(1000); sdSnap("blk_level1");
+    sdKey(OK, 1, 900); sdWait(600);
+    sdAdd([](uint32_t t) { simEnd = t + 300; return true; });
+    simEnd = M + 200000;
   } else if (scenario == "pmlogic") {
     printf("== %s\n", scenario.c_str());
     pumpkinLogic();
@@ -4720,6 +5183,11 @@ int main(int argc, char **argv) {
     check("the answer reached the web page (no, then yes)", simAnswer == 1);
     check("installing shown until the restart", seen("done - restarting"));
   }
+  if (scenario == "batglitch") {
+    printf("   lowest shown while the wire wobbled %u%%, at the end %u%%\n", batMinWobble, batLast);
+    check("a loose contact never shows a low battery", batMinWobble != 255 && batMinWobble >= 50);
+    check("a cell that stays low is shown after a while", batLast <= 5);
+  }
   if (scenario == "ladderbat") {
     printf("   battery on %u, keys on %u %u %u %u %u\n", batPin, BTN_PIN[0], BTN_PIN[1], BTN_PIN[2], BTN_PIN[3], BTN_PIN[4]);
     bool onLadder = true;
@@ -4775,6 +5243,53 @@ int main(int argc, char **argv) {
     check("RIGHT on its own pin", BTN_PIN[3] == 6 && !BTN_MV[3]);
     check("LEFT+RIGHT opened a game", seen("SNAKE"));
   }
+  if (scenario == "sdlevels" || scenario == "sdbad") {
+    bool bad = scenario == "sdbad";
+    std::string d = simSdDir;
+    std::vector<std::string> sok = sdLines(d + "/MINIARC/levels/sokoban.txt"), pmz = sdLines(d + "/MINIARC/levels/pumpkin.txt"),
+                             blk = sdLines(d + "/MINIARC/levels/blocks.txt");
+    uint16_t vs = sok.empty() ? 0 : sdSaved(d, "sokoban", sok[0]), vp = pmz.empty() ? 0 : sdSaved(d, "pumpkin", pmz[0]), vb = blk.empty() ? 0 : sdSaved(d, "blocks", blk[0]);
+    printf("      steps done %zu of %zu; saved: sokoban %u (bot %u moves), pumpkin %u stars %.1f s, blocks %u moves\n", sdAt, sdSteps.size(), vs, sdSokMoves,
+           vp >> 14, (vp & 0x3FFF) / 10.0, vb);
+    check("sd levels: every step of the scenario reached", sdAt == sdSteps.size());
+    check("sd sokoban: the card's levels after the built-in ones, one solved, the next one from the card", seen("SOLVED!") && seen("SD 2"));
+    check("sd sokoban: fewest moves saved on the card, shown after the game started again", vs == sdSokMoves && vs > 0);
+    check("sd pumpkin: the card's page, a level rolled through, stars and time saved on the card", pmbLevelsWon >= 1 && seen("SD LEVEL 1") && (vp >> 14) >= 1 && (vp & 0x3FFF) > 0);
+    check("sd pumpkin: the status bar names the card's level", seen("SD 1") && !seen("OWN 187"));
+    char t[16];
+    pmTime(t, sizeof(t), vp & 0x3FFF);
+    check("sd pumpkin: the best time shown on the list after the game started again", sdSeenSince(t));
+    check("sd blocks: adventure lists the card, a level won, the moves saved on the card", seen("SD LEVEL 1 DONE") && vb > 0);
+    check("sd levels: no .tmp left, no file but the save files written", !sdExists(d + "/MINIARC/save/sokoban.tmp") && !sdExists(d + "/MINIARC/save/pumpkin.tmp") &&
+          !sdExists(d + "/MINIARC/save/blocks.tmp"));
+    if (bad) {
+      std::string sv = sdRead(d + "/MINIARC/save/sokoban.sav");
+      printf("      sokoban.sav now:\n%s", sv.c_str());
+      check("sd bad: broken lines skipped and counted, the good ones played", seen(TR("SD card: 2 levels, 7 broken skipped", "SD-Karte: 2 Level, 7 kaputte übersprungen")) && seen("SD 1 / 2"));
+      check("sd bad: a broken save file is no progress; written anew (other records kept, garbage gone)",
+            sv.find("deadbeef 7\n") != std::string::npos && sv.find("garbage") == std::string::npos && sv.find("zzzz") == std::string::npos);
+      check("sd bad: no room for the index - told, no crash", seen(TR("SD levels: not enough memory", "SD-Level: zu wenig Speicher")) && seen(TR("SD card: no memory", "SD: kein Speicher")));
+    }
+    check("sd levels: nothing written to the console's flash", sdNvsSame());
+  }
+  if (scenario == "sdpull") {
+    printf("      steps done %zu of %zu\n", sdAt, sdSteps.size());
+    check("sd pull: every step reached, no crash", sdAt == sdSteps.size());
+    check("sd pull: the level went on and was solved with the card out", sdPulledOk && seen("SOLVED!"));
+    check("sd pull: not saved, one short note; nothing written anywhere", seen(TR("not saved: SD card", "nicht gespeichert: SD-Karte")) && !sdExists("frames/sdcard/MINIARC/save") &&
+          !sdExists("frames/no-sd-card"));
+    check("sd pull: the lists say the card is gone and offer the built-in levels only",
+          seen(TR("SD card removed: built-in levels only", "SD-Karte fehlt: nur eingebaute Level")) && seen(TR("SD card removed", "SD-Karte fehlt")) && sdSeenSince("LEVEL 1 / 12") && !sdSeenSince("SD 1 / 40"));
+    check("sd pull: nothing written to the console's flash", sdNvsSame());
+  }
+  if (scenario == "sdnone") {
+    bool any = false;
+    for (const std::string &x : seenTexts) if (x.find("SD") != std::string::npos) { any = true; printf("      drawn: %s\n", x.c_str()); }
+    printf("      steps done %zu of %zu\n", sdAt, sdSteps.size());
+    check("sd none: every step reached", sdAt == sdSteps.size());
+    check("sd none: no card - the lists as before, nothing of SD levels drawn", !any && seen("LEVEL 1 / 12") && !seen("LEVEL 2 / 12") && !seen("continue: level 1"));
+    check("sd none: no card touched", sdl.st == SDL_NONE && !sdExists("frames/no-sd-card"));
+  }
   if (scenario == "pumpkin" || scenario == "pumpkinkeys" || scenario == "pmeditor") {
     printf("      levels won %d, waits for moving pits %d, panel: %.0f blocks of 32 px a frame while rolling (of 2400)\n",
            pmbLevelsWon, pmbWaits, pmbFrames ? (double)pmbBlocks / pmbFrames : 0.0);
@@ -4798,7 +5313,7 @@ int main(int argc, char **argv) {
     check("pumpkin editor: the own level is listed and played", seen("GRAVE RUN") && pmbLevelsWon >= 1 && pmSv.stars[PM_LEVELS] >= 1 && seen("OWN LEVEL 1"));
     check("pumpkin editor: in the home WLAN the link has its address and the WLAN stays on", seen("192.168.1.50/maze") && pmeHomeOut == NET_ONLINE);
   }
-  check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "karttilt" || scenario == "menu" || scenario == "settings" || toneCount > 0);
+  check("sounds played", updMode || scenario == "wizard" || scenario == "pumpkin" || scenario == "chess" || scenario == "chesssave" || scenario == "ladder5" || scenario == "plain2" || scenario == "tilt" || scenario == "karttilt" || scenario == "menu" || scenario == "settings" || scenario == "batglitch" || toneCount > 0);
   printf("   %ld frames, %.1f s simulated\n", frames, clockUs / 1e6);
   return failures ? 1 : 0;
 }

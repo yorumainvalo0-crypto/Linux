@@ -299,6 +299,22 @@ looks for the card's CS pin once at the first start; Settings -> "sd card"
 shows its size and free space, OK there searches again (e.g. after wiring
 it later). The card is mounted as FAT at /sd and never formatted.
 
+Extra levels from the card: Sokoban, Pumpkin Maze and the Block Puzzle
+adventure read /MINIARC/levels/sokoban.txt, pumpkin.txt and blocks.txt,
+one level a line (formats in sdcard/MINIARC/levels/README.txt; copy
+sdcard/MINIARC to a FAT32 card for 40 + 30 + 20 sample levels). They come
+after the built-in levels, marked "SD", all open. A pack is never loaded
+whole: when a level list opens, an index of where each good line starts is
+built on the heap (999 levels at most) and only the chosen level is read,
+into RAM - pulling the card mid-level is fine, the next list says the card
+is gone. Broken lines are skipped and counted. The only thing written to
+the card is the progress of these levels, MINIARC/save/<game>.sav (a hash
+of the level's line and the result, written as .tmp, then renamed); the
+console's flash gets nothing of them. `tools/levelpack.py` makes new packs
+(Sokoban levels solved by a solver, easiest first; Pumpkin Maze with the
+goal reachable; Block Puzzle won by the test bot) and checks a pack with
+the console's rules.
+
 Settings -> "screen" sets how the picture sits: normal, turned round,
 mirrored top/bottom or mirrored left/right (LEFT/RIGHT or OK steps through).
 

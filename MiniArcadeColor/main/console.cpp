@@ -25,6 +25,7 @@
 #include "wizard.h"
 #include "tilt.h"
 #include "sd.h"
+#include "sdlevels.h"                               // extra levels from the SD card (Sokoban, Pumpkin Maze, Block Puzzle)
 #include "tvnet.h"                                   // the TV server client (also the RAM readout on the WLAN page)
 #include "wlan.h"
 #include "updmode.h"

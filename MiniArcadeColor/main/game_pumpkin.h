@@ -12,7 +12,9 @@
 // 15 levels, opened one by one, and up to 8 own levels made on the phone
 // (/maze, see appMazePut): the level list opens the phone editor too, on
 // the console's own hotspot when there is no WLAN. Best = all stars of
-// the 15 levels.
+// the 15 levels. More levels can come from the SD card (sdlevels.h, the
+// phone's text "NAME|row|row|..." a line): a page of their own after the
+// own levels, all open, stars and best time kept on the card.
 // Physics in whole numbers (1/256 px) in steps of 10 ms whatever the
 // frame rate. The board is drawn once; after that a frame draws only the
 // tiles that changed or had something drawn over them in the last frame,
@@ -44,6 +46,8 @@
 #define PM_MOVERS 6
 #define PM_NAME   12
 #define PM_EDITOR 200                  // the level list's answer for "phone editor"
+#define PM_SD     201                  // ... and for the SD card's level in sdl.line
+#define PM_SDROWS 8                    // rows of the SD card's page
 
 /* Tiles, one character each in a level (rows of 20, 13 rows):
    .  floor        #  wall          S  start         G  goal hole
@@ -389,6 +393,17 @@ static const char *pmParse(const char *t, PmOwn &o) {
   return pmCheck(o.map);
 }
 
+// a level line from the SD card: playable as the phone's levels are
+static bool pmValid(const char *t) { PmOwn o; return !pmParse(t, o); }
+
+// what is kept of an SD level: stars (bits 14-15) and the best time in 1/10 s
+static uint16_t pmMerge(uint16_t had, uint16_t now) {
+  uint16_t st = (uint16_t)((had >> 14) > (now >> 14) ? had >> 14 : now >> 14);
+  uint16_t t = had & 0x3FFF, n = now & 0x3FFF;
+  if (!t || (n && n < t)) t = n;
+  return (uint16_t)(st << 14 | t);
+}
+
 // ---------------- the game state (on the heap while it runs) ----------------
 enum { PS_ROLL, PS_FALL, PS_GOAL, PS_BACK, PS_WON, PS_LOST };
 
@@ -430,8 +445,15 @@ static inline uint8_t pmAt(int16_t tx, int16_t ty) {
 static inline void pmMark(int16_t tx, int16_t ty) { if (tx >= 0 && ty >= 0 && tx < PM_W && ty < PM_H) pm->redraw[ty] |= 1u << tx; }
 static inline int32_t pmMid(int16_t t) { return ((int32_t)t * PM_T + PM_T / 2) << 8; }   // a tile's middle, 1/256 px
 
-// the level's map (a built-in one, or own slot lv - PM_LEVELS); false = none there
+// the level's map (a built-in one, own slot lv - PM_LEVELS or PM_SD); false = none there
 static bool pmMap(uint8_t lv, char *map, char *name) {
+  if (lv == PM_SD) {                                            // the copy in RAM: the card may be gone by now
+    PmOwn o;
+    if (!sdl.line || pmParse(sdl.line, o)) return false;
+    memcpy(map, o.map, PM_N);
+    memcpy(name, o.name, PM_NAME + 1);
+    return true;
+  }
   if (lv < PM_LEVELS) {
     for (uint8_t y = 0; y < PM_H; y++) memcpy(map + y * PM_W, PM_MAPS[lv][y], PM_W);
     snprintf(name, PM_NAME + 1, "%s", PM_NAMES[lv]);
@@ -1066,7 +1088,8 @@ static void pmHud() {
   gfx.fill(0, TOP_H, SCR_W, PM_Y0 - TOP_H, rgb(51, 0, 0));
   gfx.hline(0, PM_Y0 - 1, SCR_W, C::BLACK);
   char b[16];
-  if (s.lv < PM_LEVELS) snprintf(b, sizeof(b), "LV %u", s.lv + 1); else snprintf(b, sizeof(b), "OWN %u", s.lv - PM_LEVELS + 1);
+  if (s.lv == PM_SD) snprintf(b, sizeof(b), "SD %u", sdl.at + 1);
+  else if (s.lv < PM_LEVELS) snprintf(b, sizeof(b), "LV %u", s.lv + 1); else snprintf(b, sizeof(b), "OWN %u", s.lv - PM_LEVELS + 1);
   gfx.textShadow(6, 5, b, C::WHITE, C::BLACK, F_TEXT);
   int16_t x = 92;
   if (s.candyAll) {
@@ -1132,7 +1155,8 @@ static bool pmTitle() {
   PmState &s = *pm;
   uint32_t t0 = gameMillis();
   char b[32], p[24];
-  if (s.lv < PM_LEVELS) snprintf(b, sizeof(b), "LEVEL %u", s.lv + 1); else snprintf(b, sizeof(b), "OWN LEVEL %u", s.lv - PM_LEVELS + 1);
+  if (s.lv == PM_SD) snprintf(b, sizeof(b), "SD LEVEL %u", sdl.at + 1);
+  else if (s.lv < PM_LEVELS) snprintf(b, sizeof(b), "LEVEL %u", s.lv + 1); else snprintf(b, sizeof(b), "OWN LEVEL %u", s.lv - PM_LEVELS + 1);
   pmTime(p, sizeof(p), s.par);
   char par[32];
   snprintf(par, sizeof(par), "par %s", p);
@@ -1184,7 +1208,8 @@ static uint8_t pmEnd(bool won, uint8_t stars, bool best) {
       pmTime(p, sizeof(p), s.par);
       snprintf(b, sizeof(b), "%s  (par %s)", t, p);
       gfx.center(126, b, C::WHITE, F_TEXT);
-      if (best) gfx.center(148, (a / 300) % 2 ? "NEW BEST TIME!" : "", C::LIME, F_SMALL);
+      if (s.lv == PM_SD && sdl.fail) gfx.center(148, TR("not saved: SD card", "nicht gespeichert: SD-Karte"), C::ORANGE, F_SMALL);
+      else if (best) gfx.center(148, (a / 300) % 2 ? "NEW BEST TIME!" : "", C::LIME, F_SMALL);
       if (s.candyAll) { snprintf(b, sizeof(b), "candy %u/%u", s.candy, s.candyAll); gfx.center(162, b, C::PINK, F_SMALL); }
       else { snprintf(b, sizeof(b), "pumpkins lost: %u", s.lost); gfx.center(162, b, C::LTGREY, F_SMALL); }
       gfx.center(184, own || last ? "OK list  LEFT again" : "OK next  LEFT again", C::GREY, F_SMALL);
@@ -1207,6 +1232,11 @@ static bool pmScore(uint8_t &stars) {
   if (s.candyAll ? s.candy == s.candyAll : !s.lost) stars++;
   uint16_t ds = (uint16_t)(s.steps / 10 > 65000 ? 65000 : s.steps / 10);
   if (ds <= s.par) stars++;
+  if (s.lv == PM_SD) {                                          // the card's levels: progress on the card only
+    uint16_t had = 0, t = ds > 0x3FFF ? 0x3FFF : (ds ? ds : 1);
+    sdlSave((uint16_t)(stars << 14 | t), pmMerge, &had);
+    return !(had & 0x3FFF) || t < (had & 0x3FFF);
+  }
   bool best = !pmSv.best[s.lv] || ds < pmSv.best[s.lv];
   if (best) pmSv.best[s.lv] = ds;
   if (stars > pmSv.stars[s.lv]) pmSv.stars[s.lv] = stars;
@@ -1281,38 +1311,70 @@ static void pmCardStars(int16_t x, int16_t y, uint8_t n, int16_t r) {
   for (uint8_t k = 0; k < 3; k++) pmStar((int16_t)(x + k * (r * 2 + 2)), y, r, k < n ? C::YELLOW : GREY1);
 }
 
-// returns a level (own ones from PM_LEVELS), PM_EDITOR or 255 = back to the library
+// a row of the SD card's page: the level's name and its progress
+struct PmSdRow { char name[PM_NAME + 1]; uint16_t prog; };
+static bool pmSdRows(PmSdRow *r, uint16_t top) {
+  for (uint8_t i = 0; i < PM_SDROWS && top + i < sdl.n; i++) {
+    if (!sdlRead((uint16_t)(top + i), false)) return false;
+    const char *p = sdl.line;
+    while (*p == ' ') p++;
+    uint8_t k = 0;
+    for (; *p && *p != '|' && k < PM_NAME; p++) r[i].name[k++] = *p;
+    r[i].name[k] = 0;
+    r[i].prog = sdlProg(sdl.hash);
+  }
+  return true;
+}
+
+// returns a level (own ones from PM_LEVELS), PM_SD (the card's, in sdl.line), PM_EDITOR or 255 = back to the library
 static uint8_t pmSelect(uint8_t sel) {
   NoPause np;
   tiltGame = false;                                             // the list is steered by the keys only
   PmList l;
   pmListLoad(l);
-  bool own = sel >= PM_LEVELS;
-  uint8_t cur = own ? (uint8_t)(sel - PM_LEVELS) : sel;
+  sdlOpen("pumpkin", pmValid);
+  uint8_t page = sel == PM_SD ? 2 : (sel >= PM_LEVELS ? 1 : 0); // the 15 levels, the own ones, the card's
+  uint16_t cur = page == 2 ? sdl.at : (page ? sel - PM_LEVELS : sel);
+  if (page == 2 && cur >= sdl.n) { page = 1; cur = PM_OWN; }
+  uint16_t top = 0, rowsAt = 0xFFFF;                            // the card's page: first row, the rows read for it
+  PmSdRow rows[PM_SDROWS];
   btnClear();
   while (poll()) {
     if (l.ver != pmOwnVer) pmListLoad(l);
-    if (!own) {
-      if (btn(B_LEFT))  { cur = (uint8_t)(cur ? cur - 1 : PM_LEVELS - 1); sfx(700, 15); }
-      if (btn(B_RIGHT)) { cur = (uint8_t)((cur + 1) % PM_LEVELS); sfx(700, 15); }
+    if (page == 0) {
+      if (btn(B_LEFT))  { cur = (uint16_t)(cur ? cur - 1 : PM_LEVELS - 1); sfx(700, 15); }
+      if (btn(B_RIGHT)) { cur = (uint16_t)((cur + 1) % PM_LEVELS); sfx(700, 15); }
       if (btn(B_UP) && cur >= 5) { cur -= 5; sfx(700, 15); }
-      if (btn(B_DOWN)) { if (cur + 5 < PM_LEVELS) cur += 5; else { own = true; cur = 0; } sfx(700, 15); }
+      if (btn(B_DOWN)) { if (cur + 5 < PM_LEVELS) cur += 5; else { page = 1; cur = 0; } sfx(700, 15); }
       if (btn(B_OK)) {
-        if (cur <= pmSv.open) { sfx(1200, 50); return cur; }
+        if (cur <= pmSv.open) { sfx(1200, 50); return (uint8_t)cur; }
         sfx(200, 120);
       }
-    } else {
-      if (btn(B_UP))   { if (cur) cur--; else { own = false; cur = 10; } sfx(700, 15); }
-      if (btn(B_DOWN)) { if (cur < PM_OWN) cur++; sfx(700, 15); }
+    } else if (page == 1) {
+      if (btn(B_UP))   { if (cur) cur--; else { page = 0; cur = 10; } sfx(700, 15); }
+      if (btn(B_DOWN)) { if (cur < PM_OWN) cur++; else if (sdl.n) { page = 2; cur = 0; } sfx(700, 15); }
       if (btn(B_OK)) {
         sfx(1200, 50);
         if (cur == PM_OWN || !l.name[cur][0]) return PM_EDITOR;  // an empty slot: make one
         return (uint8_t)(PM_LEVELS + cur);
       }
+    } else {
+      if (btn(B_UP))    { if (cur) cur--; else { page = 1; cur = PM_OWN; } sfx(700, 15); }
+      if (btn(B_DOWN))  { if (cur + 1 < sdl.n) cur++; sfx(700, 15); }
+      if (btn(B_LEFT))  { cur = (uint16_t)(cur > PM_SDROWS ? cur - PM_SDROWS : 0); sfx(700, 15); }
+      if (btn(B_RIGHT)) { cur = (uint16_t)(cur + PM_SDROWS < sdl.n ? cur + PM_SDROWS : sdl.n - 1); sfx(700, 15); }
+      if (btn(B_OK)) {
+        if (sdlRead(cur)) { sfx(1200, 50); return PM_SD; }      // read and checked: a copy in RAM
+        sfx(200, 120);
+      }
+      if (cur < top) top = cur;
+      if (cur >= top + PM_SDROWS) top = (uint16_t)(cur - PM_SDROWS + 1);
+      if (page == 2 && top != rowsAt) { rowsAt = top; if (!pmSdRows(rows, top)) rowsAt = 0xFFFF; }
+      if (!sdl.n) { page = 1; cur = PM_OWN; }                   // the card went
     }
     pmListBack(millis());
     char b[64], t[16];
-    if (!own) {
+    if (page == 0) {
       gfx.right(SCR_W - 10, 12, TR("levels", "Level"), C::LTGREY, F_SMALL);
       for (uint8_t i = 0; i < PM_LEVELS; i++) {
         int16_t x = (int16_t)(8 + (i % 5) * 62), y = (int16_t)(36 + (i / 5) * 52);
@@ -1334,7 +1396,7 @@ static uint8_t pmSelect(uint8_t sel) {
       if (pmSv.best[cur]) { pmTime(t, sizeof(t), pmSv.best[cur]); snprintf(b, sizeof(b), TR("best %s", "Bestzeit %s"), t); gfx.right(SCR_W - 10, 200, b, C::YELLOW, F_SMALL); }
       snprintf(b, sizeof(b), TR("stars %u/%u   DOWN: own levels + phone editor", "Sterne %u/%u   DOWN: eigene Level + Handy-Editor"), pmStarSum(), PM_LEVELS * 3);
       gfx.text(10, 222, b, C::GREY, F_SMALL);
-    } else {
+    } else if (page == 1) {
       gfx.right(SCR_W - 10, 12, TR("own levels", "eigene Level"), C::LTGREY, F_SMALL);
       for (uint8_t i = 0; i <= PM_OWN; i++) {
         int16_t y = (int16_t)(34 + i * 21);
@@ -1348,8 +1410,28 @@ static uint8_t pmSelect(uint8_t sel) {
         pmCardStars(176, (int16_t)(y + 8), pmSv.stars[PM_LEVELS + i], 5);
         if (pmSv.best[PM_LEVELS + i]) { pmTime(t, sizeof(t), pmSv.best[PM_LEVELS + i]); gfx.right(SCR_W - 12, y + 4, t, on ? C::WHITE : C::YELLOW, F_SMALL); }
       }
-      gfx.text(10, 226, TR("UP: the 15 levels   OK play / editor", "UP: die 15 Level   OK spielen / Editor"), C::GREY, F_SMALL);
+      if (sdl.n) gfx.text(10, 226, TR("UP: the 15 levels   DOWN: SD card   OK play", "UP: die 15 Level   DOWN: SD-Karte   OK spielen"), C::GREY, F_SMALL);
+      else gfx.text(10, 226, TR("UP: the 15 levels   OK play / editor", "UP: die 15 Level   OK spielen / Editor"), C::GREY, F_SMALL);
+    } else {
+      sdlTag(SCR_W - 34, 10);
+      snprintf(b, sizeof(b), TR("%u levels", "%u Level"), sdl.n);
+      gfx.right(SCR_W - 40, 12, b, C::LTGREY, F_SMALL);
+      for (uint8_t i = 0; i < PM_SDROWS && top + i < sdl.n && rowsAt == top; i++) {
+        int16_t y = (int16_t)(34 + i * 21);
+        bool on = top + i == cur;
+        if (on) gfx.rbox(6, (int16_t)(y - 2), SCR_W - 12, 20, 5, rgb(0, 102, 128));
+        snprintf(b, sizeof(b), "%u", top + i + 1);
+        gfx.text(10, y, b, on ? C::WHITE : C::GREY, top + i < 99 ? F_TEXT : F_SMALL);
+        gfx.text(48, y, rows[i].name, on ? C::WHITE : C::LTGREY, F_TEXT);
+        pmCardStars(196, (int16_t)(y + 8), (uint8_t)(rows[i].prog >> 14), 5);
+        if (rows[i].prog & 0x3FFF) { pmTime(t, sizeof(t), rows[i].prog & 0x3FFF); gfx.right(SCR_W - 12, y + 4, t, on ? C::WHITE : C::YELLOW, F_SMALL); }
+      }
+      if (top > 0) gfx.triangle(SCR_W / 2, 26, SCR_W / 2 - 6, 31, SCR_W / 2 + 6, 31, C::WHITE);
+      if (top + PM_SDROWS < sdl.n) gfx.triangle(SCR_W / 2, 210, SCR_W / 2 - 6, 205, SCR_W / 2 + 6, 205, C::WHITE);
+      if (sdl.bad) { snprintf(b, sizeof(b), TR("%u broken lines skipped", "%u kaputte Zeilen übersprungen"), sdl.bad); gfx.text(10, 212, b, C::ORANGE, F_SMALL); }
+      gfx.text(10, 226, TR("UP/DOWN choose   LEFT/RIGHT page   OK play", "UP/DOWN wählen   LEFT/RIGHT Seite   OK spielen"), C::GREY, F_SMALL);
     }
+    sdlNote(187);
     gfx.send();
   }
   return 255;
@@ -1531,6 +1613,7 @@ void pumpkinRun() {
   uint8_t sel = pmSv.open;
   for (;;) {
     uint8_t lv = pmSelect(sel);
+    sdlFree();                                                  // the card's index: not while playing (nor for the WLAN)
     if (lv == 255) break;
     if (lv == PM_EDITOR) { sel = PM_LEVELS; pmEditor(); continue; }
     sel = lv;
@@ -1543,6 +1626,7 @@ void pumpkinRun() {
   tiltGame = true;
   free(pm);
   pm = NULL;
+  sdlEnd();
 }
 
 static const char *const IC_PUMPKIN[12] = {

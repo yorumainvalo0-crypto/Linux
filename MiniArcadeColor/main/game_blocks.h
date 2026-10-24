@@ -7,7 +7,9 @@
 // board's edge takes the piece back to the tray.
 // Modes: Classic (endless, the high score), Adventure (hand-made levels
 // with gems, stones and ice), Time (2 minutes, clears add seconds) and
-// numbered puzzles (a set board and set pieces: clear the board).
+// numbered puzzles (a set board and set pieces: clear the board). More
+// adventure levels can come from the SD card (sdlevels.h), all open, the
+// fewest moves for each kept on the card.
 // The board is a 64 bit mask (bit row * 8 + column): a fit is one AND.
 
 #define BK_CELL  26                    // cell pitch on the board
@@ -77,6 +79,44 @@ static const BkLevel BK_LEVELS[] = {
   { BKG_GEMS, 30, 0,     "gssssssg" "s......s" "s......s" "s......s" "s......s" "s......s" "s......s" "gssssssg" },
 };
 #define BK_NLEVEL ((uint8_t)(sizeof(BK_LEVELS) / sizeof(BK_LEVELS[0])))
+#define BK_SDLV   254                  // the level number of one from the SD card (in bkSd)
+
+/* A level line from the SD card: goal, moves, target and the board, e.g.
+   "gems 14 0 ........|...|xgxx.xxx" - goal gems, blocks (every stone
+   and ice block) or score (target = the points); 1..99 moves; the board
+   8 rows of 8 split by '|' with the cells above, 8 of them free at
+   least, a gem for "gems", a stone or ice for "blocks", a target of 1 to
+   100 points a move for "score". false = not a level.               */
+static bool bkParse(const char *t, BkLevel &L, char *map) {
+  static const char *const GOAL[3] = { "gems ", "blocks ", "score " };
+  uint8_t g = 0;
+  while (g < 3 && strncmp(t, GOAL[g], strlen(GOAL[g]))) g++;
+  if (g == 3) return false;
+  const char *p = t + strlen(GOAL[g]);
+  char *e;
+  unsigned long mv = strtoul(p, &e, 10);
+  if (e == p || *e != ' ' || !mv || mv > 99) return false;
+  p = e;
+  unsigned long tg = strtoul(p, &e, 10);
+  if (e == p || *e != ' ' || tg > 60000) return false;
+  p = e + 1;
+  uint8_t n = 0, x = 0, free_ = 0, gems = 0, blocks = 0;
+  for (; *p; p++) {
+    if (*p == '|') { if (x != 8 || n >= 64) return false; x = 0; continue; }
+    if (x >= 8 || n >= 64 || !strchr(".xgsi", *p)) return false;
+    free_ += *p == '.'; gems += *p == 'g'; blocks += *p == 's' || *p == 'i';
+    map[n++] = *p; x++;
+  }
+  if (n != 64 || x != 8 || free_ < 8) return false;
+  if (g == BKG_GEMS ? !gems : g == BKG_BLOCKS ? !blocks : (!tg || tg > mv * 100)) return false;
+  L.goal = g; L.moves = (uint8_t)mv; L.target = (uint16_t)(g == BKG_SCORE ? tg : 0); L.map = map;
+  return true;
+}
+static bool bkValid(const char *t) { BkLevel L; char map[64]; return bkParse(t, L, map); }
+
+struct BkSd { BkLevel L; char map[64]; };
+static BkSd *bkSd = NULL;              // the SD card's level being played (heap)
+static const BkLevel &bkLevel(uint8_t lv) { return lv == BK_SDLV && bkSd ? bkSd->L : BK_LEVELS[lv]; }
 
 struct BkState {
   uint64_t b;                          // occupied cells
@@ -193,7 +233,7 @@ static void bkDeal() {
 // the board of a level
 static void bkLoadLevel(uint8_t lv) {
   BkState &k = *bk;
-  const char *m = BK_LEVELS[lv].map;
+  const char *m = bkLevel(lv).map;
   k.b = 0; k.gems = k.blocks = 0;
   for (uint8_t i = 0; i < 64; i++) {
     char ch = m[i];
@@ -267,7 +307,7 @@ static bool bkWon() {
   BkState &k = *bk;
   if (k.mode == BKM_DAILY) return !k.b;
   if (k.mode != BKM_ADV) return false;
-  const BkLevel &L = BK_LEVELS[k.level];
+  const BkLevel &L = bkLevel(k.level);
   return L.goal == BKG_GEMS ? !k.gems : L.goal == BKG_BLOCKS ? !k.blocks : k.score >= L.target;
 }
 
@@ -393,7 +433,7 @@ static void bkDraw(uint32_t now) {
     gfx.fill(BK_PX + 6, BK_Y + 32, BK_PW - 12, 6, rgb(0, 0, 51));
     gfx.fill(BK_PX + 6, BK_Y + 32, w, 6, left < 10000 ? C::RED : C::LIME);
   } else if (k.mode == BKM_ADV) {
-    const BkLevel &L = BK_LEVELS[k.level];
+    const BkLevel &L = bkLevel(k.level);
     if (L.goal == BKG_SCORE) snprintf(b, sizeof(b), "%lu/%u", (unsigned long)k.score, L.target);
     else snprintf(b, sizeof(b), "%u", L.goal == BKG_GEMS ? k.gems : k.blocks);
     if (L.goal != BKG_SCORE) {                                 // the kind still to go, and how many
@@ -543,14 +583,14 @@ static uint8_t bkRound() {
       bkInput(now);
       if (bkWon()) why = "won";
       else if (k.mode == BKM_TIME && (int32_t)(now - k.tEnd) >= 0) why = "TIME UP";
-      else if (k.mode == BKM_ADV && k.moves >= BK_LEVELS[k.level].moves) why = "OUT OF MOVES";
+      else if (k.mode == BKM_ADV && k.moves >= bkLevel(k.level).moves) why = "OUT OF MOVES";
       else if (k.mode == BKM_DAILY && bkTrayEmpty()) why = "NO PIECES LEFT";
       else if (bkStuck()) why = "NO SPACE";
       if (why) { endAt = now; k.st = 0; if (strcmp(why, "won")) sfx(200, 300); else sfx(1400, 300); }
     } else if (now - endAt > 1300) break;
     uint16_t sc = k.score > 65535 ? 65535 : (uint16_t)k.score;
     barRight = NULL;
-    if (k.mode == BKM_ADV) { snprintf(right, sizeof(right), "LEVEL %u  %u", k.level + 1, sc); barRight = right; }
+    if (k.mode == BKM_ADV) { snprintf(right, sizeof(right), k.level == BK_SDLV ? "SD %u  %u" : "LEVEL %u  %u", k.level == BK_SDLV ? sdl.at + 1 : k.level + 1, sc); barRight = right; }
     if (k.mode == BKM_DAILY) { snprintf(right, sizeof(right), "#%u  %u", k.puzzle, sc); barRight = right; }
     bkDraw(now);
     fxDraw();
@@ -579,6 +619,14 @@ static uint8_t bkRound() {
     snprintf(b2, sizeof(b2), "best %u", timeBest);
     return bkBox(why, b1, b2, C::ORANGE) ? 1 : 0;
   case BKM_ADV:
+    if (won && k.level == BK_SDLV) {                         // the card's levels: progress on the card only
+      uint8_t sv = sdlSave(k.moves, sdlFewer);
+      bool more = sdl.at + 1 < sdl.n;
+      snprintf(b1, sizeof(b1), "SD LEVEL %u DONE", sdl.at + 1);
+      snprintf(b2, sizeof(b2), "%u points in %u moves", sc, k.moves);
+      return bkBox(b1, b2, sv == SDL_FAIL ? TR("not saved: SD card", "nicht gespeichert: SD-Karte") :
+                   more ? "OK = next level" : TR("the last SD level", "letztes SD-Level"), C::GREEN) && more ? 2 : 0;
+    }
     if (won) {
       if (k.level + 1 > bkGet("BLKlv", 0)) bkPut("BLKlv", (uint16_t)(k.level + 1));
       bool last = k.level + 1 >= BK_NLEVEL;
@@ -586,7 +634,8 @@ static uint8_t bkRound() {
       snprintf(b2, sizeof(b2), "%u points in %u moves", sc, k.moves);
       return bkBox(last ? "ALL LEVELS DONE!" : b1, b2, last ? "a master builder" : "OK = next level", C::GREEN) && !last ? 2 : 0;
     }
-    snprintf(b1, sizeof(b1), "level %u", k.level + 1);
+    if (k.level == BK_SDLV) snprintf(b1, sizeof(b1), "SD level %u", sdl.at + 1);
+    else snprintf(b1, sizeof(b1), "level %u", k.level + 1);
     return bkBox(why, b1, "OK = try again", C::RED) ? 1 : 0;
   default:
     if (won) {
@@ -599,20 +648,98 @@ static uint8_t bkRound() {
   }
 }
 
-// adventure: where to begin (255 = back)
-static uint8_t bkPickLevel() {
-  uint8_t n = (uint8_t)bkGet("BLKlv", 0);
-  if (n >= BK_NLEVEL) n = BK_NLEVEL - 1;
-  if (!n) return 0;
-  char txt[BK_NLEVEL][22];
-  const char *opt[BK_NLEVEL];
-  for (uint8_t i = 0; i <= n; i++) {                          // the level reached first, then 1, 2, ...
-    if (!i) snprintf(txt[i], sizeof(txt[i]), "continue: level %u", n + 1);
-    else snprintf(txt[i], sizeof(txt[i]), "level %u", i);
-    opt[i] = txt[i];
+/* The SD card's adventure levels, one at a time with a look at the
+   board: LEFT / RIGHT 1, UP / DOWN 10, OK plays (BK_SDLV, the level
+   copied to bkSd), holding OK goes back (255).                        */
+static uint8_t bkPickSd() {
+  NoPause np;
+  uint16_t i = 0, shown = 0xFFFF;
+  BkLevel L;
+  char map[64];
+  bool good = false;
+  btnClear();
+  while (poll()) {
+    if (btn(B_LEFT) && i > 0) { i--; sfx(700, 12); }
+    if (btn(B_RIGHT) && i + 1 < sdl.n) { i++; sfx(700, 12); }
+    if (btn(B_DOWN)) { i = (uint16_t)(i > 10 ? i - 10 : 0); sfx(700, 12); }
+    if (btn(B_UP) && sdl.n) { i = (uint16_t)(i + 10 < sdl.n ? i + 10 : sdl.n - 1); sfx(700, 12); }
+    if (i != shown && sdl.n) { shown = i; good = sdlRead(i) && bkParse(sdl.line, L, map); }
+    if (sdl.st == SDL_GONE) return 255;                         // pulled: the list says so
+    if (btn(B_OK)) {
+      if (good && (bkSd || (bkSd = (BkSd *)malloc(sizeof(BkSd))))) {
+        bkSd->L = L;
+        memcpy(bkSd->map, map, sizeof(map));
+        bkSd->L.map = bkSd->map;
+        sfx(1200, 50);
+        return BK_SDLV;
+      }
+      sfx(200, 120);
+    }
+    gfx.gradient(0, 0, SCR_W, SCR_H, rgb(42, 0, 85), C::BLACK);
+    gfx.center(14, TR("SD CARD LEVELS", "SD-KARTEN-LEVEL"), C::WHITE, F_BOLD);
+    gfx.hline(40, 44, SCR_W - 80, rgb(102, 85, 204));
+    char b[48];
+    if (sdl.n) {
+      for (uint8_t c = 0; c < 64 && good; c++) {                // the board
+        int16_t x = (int16_t)(24 + (c % 8) * 13), y = (int16_t)(60 + (c / 8) * 13);
+        char ch = map[c];
+        if (ch == '.') gfx.fill(x, y, 12, 12, rgb(0, 42, 102));
+        else bkDrawCell(ch == 'g' ? BK_GEM : ch == 's' ? BK_STONE : ch == 'i' ? BK_ICE : BK_PLAIN, (uint8_t)((c * 5 + c / 8) % 8), x, y, 12);
+      }
+      sdlTag(140, 62);
+      snprintf(b, sizeof(b), "%u / %u", i + 1, sdl.n);
+      gfx.text(168, 58, b, C::YELLOW, F_BOLD);
+      if (good) {
+        if (L.goal == BKG_SCORE) snprintf(b, sizeof(b), TR("score %u points", "%u Punkte holen"), L.target);
+        else snprintf(b, sizeof(b), "%s", L.goal == BKG_GEMS ? TR("collect every gem", "Edelsteine holen") : TR("clear stone and ice", "Stein und Eis weg"));
+        gfx.text(140, 92, b, C::WHITE, F_SMALL);
+        snprintf(b, sizeof(b), TR("in %u moves", "in %u Zügen"), L.moves);
+        gfx.text(140, 106, b, C::LTGREY, F_SMALL);
+        uint16_t done = sdlProg(sdl.hash);
+        if (done) snprintf(b, sizeof(b), TR("done in %u moves", "geschafft in %u Zügen"), done);
+        else snprintf(b, sizeof(b), "%s", TR("not played yet", "noch nicht gespielt"));
+        gfx.text(140, 128, b, done ? C::LIME : C::GREY, F_SMALL);
+      } else gfx.text(140, 92, TR("level unreadable", "Level unlesbar"), C::ORANGE, F_SMALL);
+      if (i > 0) gfx.triangle(8, 112, 16, 104, 16, 120, C::WHITE);
+      if (i + 1 < sdl.n) gfx.triangle(SCR_W - 8, 112, SCR_W - 16, 104, SCR_W - 16, 120, C::WHITE);
+    } else gfx.center(100, TR("no good level on the card", "kein Level lesbar"), C::ORANGE);
+    if (sdl.bad) { snprintf(b, sizeof(b), TR("%u broken lines skipped", "%u kaputte Zeilen übersprungen"), sdl.bad); gfx.center(176, b, C::ORANGE, F_SMALL); }
+    gfx.center(SCR_H - 30, "LEFT/RIGHT 1   UP/DOWN 10", C::GREY, F_SMALL);
+    snprintf(b, sizeof(b), "%s = start   hold = back", okKeys());
+    gfx.center(SCR_H - 16, b, C::GREY, F_SMALL);
+    gfx.send();
   }
-  uint8_t k = chooseMode("ADVENTURE", opt, (uint8_t)(n + 1), rgb(102, 85, 204));
-  return k == 255 ? 255 : (uint8_t)(k ? k - 1 : n);
+  return 255;
+}
+
+/* Adventure: where to begin (255 = back, BK_SDLV = a level from the SD
+   card). The SD card's levels come last in the list, or that the card
+   went; without a card nothing is asked before level 2 is reached.   */
+static uint8_t bkPickLevel() {
+  for (;;) {
+    uint8_t n = (uint8_t)bkGet("BLKlv", 0);
+    if (n >= BK_NLEVEL) n = BK_NLEVEL - 1;
+    bool card = sdlOpen("blocks", bkValid) != SDL_NONE;
+    if (!n && !card) return 0;
+    char txt[BK_NLEVEL + 1][26];
+    const char *opt[BK_NLEVEL + 1];
+    for (uint8_t i = 0; i <= n; i++) {                        // the level reached first, then 1, 2, ...
+      if (!i) snprintf(txt[i], sizeof(txt[i]), "continue: level %u", n + 1);
+      else snprintf(txt[i], sizeof(txt[i]), "level %u", i);
+      opt[i] = txt[i];
+    }
+    uint8_t m = (uint8_t)(n + 1);
+    if (card) {
+      if (sdl.st == SDL_OK) snprintf(txt[m], sizeof(txt[m]), TR("SD card: %u levels", "SD-Karte: %u Level"), sdl.n);
+      else snprintf(txt[m], sizeof(txt[m]), "%s", sdl.st == SDL_MEM ? TR("SD card: no memory", "SD: kein Speicher") : TR("SD card removed", "SD-Karte fehlt"));
+      opt[m] = txt[m];
+      m++;
+    }
+    uint8_t k = chooseMode("ADVENTURE", opt, m, rgb(102, 85, 204));
+    if (k == 255) return 255;
+    if (k <= n) return k ? k - 1 : n;
+    if (sdl.st == SDL_OK && bkPickSd() == BK_SDLV) return BK_SDLV;
+  }
 }
 
 /* Puzzles: the console keeps no date, so they are numbered. The next
@@ -647,7 +774,15 @@ static uint16_t bkPickPuzzle() {
   return 0;
 }
 
-void blocksRun() {
+// the SD card's next level into bkSd; false = none (the last one, or the card went)
+static bool bkSdNext() {
+  BkLevel L;
+  if (!bkSd || !sdlNext() || !bkParse(sdl.line, L, bkSd->map)) return false;
+  bkSd->L = L;
+  return true;
+}
+
+static void bkRun() {
   static const char *const MODES[4] = { "classic", "adventure", "time 2:00", "puzzles" };
   uint8_t mode = chooseMode("BLOCK PUZZLE", MODES, 4, rgb(102, 85, 204));
   if (mode == 255) return;
@@ -655,16 +790,28 @@ void blocksRun() {
   uint16_t pz = 1;
   if (mode == BKM_ADV && (lv = bkPickLevel()) == 255) return;
   if (mode == BKM_DAILY && !(pz = bkPickPuzzle())) return;
+  sdlFree();                                                  // the card's index: not while playing
   bk = (BkState *)calloc(1, sizeof(BkState));
   if (!bk) return;
   for (;;) {
     bk->mode = mode; bk->level = lv; bk->puzzle = pz;
     uint8_t r = bkRound();
     if (!r) break;
-    if (r == 2) { if (mode == BKM_ADV) lv++; else pz = pz < 999 ? pz + 1 : 1; }
+    if (r == 2) {
+      if (mode != BKM_ADV) pz = pz < 999 ? pz + 1 : 1;
+      else if (lv != BK_SDLV) lv++;
+      else if (!bkSdNext()) break;
+    }
   }
   free(bk);
   bk = NULL;
+}
+
+void blocksRun() {
+  bkRun();
+  free(bkSd);
+  bkSd = NULL;
+  sdlEnd();
 }
 
 static const char *const IC_BLOCKS[12] = {
