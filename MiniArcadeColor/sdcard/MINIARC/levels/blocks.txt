@@ -1,0 +1,43 @@
+# MiniArcade Color - Block Puzzle adventure levels for the SD card (made by tools/levelpack.py)
+# goal moves target board: goal gems / blocks / score, board 8 rows of 8 split by bars:
+# . free, x block, g gem, s stone, i ice. The tool's test bot reaches every goal.
+# 1: test bot wins 9 of 12
+gems 8 0 .......g|....x...|x....x..|........|.x......|........|.......x|........
+# 2: test bot wins 10 of 12
+gems 9 0 ...x..x.|.....x..|x.......|....x...|........|........|......x.|....xg..
+# 3: test bot wins 10 of 12
+score 12 80 .x....x.|........|........|........|........|..xxxx..|........|........
+# 4: test bot wins 10 of 12
+score 13 110 x.x..x.x|x..xx..x|........|..xxxx..|..xxxx..|........|x..xx..x|x.x..x.x
+# 5: test bot wins 9 of 12
+blocks 9 0 .s......|....s...|........|........|x.......|........|....x...|........
+# 6: test bot wins 9 of 12
+score 13 110 xx....xx|..xxxx..|........|xx....xx|........|........|........|.x....x.
+# 7: test bot wins 10 of 12
+gems 11 0 ....g...|....x...|........|........|........|x...x...|...g....|........
+# 8: test bot wins 11 of 12
+gems 12 0 ........|........|......x.|........|.x..g...|....x...|.....g..|...x....
+# 9: test bot wins 8 of 12
+score 14 110 .x.xx.x.|........|........|.x....x.|x.x..x.x|........|x..xx..x|..xxxx..
+# 10: test bot wins 9 of 12
+score 16 170 x......x|xx....xx|x.x..x.x|x.x..x.x|x.x..x.x|x.x..x.x|xx....xx|x......x
+# 11: test bot wins 10 of 12
+gems 12 0 ........|x..gg..x|........|........|..x..x..|g......g|.x....x.|..x..x..
+# 12: test bot wins 6 of 12
+score 16 150 ........|x......x|x..xx..x|...xx...|...xx...|x..xx..x|x......x|........
+# 13: test bot wins 11 of 12
+gems 17 0 ........|.g.g....|........|........|x.......|...gxx..|x.x.....|........
+# 14: test bot wins 9 of 12
+score 22 190 ...xx...|x......x|.x....x.|.x....x.|........|........|...xx...|........
+# 15: test bot wins 12 of 12
+blocks 15 0 ...xx...|........|........|.x....x.|.xx..xx.|.x....x.|x......x|ixsxxsxi
+# 16: test bot wins 6 of 12
+blocks 15 0 ...xx...|........|x..xx..x|...xx...|...ii...|..x..x..|...xx...|........
+# 17: test bot wins 8 of 12
+blocks 21 0 x......x|..s..s..|........|.x.xx.x.|...ss...|........|..x..x..|xs....sx
+# 18: test bot wins 6 of 12
+blocks 23 0 x......x|........|ix.xx.xi|...ss...|..s..s..|x.x..x.x|........|.x....x.
+# 19: test bot wins 8 of 12
+blocks 31 0 ..x..x..|........|xx.xx.xx|x..xx..x|........|........|.is..si.|..x..x..
+# 20: test bot wins 9 of 12
+gems 21 0 .g....g.|gx.xx.xg|...xx...|xg....gx|xg....gx|...xx...|gx.xx.xg|.g....g.
