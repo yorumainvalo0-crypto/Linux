@@ -35,6 +35,7 @@ LOBBY_MAX = 16          # consoles in the lobby list
 RECENT_S = 600          # a console that went offline is listed this long as "seen lately"
 RECENT_MAX = 8          # ... at most so many
 LEAD_MIN, LEAD_MAX = 6, 24   # real-time games: input delay in ticks of 20 ms
+LEAD_RB_MIN, LEAD_RB_MAX = 3, 6   # ... when both consoles play with rollback ("rb" in their polls)
 HEX_RE = re.compile(r'^(?:[0-9a-fA-F]{2}){1,%d}$' % PAYLOAD_MAX)
 
 
@@ -53,12 +54,21 @@ def lead_for(rtt_a, rtt_b):
     return max(LEAD_MIN, min(LEAD_MAX, math.ceil(ms / 20)))
 
 
+def lead_rb(rtt_a, rtt_b):
+    """Input delay when both consoles play with rollback (1.19 on): the keys count
+    almost at once and the consoles guess the other's for the ticks still missing;
+    a little delay keeps those guesses short. Both consoles get the same."""
+    ms = 0.25 * (rtt_a + rtt_b) + 20
+    return max(LEAD_RB_MIN, min(LEAD_RB_MAX, math.ceil(ms / 20)))
+
+
 class Presence:
     def __init__(self, t):
         self.seen = t
         self.name = ''
         self.game = 0
         self.rtt = 100
+        self.rb = False                # it plays real-time games with rollback
         self.ver = 0                   # bumped by everything a waiting poll should see
         self.sent_ver = -1             # ... the version the last answer showed
         self.ev = asyncio.Event()
@@ -74,8 +84,8 @@ class Invite:
 
 
 class Session:
-    def __init__(self, sid, a, b, game, first, lead, t):
-        self.sid, self.game, self.lead = sid, game, lead
+    def __init__(self, sid, a, b, game, first, lead, t, rb=False):
+        self.sid, self.game, self.lead, self.rb = sid, game, lead, rb
         self.p = [a, b]
         self.first = first             # index of the player who begins
         self.q = [[], []]              # messages for player i: (seq, hex)
@@ -256,6 +266,8 @@ class Relay:
             o = s.p[1 - i]
             out['ses'] = {'sid': s.sid, 'g': s.game, 'first': 1 if s.first == i else 0, 'lead': s.lead,
                           'oc': self.store.friend_code(o), 'on': self.name_of(o)}
+            if s.rb:
+                out['ses']['rb'] = 1
             if s.sid == sid:
                 out['ack'] = s.next_in[i] - 1
                 msgs = [m for m in s.q[i] if m[0] > got][:MSG_MAX]
@@ -309,6 +321,8 @@ class Relay:
             p.game = max(0, min(255, int(d.get('g', p.game) or 0)))
             if d.get('rtt') is not None:
                 p.rtt = max(5, min(5000, int(d.get('rtt'))))
+            if 'rb' in d:
+                p.rb = bool(int(d.get('rb') or 0))
             wait = max(0, min(WAIT_MAX_S * 1000, int(d.get('wait', 0) or 0))) / 1000
         except (TypeError, ValueError):
             raise ValueError('number')
@@ -397,8 +411,10 @@ class Relay:
         sid = 0
         while not sid or sid in self.sessions:
             sid = secrets.randbelow(65535) + 1
-        lead = lead_for(self.presence(iv.frm).rtt, self.presence(cid).rtt)
-        s = Session(sid, iv.frm, cid, iv.game, secrets.randbelow(2), lead, self.now())
+        pa, pb = self.presence(iv.frm), self.presence(cid)
+        rb = pa.rb and pb.rb
+        lead = (lead_rb if rb else lead_for)(pa.rtt, pb.rtt)
+        s = Session(sid, iv.frm, cid, iv.game, secrets.randbelow(2), lead, self.now(), rb)
         self.sessions[sid] = s
         self.of[iv.frm] = self.of[cid] = sid
         iv.st, iv.done, iv.sid = 'ok', self.now(), sid

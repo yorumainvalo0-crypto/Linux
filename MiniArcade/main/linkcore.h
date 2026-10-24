@@ -35,6 +35,7 @@
 #define LK_SYNC_N        12   // real-time: inputs repeated in every packet
 #define LK_SYNC_MS       20   // real-time: send this often
 #define LK_RING          64   // real-time: inputs kept (power of two)
+#define LK_RB_AHEAD      24   // rollback: our inputs at most this many ticks ahead of the other's
 
 enum LkType  : uint8_t { LK_BEACON = 1, LK_INVITE, LK_ANSWER, LK_MOVE, LK_ACK, LK_BYE, LK_SYNC, LK_KART };
 enum LkState : uint8_t { LK_LOBBY, LK_INVITING, LK_INVITED, LK_PLAYING, LK_OVER };
@@ -257,6 +258,27 @@ public:
   }
   uint32_t syncTick() const { return simTick; }
 
+  /* Rollback (internet play, when the server says both consoles can):
+     our inputs go out at the game's own pace instead of waiting for the
+     other's - at most LK_RB_AHEAD ticks ahead of them. syncStep() still
+     gives the ticks both inputs are known for; the game draws on from
+     there with a guess for the other's inputs (multiplayer.h).         */
+  bool rollback = false;
+  bool rbPut(uint8_t in, uint32_t now) {
+    if (!sync || state != LK_PLAYING || (int32_t)(myTick - theirTick) >= LK_RB_AHEAD) return false;
+    myTick++;
+    myIn[myTick & (LK_RING - 1)] = in;
+    nextSync = now;                                        // out with the next tick()
+    return true;
+  }
+  uint32_t mineTick() const { return myTick; }
+  uint32_t oppTick() const { return theirTick; }
+  uint8_t  mineAt(uint32_t t) const { return myIn[t & (LK_RING - 1)]; }
+  // the other's input for tick t; past the newest one we have, that one
+  uint8_t  oppAt(uint32_t t) const { return theirIn[(t < theirTick ? t : theirTick) & (LK_RING - 1)]; }
+  // how much further ahead we run than the other one does (> 0: we should wait a little)
+  int32_t  ahead() const { return (int32_t)(myTick - theirTick) - oppAhead; }
+
   // ---------------- radio ----------------
   void onPacket(const uint8_t *mac, const uint8_t *data, int len, int8_t rssi, uint32_t now) {
     if (len >= LK_KART_LEN && data[2] == 3) { onKart(mac, data, now); return; }
@@ -393,6 +415,7 @@ private:
   uint32_t nextBeacon = 0, nextSend = 0, lastOpp = 0;
   bool     sync = false;                                  // a real-time game
   uint32_t myTick = 0, theirTick = 0, simTick = 0, acked = 0, nextSync = 0;
+  int32_t  oppAhead = 0;
   uint8_t  myIn[LK_RING], theirIn[LK_RING];
   uint8_t  kIn[LK_KART_LEN];
   bool     kHave = false;
@@ -411,6 +434,7 @@ private:
     if (a > acked && a <= myTick) acked = a;
     if (p.n > LK_SYNC_N) return;
     uint32_t last = unwrap(theirTick, p.tick);
+    oppAhead = (int32_t)(last - a);                         // its inputs ahead of the ones it has of ours
     for (uint8_t i = 0; i < p.n; i++) {
       uint32_t t = last - p.n + 1 + i;
       if (t == theirTick + 1) { theirIn[t & (LK_RING - 1)] = p.in[i]; theirTick = t; }
@@ -439,6 +463,8 @@ private:
     kHave = false;
     myTick = theirTick = acked = lead;
     simTick = 0;
+    rollback = false;                        // the internet transport turns it on after startNet()
+    oppAhead = 0;
     memset(myIn, 0, sizeof(myIn));
     memset(theirIn, 0, sizeof(theirIn));
   }

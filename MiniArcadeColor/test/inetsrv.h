@@ -16,6 +16,7 @@
 #include <math.h>
 #include "../main/inetcore.h"
 
+static bool     simNetNoRb = false;                     // the server of before: no rollback
 static uint32_t simNetMs = 25, simNetJit = 10;          // one way: this much plus up to jit
 static bool     simNetDown = false;                     // nothing gets through (requests fail after 1.5 s)
 static bool     simNetOpen = true;                      // NET_OPEN: /api/net/hello gives a token without the PIN
@@ -32,12 +33,13 @@ struct FsCon {
   uint8_t  fakeAgo = 0;                                 // seen this many minutes ago (offline now)
   uint8_t  game = 0;
   uint16_t rtt = 100;
+  bool     rb = false;                                  // it can play with rollback
   uint32_t ver = 0, sentVer = 0xFFFFFFFF;
   std::vector<std::string> fr;                          // friends' codes
 };
 struct FsInv { std::string id, from, to; uint8_t g; uint32_t t, done = 0; std::string st = "wait"; int n; };
 struct FsSes {
-  uint16_t sid; std::string p[2]; uint8_t g, lead; int first;
+  uint16_t sid; std::string p[2]; uint8_t g, lead; int first; bool rb = false;
   std::deque<std::pair<uint32_t, std::string>> q[2];
   uint32_t nextIn[2] = { 1, 1 }, nextOut[2] = { 1, 1 }, seen[2];
   std::string end[2];
@@ -141,6 +143,7 @@ static void fsSesJson(std::string &o, const FsSes &s, int i) {
   snprintf(b, sizeof(b), "{\"sid\":%u,\"g\":%u,\"first\":%d,\"lead\":%u,\"oc\":\"%s\",\"on\":\"%s\"", s.sid, s.g,
            s.first == i ? 1 : 0, s.lead, s.p[1 - i].c_str(), op ? op->name.c_str() : "?");
   o += b;
+  if (s.rb) o += ",\"rb\":1";
 }
 
 // the answer to a poll (net.py's Relay.answer)
@@ -240,6 +243,7 @@ static bool fsPoll(FsReq &r, FsCon &c, uint32_t now) {
   if (jsStr(b, e, "n", n, sizeof(n)) && n[0]) c.name = n;
   c.game = (uint8_t)jsInt(b, e, "g", c.game);
   c.rtt = (uint16_t)jsInt(b, e, "rtt", c.rtt);
+  c.rb = jsInt(b, e, "rb", 0) != 0 && !simNetNoRb;
   r.wait = (uint32_t)jsInt(b, e, "wait", 0);
   r.sid = (uint16_t)jsInt(b, e, "sid", 0);
   r.got = (uint32_t)jsInt(b, e, "got", 0);
@@ -310,9 +314,15 @@ static int fsAction(FsReq &r, FsCon &c, uint32_t now, std::string &resp) {
     FsSes s;
     do s.sid = (uint16_t)(fsRand() % 65535 + 1); while (fsSes.count(s.sid));
     s.p[0] = iv.from; s.p[1] = c.code; s.g = iv.g; s.first = (int)(fsRand() & 1);
-    double ms = 1.25 * (f->rtt + c.rtt) + 40;                   // net.py's lead_for
-    int lead = (int)ceil(ms / 20);
-    s.lead = (uint8_t)(lead < 6 ? 6 : (lead > 24 ? 24 : lead));
+    s.rb = f->rb && c.rb;
+    if (s.rb) {                                                 // net.py's lead_rb
+      int lead = (int)ceil((0.25 * (f->rtt + c.rtt) + 20) / 20);
+      s.lead = (uint8_t)(lead < 3 ? 3 : (lead > 6 ? 6 : lead));
+    } else {
+      double ms = 1.25 * (f->rtt + c.rtt) + 40;                 // net.py's lead_for
+      int lead = (int)ceil(ms / 20);
+      s.lead = (uint8_t)(lead < 6 ? 6 : (lead > 24 ? 24 : lead));
+    }
     if (getenv("SIM_LEAD")) s.lead = (uint8_t)atoi(getenv("SIM_LEAD"));   // experiments
     s.seen[0] = s.seen[1] = now;
     simNetLead = s.lead;

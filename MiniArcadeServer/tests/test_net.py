@@ -110,13 +110,13 @@ async def two(cli):
     return a, b
 
 
-async def session(cli, game=1, rtt_a=None, rtt_b=None):
+async def session(cli, game=1, rtt_a=None, rtt_b=None, rb_a=0, rb_b=0):
     """Two consoles in a game: a challenged b, b said yes."""
     a, b = await two(cli)
-    if rtt_a:
-        await a.poll(rtt=rtt_a)
-    if rtt_b:
-        await b.poll(rtt=rtt_b)
+    if rtt_a or rb_a:
+        await a.poll(rtt=rtt_a or 100, rb=rb_a)
+    if rtt_b or rb_b:
+        await b.poll(rtt=rtt_b or 100, rb=rb_b)
     oid = (await a.post('invite', to=b.code, g=game))['oid']
     iid = (await b.poll())['inv']['iid']
     j = await b.post('answer', iid=iid, yes=1)
@@ -278,6 +278,20 @@ async def test_lead(cli):
     assert net.lead_for(400, 400) == 24                                # far: capped
     a, b, sa, sb = await session(cli, game=3, rtt_a=80, rtt_b=60)
     assert sa['lead'] == sb['lead'] == net.lead_for(80, 60)
+    assert 'rb' not in sa and 'rb' not in sb                           # consoles of before: lockstep
+
+
+async def test_lead_rollback(cli):
+    assert net.lead_rb(20, 20) == 3                                    # near: the least delay
+    assert net.lead_rb(100, 100) == 4
+    assert net.lead_rb(400, 400) == 6                                  # far: capped, the consoles guess the rest
+    a, b, sa, sb = await session(cli, game=3, rtt_a=80, rtt_b=60, rb_a=1, rb_b=1)
+    assert sa['rb'] == sb['rb'] == 1 and sa['lead'] == sb['lead'] == net.lead_rb(80, 60)
+
+
+async def test_lead_rollback_one_side(cli):
+    a, b, sa, sb = await session(cli, game=3, rtt_a=80, rtt_b=60, rb_a=1, rb_b=0)
+    assert 'rb' not in sa and 'rb' not in sb and sa['lead'] == net.lead_for(80, 60)   # one of before: lockstep
 
 
 # ---------------- the relay ----------------

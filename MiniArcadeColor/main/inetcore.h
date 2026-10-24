@@ -356,7 +356,7 @@ private:
     nm[k] = 0;
     uint16_t wait = leaving ? 0 : (sid ? (LinkCore::live(L->game) ? IN_WAIT_RT : IN_WAIT_TURN) : IN_WAIT_LOBBY);
     if (!sid && (out == INO_WAIT || inv)) wait = IN_WAIT_TURN;       // a challenge: quicker
-    int w = snprintf(b, max, "{\"n\":\"%s\",\"g\":%u,\"l\":%u,\"rtt\":%u,\"sid\":%u,\"got\":%lu,\"wait\":%u,\"m\":[",
+    int w = snprintf(b, max, "{\"n\":\"%s\",\"g\":%u,\"l\":%u,\"rb\":1,\"rtt\":%u,\"sid\":%u,\"got\":%lu,\"wait\":%u,\"m\":[",
                      nm, want, lists ? 2 : 0, rtt ? rtt : 100, sid, (unsigned long)got, wait);
     reqSid = sid;
     for (uint8_t i = 0; i < nOut && i < IN_PER_POLL && w + 80 < (int)max; i++) {
@@ -440,6 +440,7 @@ private:
       o.seen = now;
       sid = id;
       L->startNet(o, id, (uint8_t)jsInt(s, e, "g", 0), jsInt(s, e, "first", 0) != 0, (uint8_t)jsInt(s, e, "lead", LK_LEAD), now);
+      L->rollback = jsInt(s, e, "rb", 0) != 0;            // the server saw both consoles can ("rb" in the polls)
       syncSent = L->lead;                                 // the inputs up to the delay are 0 on both sides
       out = INO_NONE;
       inv = false;
