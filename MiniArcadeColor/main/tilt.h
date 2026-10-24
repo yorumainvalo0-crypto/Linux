@@ -124,6 +124,17 @@ void tiltStart() {                              // at the start and when switche
   tiltHook = gyroReady ? tiltUpdate : NULL;
 }
 
+static bool tiltLearned() { return tiltAx[0] != 0xFF; }
+
+// the pause menu: off, or on again with the axes learned before (saved like the settings' switch)
+static void tiltSwitch() {
+  if (cfgTilt) { cfgTilt = false; gyroClose(); memset(tiltKey, 0, sizeof(tiltKey)); memset(tiltAn, 0, sizeof(tiltAn)); }
+  else cfgTilt = true;
+  tiltSave();
+  tiltStart();
+  if (gyroReady) tiltLevel();                     // on again: the way it is held now is level
+}
+
 // dir: an arrow for that key's way (B_UP..B_RIGHT), -1 = none
 static void tiltScreen(const char *l1, const char *l2, col c, int8_t dir = -1) {
   gfx.gradient(0, 0, SCR_W, SCR_H, C::DKGRN, C::BLACK);

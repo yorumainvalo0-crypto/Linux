@@ -1,12 +1,13 @@
 // MiniArcade Color: Skat - you against two CPU players, by the German
 // Skat Order. Part of console.cpp, which includes it after game_maumau.h
-// (the cards are drawn the same way). 32 French cards, 10 each and 2 in
-// the Skat; the dealer goes round (Vorhand, Mittelhand, Hinterhand).
+// (the cards are laid out the same way). 32 cards of the German deck
+// (Eichel Grün Herz Schellen, Unter and Ober), 10 each and 2 in the
+// Skat; the dealer goes round (Vorhand, Mittelhand, Hinterhand).
 // Bidding (Reizen) 18, 20, 22, 23 ...: UP/DOWN the value, LEFT/RIGHT bid
 // or "passe", OK. The declarer takes the Skat and pushes 2 (OK marks a
-// card, OK on "push" ends it) or plays Hand, then announces: Kreuz, Pik,
-// Herz, Karo, Grand or Null; in a Hand game also Schneider, Schwarz or
-// Ouvert (LEFT/RIGHT). In a trick LEFT/RIGHT picks a card, OK plays it;
+// card, OK on "push" ends it) or plays Hand, then announces: Eichel,
+// Grün, Herz, Schellen, Grand or Null; in a Hand game also Schneider,
+// Schwarz or Ouvert (LEFT/RIGHT). In a trick LEFT/RIGHT picks a card, OK plays it;
 // cards you may not play are dimmed. A Liste of 12, 24 or 36 games, scored
 // as in the Seeger list: the declarer gets the value when he wins and
 // loses twice the value when he loses. Best: your total at the end.
@@ -534,9 +535,10 @@ static struct { uint8_t decl; int16_t score; } sktList[36];
 static struct { bool on; uint8_t c; int16_t x, y; } sktFly;
 
 static const char *const SKT_NAME[3] = { "YOU", "ANNA", "BEN" };
-static const char *const SKT_GN[6]   = { "Kreuz", "Pik", "Herz", "Karo", "Grand", "Null" };
-static const char *const SKT_RN[8]   = { "7", "8", "9", "10", "B", "D", "K", "A" };
-static const char *const SKT_RL[8]   = { "7", "8", "9", "10", "Bube", "Dame", "Koenig", "As" };
+// the German deck: Eichel, Grün, Herz, Schellen (Kreuz Pik Herz Karo); Unter and Ober are Bube and Dame
+static const char *const SKT_GN[6]   = { "Eichel", "Grün", "Herz", "Schellen", "Grand", "Null" };
+static const char *const SKT_RN[8]   = { "7", "8", "9", "10", "U", "O", "K", "A" };
+static const char *const SKT_RL[8]   = { "7", "8", "9", "10", "Unter", "Ober", "König", "Ass" };
 static const int16_t SKT_TX[3] = { 138, 86, 190 }, SKT_TY[3] = { 96, 56, 56 };   // trick places
 
 static void sktGameName(char *b, size_t n, uint8_t g, uint8_t fl) {
@@ -545,12 +547,49 @@ static void sktGameName(char *b, size_t n, uint8_t g, uint8_t fl) {
                 fl & SKF_OUV ? " Ouvert" : (fl & SKF_SCHW ? " Schwarz" : (fl & SKF_SCHN ? " Schneider" : "")));
 }
 
-/* The four-colour deck of the Skat tournaments: Kreuz black, Pik green,
-   Herz red, Karo orange - Kreuz and Pik look alike in black on a small
-   screen. The corner sign is bigger than Mau-Mau's too.               */
+/* The German deck (Deutsches Blatt): Kreuz and Pik in black looked alike
+   on the small cards, so the suits are Eichel (an acorn), Grün (a leaf),
+   Herz and Schellen (a golden bell) - each its own shape and colour.
+   sktSuitCol is the colour of the letters, sktSign draws the sign
+   centred on (cx, cy), h = half its size.                              */
 static col sktSuitCol(uint8_t s) {
-  static const col SC[4] = { C::BLACK, rgb(0, 140, 40), rgb(220, 0, 0), rgb(235, 130, 0) };
+  static const col SC[4] = { rgb(140, 80, 20), rgb(0, 130, 40), rgb(220, 0, 0), rgb(200, 140, 0) };
   return SC[s & 3];
+}
+static void sktSign(int16_t cx, int16_t cy, uint8_t s, int16_t h) {
+  switch (s & 3) {
+  case 0: {                                                     // Eichel: a nut under its cap, a stem
+    int16_t r = h * 3 / 5 + 1;
+    gfx.disc(cx, cy + h / 5, r, rgb(205, 150, 50));
+    gfx.triangle(cx - r + 1, cy + h / 5, cx + r - 1, cy + h / 5, cx, cy + h + 1, rgb(205, 150, 50));
+    gfx.rbox(cx - h * 3 / 4, cy - h * 2 / 3, h * 3 / 2 + 1, h * 2 / 3 + 2, h / 3 + 1, rgb(110, 70, 20));
+    if (h >= 6)
+      for (int16_t x = cx - h / 2; x <= cx + h / 2; x += 3) gfx.pixel(x, cy - h / 3, rgb(170, 120, 50));
+    gfx.vline(cx, cy - h - 1, h / 3 + 1, rgb(90, 60, 20));
+    break;
+  }
+  case 1: {                                                     // Grün: a leaf with its vein and stem
+    int16_t r = h * 3 / 5 + 1;
+    col leaf = rgb(30, 150, 40);
+    gfx.disc(cx, cy, r, leaf);
+    gfx.triangle(cx - r + 1, cy - 1, cx + r - 1, cy - 1, cx, cy - h - 1, leaf);
+    gfx.triangle(cx - r + 1, cy + 1, cx + r - 1, cy + 1, cx, cy + h * 3 / 4 + 1, leaf);
+    gfx.vline(cx, cy - h * 2 / 3, h * 4 / 3, rgb(150, 230, 120));
+    gfx.line(cx, cy + h * 3 / 4, cx + h / 3 + 1, cy + h + 1, rgb(0, 90, 20));
+    break;
+  }
+  case 2:                                                       // Herz
+    mmSuit(cx, cy, 2, h, rgb(220, 0, 0));
+    break;
+  default: {                                                    // Schellen: a golden bell with a red band
+    int16_t r = h * 4 / 5 + 1;
+    gfx.disc(cx, cy, r, rgb(240, 190, 20));
+    gfx.fill(cx - r + 1, cy - 1, 2 * r - 1, h >= 6 ? 3 : 2, rgb(200, 40, 20));
+    gfx.hline(cx - r / 2, cy + r / 2 + 1, r, rgb(90, 60, 0));
+    gfx.disc(cx, cy - r - 1, h >= 6 ? 2 : 1, rgb(160, 110, 0));
+    break;
+  }
+  }
 }
 
 // a card face up (as Mau-Mau's, with the German letters B D K)
@@ -562,7 +601,7 @@ static void sktCard(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t c, bool 
   gfx.rframe(x, y, w, h, 4, hi ? C::YELLOW : C::GREY);
   if (hi) gfx.rframe(x + 1, y + 1, w - 2, h - 2, 4, C::YELLOW);
   gfx.text(x + 3, y + 3, SKT_RN[r], sc, F_BOLD);
-  mmSuit(x + 10, y + 35, s, 6, sc);
+  sktSign(x + 10, y + 35, s, 6);
   if (r >= SR_B && r <= SR_K) {
     bool big = w >= 40;
     int16_t bw = big ? 22 : 16, bh = big ? 30 : 22, bx = x + w - bw - 3, by = y + h - bh - 3;
@@ -570,14 +609,14 @@ static void sktCard(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t c, bool 
     gfx.rframe(bx, by, bw, bh, 3, sc);
     Font f = big ? F_BOLD : F_TEXT;
     gfx.text(bx + (bw - Gfx::width(SKT_RN[r], f)) / 2 + 1, by + (bh - Gfx::height(f)) / 2 + 1, SKT_RN[r], sc, f);
-  } else mmSuit(x + w / 2 + 5, y + h / 2 + 10, s, r == SR_A ? 9 : 7, sc);
+  } else sktSign(x + w / 2 + 5, y + h / 2 + 10, s, r == SR_A ? 9 : 7);
 }
 static void sktMini(int16_t x, int16_t y, uint8_t c) {
   col sc = sktSuitCol(sktSuit(c));
   gfx.rbox(x, y, 18, 26, 3, C::WHITE);
   gfx.rframe(x, y, 18, 26, 3, C::GREY);
   gfx.text(x + 2, y + 2, SKT_RN[sktRank(c)], sc, F_SMALL);
-  mmSuit(x + 9, y + 18, sktSuit(c), 4, sc);
+  sktSign(x + 9, y + 18, sktSuit(c), 4);
 }
 
 // your cards in order: Buben, the trump suit, the others (Null: by suit, A K D B 10 9 8 7)
@@ -876,7 +915,7 @@ static bool sktHumanDeclare() {
       if (on) gfx.rbox(48, y - 2, 224, 13, 3, C::YELLOW);
       if (rg < SG_GRAND) {                                // the suit in its colour, on a white chip
         gfx.rbox(52, y - 1, 11, 11, 2, C::WHITE);
-        mmSuit(57, y + 4, rg, 3, sktSuitCol(rg));
+        sktSign(57, y + 4, rg, 4);
       }
       gfx.text(68, y, b, on ? C::BLACK : (bad ? C::GREY : C::WHITE), F_SMALL);
       if (on && hand && r <= SG_GRAND) gfx.text(240, y, "< >", C::BLACK, F_SMALL);
