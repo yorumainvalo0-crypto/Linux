@@ -1,0 +1,226 @@
+-- Meteor Dodge: a small arcade game for MiniArcade Color, in MAG script.
+-- Steer the ship left and right, dodge the meteors, catch the stars.
+-- Shows: sprites (scaled and mirrored), arrays as lists of objects,
+-- a score in the status bar, sound, tilt control and gameover().
+game "Meteor Dodge"
+author "MiniArcade"
+info "LEFT/RIGHT or tilt steers the ship. Dodge the meteors, catch the yellow stars for 10 points."
+fps 30
+
+const MAXM = 10          -- meteors and stars falling at once
+const MAXP = 32          -- explosion sparks
+const SHIPY = 204        -- the ship's top edge
+const Q = 16             -- positions of falling things in 1/16 pixel
+
+var shipx                -- the ship's left edge in pixels
+var lives, points, stage, timer, hurt, wait
+array mx[MAXM]           -- falling things: x and y in 1/16 pixel
+array my[MAXM]
+array mv[MAXM]           -- speed in 1/16 pixel per frame, 0 = the slot is free
+array mk[MAXM]           -- 0 = meteor, 1 = star
+array mr[MAXM]           -- tumbling phase
+array bx[40]             -- background stars
+array by[40]
+array px[MAXP]           -- sparks: position and speed in 1/16 pixel
+array py[MAXP]
+array pvx[MAXP]
+array pvy[MAXP]
+array pt[MAXP]           -- frames left, 0 = free
+array pc[MAXP]           -- colour
+
+func init()
+  shipx = 152
+  lives = 3
+  points = 0
+  stage = 1
+  timer = 0
+  hurt = 0
+  wait = 20
+  for i = 0, 39 do
+    bx[i] = rnd(SCREEN_W)
+    by[i] = rnd(SCREEN_H)
+  end
+  for i = 0, MAXM - 1 do mv[i] = 0 end
+  for i = 0, MAXP - 1 do pt[i] = 0 end
+  score(0)
+end
+
+-- a new meteor (or now and then a star) at the top, in a free slot
+func spawn()
+  for i = 0, MAXM - 1 do
+    if mv[i] == 0 then
+      mk[i] = 0
+      if rnd(6) == 0 then mk[i] = 1 end
+      mx[i] = rnd(SCREEN_W - 16) * Q
+      my[i] = -16 * Q
+      mv[i] = 28 + stage * 6 + rnd(20 + stage * 4)
+      mr[i] = rnd(4)
+      return
+    end
+  end
+end
+
+-- n sparks of colour c flying out from x, y (pixels)
+func burst(x, y, n, c)
+  for i = 0, MAXP - 1 do
+    if n > 0 and pt[i] == 0 then
+      px[i] = x * Q
+      py[i] = y * Q
+      pvx[i] = rnd(97) - 48
+      pvy[i] = rnd(97) - 64
+      pt[i] = 12 + rnd(12)
+      pc[i] = c
+      n = n - 1
+    end
+  end
+end
+
+func update()
+  timer = timer + 1
+  if timer % 300 == 0 then stage = stage + 1 end
+  -- steering: the keys, or tilting the console
+  local dx = tiltx() / 12
+  if btn(LEFT) then dx = -6 end
+  if btn(RIGHT) then dx = 6 end
+  shipx = clamp(shipx + dx, 0, SCREEN_W - 16)
+  -- more and faster things the higher the stage
+  wait = wait - 1
+  if wait <= 0 then
+    spawn()
+    wait = max(4, 22 - stage * 2)
+  end
+  for i = 0, MAXM - 1 do
+    if mv[i] > 0 then
+      my[i] = my[i] + mv[i]
+      local x = mx[i] / Q
+      local y = my[i] / Q
+      if y > SCREEN_H then
+        mv[i] = 0
+      elif y + 14 > SHIPY + 4 and y < SHIPY + 14 and x + 14 > shipx + 2 and x < shipx + 14 then
+        mv[i] = 0
+        if mk[i] == 1 then
+          points = points + 10
+          sfx(1800, 60)
+          burst(x + 8, y + 8, 8, YELLOW)
+        elif hurt == 0 then
+          lives = lives - 1
+          hurt = 45
+          sfx(160, 300)
+          burst(x + 8, y + 8, 20, ORANGE)
+        end
+      end
+    end
+  end
+  if timer % 15 == 0 then points = points + 1 end
+  if hurt > 0 then hurt = hurt - 1 end
+  for i = 0, MAXP - 1 do
+    if pt[i] > 0 then
+      px[i] = px[i] + pvx[i]
+      py[i] = py[i] + pvy[i]
+      pvy[i] = pvy[i] + 4
+      pt[i] = pt[i] - 1
+    end
+  end
+  for i = 0, 39 do
+    by[i] = by[i] + 1 + i % 3
+    if by[i] >= SCREEN_H then
+      by[i] = 0
+      bx[i] = rnd(SCREEN_W)
+    end
+  end
+  score(points)
+  if lives <= 0 then gameover(points) end
+end
+
+func draw()
+  cls(NAVY)
+  for i = 0, 39 do
+    local c = GREY
+    if i % 3 == 2 then c = WHITE end
+    pixel(bx[i], by[i], c)
+  end
+  for i = 0, MAXM - 1 do
+    if mv[i] > 0 then
+      if mk[i] == 1 then
+        spr(star, mx[i] / Q, my[i] / Q, 2)
+      else
+        spr(rock, mx[i] / Q, my[i] / Q, 1, (timer / 6 + mr[i]) % 2)
+      end
+    end
+  end
+  for i = 0, MAXP - 1 do
+    if pt[i] > 0 then rect(px[i] / Q, py[i] / Q, 2, 2, pc[i]) end
+  end
+  if hurt % 6 < 3 then
+    spr(ship, shipx, SHIPY)
+    if timer % 4 < 2 then spr(flame, shipx + 5, SHIPY + 16) end
+  end
+  for i = 1, lives do
+    spr(heart, SCREEN_W - 4 - i * 12, BAR_H + 6)
+  end
+  if timer < 60 then
+    local w = textw("DODGE THE METEORS!", 2)
+    text((SCREEN_W - w) / 2, 110, "DODGE THE METEORS!", YELLOW, 2)
+  end
+end
+
+sprite ship 16 16
+".......ww......."
+"......wccw......"
+"......wccw......"
+".....wwccww....."
+".....wbbbbw....."
+"....wwbbbbww...."
+"....wsbbbbsw...."
+"...wwsbbbbsww..."
+"..wrrsbbbbsrrw.."
+".wrrrsbbbbsrrrw."
+"wrrrrsbbbbsrrrrw"
+"wrrrrssssssrrrrw"
+"wrrw.ssssss.wrrw"
+"www..ssssss..www"
+".....aaaaaa....."
+"................"
+
+sprite flame 6 4
+"oyyyyo"
+".oyyo."
+".orro."
+"..rr.."
+
+sprite rock 16 16
+"......nnnn......"
+"....nnnnnnnn...."
+"...nnaannnnnn..."
+"..nnaaannnnsnn.."
+".nnnaannnnsssnn."
+".nnnnnnnnnnsnnn."
+"nnnnnnaannnnnnnn"
+"nnsnnaaaannnnnnn"
+"nsssnnaannnnaann"
+"nnsnnnnnnnnaaann"
+".nnnnnnsnnnnaan."
+".nnnnnsssnnnnnn."
+"..nnnnnsnnnnnn.."
+"...nnnnnnnaann.."
+"....nnnnnnnn...."
+"......nnnn......"
+
+sprite star 8 8
+"...yy..."
+"...yy..."
+"yyyyyyyy"
+".yyyyyy."
+"..yyyy.."
+".yyyyyy."
+".yy..yy."
+"yy....yy"
+
+sprite heart 8 7
+".rr..rr."
+"rrrrrrrr"
+"rwrrrrrr"
+"rrrrrrrr"
+".rrrrrr."
+"..rrrr.."
+"...rr..."

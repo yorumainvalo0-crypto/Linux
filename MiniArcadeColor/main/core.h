@@ -717,11 +717,12 @@ static bool pauseMenu() {
 }
 
 // ---------------- game over ----------------
+static void (*highHook)(uint16_t) = NULL;    // SD games: the record goes onto the card, not into the flash
 // true -> play another round, false -> back to the library
 bool gameOver(uint16_t score) {
   NoPause np;
   bool record = score > curHigh;
-  if (record) { curHigh = score; saveHigh(curGame, curHigh); }
+  if (record) { curHigh = score; if (highHook) highHook(curHigh); else saveHigh(curGame, curHigh); }
   sfx(record ? 1400 : 180, 350);
   gfx.dim(0, 0, SCR_W, SCR_H);                         // the last picture of the game stays behind
   btnClear();

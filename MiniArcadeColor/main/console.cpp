@@ -26,6 +26,8 @@
 #include "tilt.h"
 #include "sd.h"
 #include "sdlevels.h"                               // extra levels from the SD card (Sokoban, Pumpkin Maze, Block Puzzle)
+#include "mag.h"                                    // MAG script: games as text on the SD card ...
+#include "game_sdgames.h"                           // ... listed and played by the "SD games" entry
 #include "tvnet.h"                                   // the TV server client (also the RAM readout on the WLAN page)
 #include "wlan.h"
 #include "updmode.h"
@@ -158,6 +160,7 @@ static const Game GAMES[] = {
   { "Kart GP",     "KGP", kartRun,        IC_KART,        rgb(230,60,30),   NULL },
   // more games come here (before the entries with a tag)
   { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
+  { "SD games",    "SDG", sdGamesRun,     IC_SDGAMES,     C::CYAN,          "sd" },
   { "Online",      "ONL", onlineRun,      IC_ONLINE,      MP_ACCENT,        "nearby" },
   { "TV",          "TVY", tvRun,          IC_TV,          TV_ACCENT,        "YouTube" },
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
@@ -172,10 +175,14 @@ const char *gameName(uint8_t i) { return GAMES[i].name; }
 uint8_t     realGames()         { return REAL_GAMES; }
 
 // the library's words follow the language; the game names stay as they are
-static const char *gameLabel(uint8_t i) { return GAMES[i].run == settingsRun ? TR("Settings", "Einstellungen") : GAMES[i].name; }
+static const char *gameLabel(uint8_t i) {
+  if (GAMES[i].run == sdGamesRun) return TR("SD games", "SD-Spiele");
+  return GAMES[i].run == settingsRun ? TR("Settings", "Einstellungen") : GAMES[i].name;
+}
 static const char *gameTag(const Game &g) {
   if (!strcmp(g.tag, "nearby")) return TR("nearby/web", "nah/Netz");   // the radio or the own server
   if (!strcmp(g.tag, "setup"))  return TR("setup", "einrichten");
+  if (!strcmp(g.tag, "sd"))     return TR("SD card", "SD-Karte");
   return g.tag;
 }
 
