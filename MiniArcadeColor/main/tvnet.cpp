@@ -11,6 +11,8 @@
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_mac.h"
+#include "esp_wifi.h"
+#include "lwip/sockets.h"
 
 #define TV_TASK_STACK 7168          // the TLS handshake runs on it
 
@@ -70,6 +72,22 @@ static void clientDown() {
   cli = NULL;
 }
 
+/* esp_http_client sends a request's headers and its body in two writes, and
+   lwIP's Nagle holds the second one back until the server has acknowledged
+   the first - a delayed ACK on the server's side, 40 ms or more on every
+   poll. The client does not hand out its socket, so every TCP socket of
+   ours gets TCP_NODELAY (listening ones refuse it, which does no harm). */
+static void noDelay() {
+  for (int fd = LWIP_SOCKET_OFFSET; fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS; fd++) {
+    int t = 0;
+    socklen_t l = sizeof(t);
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &t, &l) == 0 && t == SOCK_STREAM) {
+      int one = 1;
+      setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    }
+  }
+}
+
 // sends the request (with a JSON body if one is given) and reads the answer's
 // headers; one more try on a fresh connection (the old one may have been closed)
 static bool openReq(const char *path, bool post, const char *body = NULL) {
@@ -83,8 +101,9 @@ static bool openReq(const char *path, bool post, const char *body = NULL) {
     int bl = body ? (int)strlen(body) : 0;
     if (bl) esp_http_client_set_header(cli, "Content-Type", "application/json");
     else esp_http_client_delete_header(cli, "Content-Type");
-    if (esp_http_client_open(cli, bl) == ESP_OK && (!bl || esp_http_client_write(cli, body, bl) == bl) &&
-        esp_http_client_fetch_headers(cli) >= 0) {
+    bool up = esp_http_client_open(cli, bl) == ESP_OK;
+    if (up && bl) noDelay();                      // before the body goes out
+    if (up && (!bl || esp_http_client_write(cli, body, bl) == bl) && esp_http_client_fetch_headers(cli) >= 0) {
       static bool once = false;
       if (!once) { once = true; heapNote("connected"); }
       return true;
@@ -222,10 +241,16 @@ bool tvNetStart(const char *b, const char *tok) {
   gen = 0; have = -1; total = 0;
   running = true; alive = true;
   if (xTaskCreate(taskFn, "tv", TV_TASK_STACK, NULL, 5, &task) != pdPASS) { running = false; alive = false; return false; }
+  /* The radio stays awake while the connection is in use: in the default
+     power saving it sleeps between the router's beacons, and every answer
+     waits there for the next one - 100 to 300 ms on each request, too slow
+     for a real-time game over the internet (and for the TV stream). */
+  esp_wifi_set_ps(WIFI_PS_NONE);
   return true;
 }
 
 void tvNetStop() {
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);           // back to power saving
   running = false;
   streamOn = false;
   if (task) xTaskNotifyGive(task);
