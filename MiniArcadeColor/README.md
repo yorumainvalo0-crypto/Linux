@@ -478,6 +478,29 @@ connection lost in a game (after 10 s without the server: back to the
 lobby), the other one gone (the server notices after 12 s). Server side:
 `../MiniArcadeServer`, "Mehrspieler übers Internet".
 
+## Chat
+
+"Chat" in the game list writes with the other consoles of the same server
+(the TV's, the same token as internet play - no PIN needed). The first time
+a chat name is chosen: 3 to 12 letters, digits, `-` and `_`; nobody else can
+take it (upper and lower case count as the same) and a console has exactly
+one (the server ties it to the console's token and to a hash of its MAC; a
+board flashed with "erase" gets its old name back, the old account and its
+messages go). OK on "my name" changes it.
+
+- **Chats:** the people you wrote with, newest first, with the unread ones
+  (orange) and who is online (green). The first row finds everybody with a
+  name, alphabetical, with a search by the start of a name.
+- **A conversation:** your messages right (green), the other one's left,
+  the newest at the bottom; UP scrolls back (older ones are fetched from the
+  server), OK writes (up to 120 bytes; the keyboard has capitals with
+  "Aa", ä ö ü ß and punctuation), RIGHT blocks or unblocks. A blocked name
+  can't write to you and you can't write to it. New messages come every few
+  seconds and beep.
+- **The history stays on the server** (30 days, `CHAT_KEEP_DAYS`), at most
+  500 messages per two people; the console keeps only the open conversation
+  in memory.
+
 ## TV
 
 "TV" in the game list plays YouTube through your own **MiniArcade server**

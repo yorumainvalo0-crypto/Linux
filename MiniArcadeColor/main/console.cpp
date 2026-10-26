@@ -116,6 +116,7 @@ static const char *const IC_SETTINGS[12] = {
 #include "multiplayer.h"           // online play: uses the games above and the icons
 #include "tv.h"                    // YouTube through the own server
 #include "inet.h"                  // online play over the internet: the TV's server and pairing
+#include "chat.h"                  // chat with the other consoles through the same server
 #include "kart_online.h"           // Kart GP online: a race of two
 
 static const Game GAMES[] = {
@@ -162,6 +163,7 @@ static const Game GAMES[] = {
   { "Chess",       "CHS", chessRun,       IC_CHESS,       C::BROWN,         "2P" },
   { "SD games",    "SDG", sdGamesRun,     IC_SDGAMES,     C::CYAN,          "sd" },
   { "Online",      "ONL", onlineRun,      IC_ONLINE,      MP_ACCENT,        "nearby" },
+  { "Chat",        "CHT", chatRun,        IC_CHAT,        CH_ACCENT,        "chat" },
   { "TV",          "TVY", tvRun,          IC_TV,          TV_ACCENT,        "YouTube" },
   { "Settings", "SET", settingsRun, IC_SETTINGS, C::GREY,   "setup" },
 };
@@ -183,6 +185,7 @@ static const char *gameTag(const Game &g) {
   if (!strcmp(g.tag, "nearby")) return TR("nearby/web", "nah/Netz");   // the radio or the own server
   if (!strcmp(g.tag, "setup"))  return TR("setup", "einrichten");
   if (!strcmp(g.tag, "sd"))     return TR("SD card", "SD-Karte");
+  if (!strcmp(g.tag, "chat"))   return TR("messages", "Nachrichten");
   return g.tag;
 }
 

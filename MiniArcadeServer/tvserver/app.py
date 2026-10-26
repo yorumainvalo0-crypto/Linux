@@ -1,6 +1,6 @@
 """The web server: the consoles' API (token in the header X-Token), the phone
-page (password, then a signed cookie), the stream and the relay for internet
-multiplayer (net.py)."""
+page (password, then a signed cookie), the stream, the relay for internet
+multiplayer (net.py) and the chat (chat.py)."""
 import asyncio
 import hashlib
 import hmac
@@ -17,6 +17,7 @@ import numpy as np
 from aiohttp import web
 
 from . import codec, palette, youtube
+from .chat import Chat
 from .egress import Blocked, Egress
 from .net import Relay
 from .store import Store
@@ -46,6 +47,7 @@ class Config:
         self.cache_s = int(float(e.get('CACHE_MINUTES', '10')) * 60)
         self.thumb_mb = float(e.get('THUMB_CACHE_MB', '50'))
         self.update_h = float(e.get('YTDLP_UPDATE_HOURS', '24'))
+        self.chat_days = max(1, int(float(e.get('CHAT_KEEP_DAYS', '30'))))   # chat history kept this long
         # the reverse proxies whose X-Forwarded-For / X-Real-IP count (IPs or networks)
         self.trusted = []
         for part in e.get('TRUSTED_PROXIES', '').replace(';', ',').split(','):
@@ -117,6 +119,13 @@ class Server:
         self.limits = Limits()
         self.net = Relay(self.store)
         self.net.msg_ok = lambda cid, n: self.limits.ok(('nm', cid), 40, 80, n)
+        self.chat = Chat(str(Path(cfg.data) / 'chat.db'), keep_days=cfg.chat_days)
+        for cid in [c for (c,) in self.chat.db.execute('SELECT cid FROM users')]:
+            if not self.store.console(cid):            # removed while the server was off
+                self.chat.remove(cid)
+        self.store.on_remove = self.chat.remove
+        self.chat.also_online = self.net.online
+        self.chat_swept = time.monotonic()
         self.fails = {}                    # ip or console code -> [failures, locked until]
         self.thumb_writes = 0
         self.pin = cfg.pin
@@ -610,6 +619,94 @@ class Server:
         return self.j({'ok': 1, 'c': self.store.friend_code(other), 'n': self.net.name_of(other),
                        'o': 1 if self.net.online(other) else 0})
 
+    # ---------------- chat (chat.py) ----------------
+    @staticmethod
+    def ju(data, status=200):
+        """JSON with the German letters as they are (the consoles show UTF-8, not \\u escapes)."""
+        return web.json_response(data, status=status,
+                                 dumps=lambda d: json.dumps(d, separators=(',', ':'), ensure_ascii=False))
+
+    def chat_me(self, req):
+        """The console and that it has a chat name (else 409 noname)."""
+        cid = self.console(req, net=True)
+        self.chat.touch(cid)
+        if not self.chat.name_of(cid):
+            raise web.HTTPConflict(text='noname')
+        return cid
+
+    def chat_other(self, cid, d):
+        other = self.chat.cid_of(str(d.get('n', '')))
+        if not other or other == cid:
+            raise web.HTTPNotFound(text='no such name')
+        return other
+
+    async def c_me(self, req):
+        cid = self.console(req, net=True)
+        self.chat.touch(cid)
+        n = self.chat.name_of(cid)
+        return self.ju({'n': n, 'u': self.chat.unread(cid) if n else 0})
+
+    async def c_name(self, req):
+        cid = self.console(req, net=True)
+        d = await self.body(req)
+        if not self.limits.ok(('cn', cid), 0.05, 5):
+            raise web.HTTPTooManyRequests(text='slow down')
+        try:
+            n = self.chat.set_name(cid, str(d.get('n', '')), str(d.get('dev', '')))
+        except ValueError as e:
+            return self.ju({'why': str(e)}, status=409)
+        log.info('chat: console %s is %s', cid, n)
+        return self.ju({'n': n})
+
+    async def c_chats(self, req):
+        cid = self.chat_me(req)
+        return self.ju({'u': self.chat.unread(cid), 'c': self.chat.chats(cid)})   # 'u' first: the console reads the first one
+
+    async def c_people(self, req):
+        cid = self.chat_me(req)
+        d = await self.body(req)
+        try:
+            off = int(d.get('off', 0) or 0)
+        except (TypeError, ValueError):
+            off = 0
+        p, more = self.chat.people(cid, str(d.get('q', ''))[:12], off)
+        return self.ju({'p': p, 'more': 1 if more else 0})
+
+    async def c_msgs(self, req):
+        cid = self.chat_me(req)
+        d = await self.body(req)
+        other = self.chat_other(cid, d)
+        try:
+            before, after = int(d.get('before', 0) or 0), int(d.get('after', 0) or 0)
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text='number')
+        m, more = self.chat.messages(cid, other, before, after)
+        return self.ju({'n': self.chat.name_of(other), 'o': 1 if self.chat.online(other) else 0,
+                        'b': 1 if self.chat.blocked(cid, other) else 0, 'more': 1 if more else 0, 'm': m})
+
+    async def c_send(self, req):
+        cid = self.chat_me(req)
+        d = await self.body(req)
+        if not self.limits.ok(('cs', cid), 1, 10):
+            raise web.HTTPTooManyRequests(text='slow down')
+        other = self.chat_other(cid, d)
+        try:
+            mid = self.chat.send(cid, other, str(d.get('x', '')))
+        except ValueError as e:
+            return self.ju({'why': str(e)}, status=409)
+        if time.monotonic() - self.chat_swept > 3600:      # old messages go now and then
+            self.chat_swept = time.monotonic()
+            self.chat.sweep()
+        return self.ju({'i': mid})
+
+    async def c_block(self, req):
+        cid = self.chat_me(req)
+        d = await self.body(req)
+        other = self.chat_other(cid, d)
+        on = str(d.get('on', '1')) == '1'
+        self.chat.block(cid, other, on)
+        return self.ju({'ok': 1, 'b': 1 if on else 0})
+
     # ---------------- phone page ----------------
     async def index(self, req):
         html = (WEB / 'index.html').read_text(encoding='utf-8').replace('{{BASE}}', self.cfg.base)
@@ -742,6 +839,13 @@ class Server:
         r.add_post('/api/net/answer', self.n_answer)
         r.add_post('/api/net/leave', self.n_leave)
         r.add_post('/api/net/friend', self.n_friend)
+        r.add_post('/api/chat/me', self.c_me)
+        r.add_post('/api/chat/name', self.c_name)
+        r.add_post('/api/chat/list', self.c_chats)
+        r.add_post('/api/chat/people', self.c_people)
+        r.add_post('/api/chat/msgs', self.c_msgs)
+        r.add_post('/api/chat/send', self.c_send)
+        r.add_post('/api/chat/block', self.c_block)
         r.add_post('/api/web/login', self.login)
         r.add_post('/api/web/logout', self.logout)
         r.add_get('/api/web/me', self.w_me)

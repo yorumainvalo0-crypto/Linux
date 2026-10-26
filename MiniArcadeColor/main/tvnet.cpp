@@ -332,6 +332,20 @@ const char *tvConsoleCode() {
   return code;
 }
 
+// a hash of the MAC (FNV-1a, 64 bits), so the server never sees the MAC itself
+const char *tvDeviceId() {
+  static char id[17];
+  if (!id[0]) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    uint64_t h = 14695981039346656037ull;
+    for (const char *s = "MiniArcade chat "; *s; s++) { h ^= (uint8_t)*s; h *= 1099511628211ull; }
+    for (uint8_t i = 0; i < 6; i++) { h ^= mac[i]; h *= 1099511628211ull; }
+    snprintf(id, sizeof(id), "%016llx", (unsigned long long)h);
+  }
+  return id;
+}
+
 uint32_t tvFreeHeap(uint32_t *lowest) {
   if (lowest) *lowest = esp_get_minimum_free_heap_size();
   return esp_get_free_heap_size();
