@@ -96,13 +96,13 @@ static void tvQDrop() {
 }
 
 // runs one request and waits, the screen stays; NULL = failed (*st = HTTP status,
-// 0 = no connection) or left with hold OK (*st = -1)
-static const char *tvAsk(const char *path, bool post = false, int *st = NULL) {
+// 0 = no connection) or left with hold OK (*st = -1); json: POSTed as the body
+static const char *tvAsk(const char *path, bool post = false, int *st = NULL, const char *json = NULL) {
   int dummy;
   if (!st) st = &dummy;
   *st = -1;
   tvQDrop();
-  if (!tvReq(path, post)) { *st = 0; return NULL; }
+  if (!tvReq(path, post, json)) { *st = 0; return NULL; }
   uint32_t t0 = millis();
   for (;;) {
     TvReqState s = tvReqState();

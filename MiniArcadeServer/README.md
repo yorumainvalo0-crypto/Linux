@@ -45,6 +45,7 @@ yt-dlp aktualisiert sich selbst: bei jedem Containerstart und danach alle
 | `ADMIN_PASSWORD` | – (Pflicht) | Passwort der Handy-Seite. Ohne startet der Server nicht. |
 | `CONSOLE_PIN` | wird erzeugt | PIN, mit der sich **jede** Konsole einmal koppelt (4–10 Ziffern, besser 8). Fehlt sie, erzeugt der Server eine 8-stellige, speichert sie im Volume und schreibt sie ins Log (`docker compose logs \| grep PIN`). Sie steht auch auf der Handy-Seite. |
 | `NET_OPEN` | 1 | Mehrspieler übers Internet **ohne PIN**: jede Konsole holt sich selbst einen Token, der nur für `/api/net/*` gilt (siehe „Mehrspieler übers Internet“). `0` = nur gekoppelte Konsolen (PIN) spielen online; bereits ausgegebene Nur-Mehrspieler-Tokens gelten dann nicht mehr. Das TV braucht immer die PIN. |
+| `CHAT_KEEP_DAYS` | 30 | So viele Tage bleiben Chat-Nachrichten gespeichert (siehe „Chat“). |
 | `PORT` | 8080 | Port im Container. |
 | `HOST_PORT`, `BIND_IP` | 8080, 127.0.0.1 | Wo Docker den Port auf dem Host anbietet. `BIND_IP=0.0.0.0` nur, wenn der Proxy auf einer anderen Maschine läuft. |
 | `BASE_PATH` | leer | Unterpfad, z. B. `/tv`, wenn der Proxy den Server unter `https://example.de/tv` anbietet. |
@@ -341,6 +342,42 @@ HTTPS-Anfragen auf der vorhandenen Keep-Alive-Verbindung, gehalten höchstens
 (Token), nicht pro Adresse; `TRUSTED_PROXIES` braucht es für die PIN-Sperre
 beim Koppeln und für die Grenze neuer Konsolen ohne PIN (`/api/net/hello`).
 
+## Chat
+
+Die Konsolen schreiben sich über diesen Server Nachrichten („Chat“ in der
+Spieleliste). Es gilt derselbe Token wie für den Mehrspieler-Teil (auch
+der ohne PIN).
+
+- **Ein Name pro Konsole:** 3–12 Zeichen aus Buchstaben, Ziffern, `-` und
+  `_`, eindeutig (Groß-/Kleinschreibung zählt gleich). Der Name hängt am
+  Token der Konsole und an einer Geräte-ID (Hash der MAC, die MAC selbst
+  sieht der Server nicht). Kommt dasselbe Gerät mit neuem Token wieder
+  (z. B. nach „Erase Flash“), wird das alte Konto mit seinen Nachrichten
+  gelöscht – nie übergeben, eine kopierte Geräte-ID liest also nichts mit.
+  Wird eine Konsole auf der Handy-Seite entfernt, verschwindet auch ihr
+  Chat-Konto.
+- **Verlauf auf dem Server:** `chat.db` (SQLite) im Volume, Nachrichten
+  `CHAT_KEEP_DAYS` Tage (Standard 30), höchstens 500 pro zwei Personen.
+  Gespeichert werden nur ASCII und ä ö ü Ä Ö Ü ß, höchstens 120 Byte pro
+  Nachricht.
+- **Blockieren:** Ein blockierter Name kann einem nichts mehr schicken (und
+  man ihm auch nicht); seine Nachrichten zählen nicht als ungelesen.
+- **Grenzen pro Konsole:** 1 Nachricht pro Sekunde (10 auf einmal), Namen
+  ändern selten (5 auf einmal, dann alle 20 s).
+
+| Anfrage (POST, JSON, mit `X-Token`) | Zweck |
+|---|---|
+| `/api/chat/me` | eigener Name `n` (leer = noch keiner) und `u` ungelesene |
+| `/api/chat/name` `{n, dev}` | Namen nehmen oder ändern; 409 `taken` / `bad` |
+| `/api/chat/list` | die Chats, neuester zuerst: `n`, `u` ungelesen, `o` online, `b` blockiert, `m` Minuten seit der letzten Nachricht |
+| `/api/chat/people` `{q, off}` | alle mit Namen, alphabetisch ab `q`, je 20 (`more`) |
+| `/api/chat/msgs` `{n, before, after}` | bis 20 Nachrichten mit `n` (`i` id, `m` 1 = eigene, `a` Minuten alt, `x` Text), markiert sie als gelesen |
+| `/api/chat/send` `{n, x}` | senden; 409 `blocked` / `empty`, 429 zu schnell |
+| `/api/chat/block` `{n, on}` | blockieren / freigeben |
+
+Ohne Chat-Namen antworten list, people, msgs, send und block mit 409
+`noname`; ein unbekannter Name gibt 404.
+
 ## Tests (Entwicklung)
 
 ```sh
@@ -352,4 +389,5 @@ python3 tests/make_golden.py            # nur nach Änderungen am Format
 Die Tests laden nichts von YouTube (yt-dlp wird durch `tests/fake_ytdlp.py`
 ersetzt). `tests/test_net.py` prüft den Mehrspieler-Teil (Anmeldung, `NET_OPEN` an/aus,
 Reichweite der Tokens, Grenze pro Adresse, Lobby, Freunde, Herausforderungen, Reihenfolge der Nachrichten, Zeitgrenzen und
-Begrenzungen) mit einer verstellbaren Uhr. `tests/golden.bin` prüft auch der Simulator der Konsole.
+Begrenzungen) mit einer verstellbaren Uhr; `tests/test_chat.py` den Chat (Namen, ein Konto
+pro Gerät, Verlauf, gelesen/ungelesen, Blockieren, Aufräumen). `tests/golden.bin` prüft auch der Simulator der Konsole.

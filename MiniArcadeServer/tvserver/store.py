@@ -27,6 +27,7 @@ class Store:
             with open(path, encoding='utf-8') as f:
                 self.data = json.load(f)
         self.data.setdefault('consoles', {})
+        self.on_remove = lambda cid: None          # the chat forgets the console too (set by the app)
 
     def save(self):
         if not self.path:
@@ -90,6 +91,7 @@ class Store:
                 if cid in c.get('friends', []):
                     c['friends'].remove(cid)
             self.save()
+            self.on_remove(cid)
             return True
         return False
 

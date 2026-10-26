@@ -47,5 +47,6 @@ void        tvStreamReset();                                   // after a loss: 
 uint32_t    tvStreamBytes();                                   // received so far
 
 const char *tvConsoleCode();                                   // 4 characters, as in the lobby
+const char *tvDeviceId();                                      // 16 hex characters from the chip's MAC (the chat: one name per device)
 uint32_t    tvFreeHeap(uint32_t *lowest);                      // bytes free now (and the lowest seen)
 uint32_t    tvLargestBlock();                                  // the biggest piece that can be allocated

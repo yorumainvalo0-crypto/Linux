@@ -3,7 +3,8 @@
 // golden frames of the server's tests (MiniArcadeServer/tests/golden.bin) as
 // a video in time with the simulated clock: the fluent frames over and over,
 // or the sharp ones, with an info record every half second like the server.
-// Internet play (/api/net/...) goes to the pretend relay of inetsrv.h.
+// Internet play (/api/net/...) goes to the pretend relay of inetsrv.h, the
+// chat (/api/chat/...) to chatsim.h.
 #pragma once
 #include "../main/tvnet.h"
 #include "gfx.h"
@@ -13,6 +14,7 @@
 #include <vector>
 #include <deque>
 #include "inetsrv.h"
+#include "chatsim.h"
 
 static std::vector<std::string> simTvLog;               // every path asked for
 static std::vector<std::string> simTvFluent, simTvSharp; // frame payloads of golden.bin
@@ -146,6 +148,11 @@ bool tvReq(const char *path, bool post, const char *json) {
   simTvReqAt = simTvMs() + 40;
   simTvStatus = 200;
   bool paired = !strcmp(simTvToken, "TOKEN-1234567890-abcdefghijklmnop");
+  if (p.compare(0, 10, "/api/chat/") == 0) {            // the chat: the TV's token or internet play's
+    if (paired || !strcmp(simTvToken, SIM_NET_TOK)) simTvStatus = simChat(p, json ? json : "", simTvResp, simTvMs());
+    else { simTvStatus = 401; simTvResp = "not paired"; }
+    return true;
+  }
   if (p == "/api/ping") simTvResp = "{\"ok\":1,\"name\":\"MiniArcade\"}";
   else if (p.compare(0, 9, "/api/pair") == 0) {                 // the server's PIN is 120000
     if (p.find("&pin=120000&") != std::string::npos) simTvResp = "{\"token\":\"TOKEN-1234567890-abcdefghijklmnop\",\"id\":\"c1\"}";
@@ -207,5 +214,6 @@ uint16_t tvStreamBroken() { return simTvBroken; }
 void tvStreamReset() { simTvRing.clear(); }
 uint32_t tvStreamBytes() { return simTvBytes; }
 const char *tvConsoleCode() { return "QX7K"; }
+const char *tvDeviceId() { return "00112233aabbccdd"; }
 uint32_t tvFreeHeap(uint32_t *lowest) { if (lowest) *lowest = 61 * 1024; return 74 * 1024; }
 uint32_t tvLargestBlock() { return 40 * 1024; }

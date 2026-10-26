@@ -1383,6 +1383,169 @@ static void inetScenario(const char *steps, uint32_t t) {
   if (getenv("SIM_NETJIT")) simNetJit = (uint32_t)atoi(getenv("SIM_NETJIT"));
 }
 
+// ---------------- the chat (chat.h) on the pretend server (chatsim.h) ----------------
+/* The plan, one step after the other: "name:X" the name typed (the first
+   time, again after "taken"), "people" the people, "pick:X" a row there,
+   "write:X" a message typed and sent, "see:X" wait until X is on the
+   screen, "block" / "unblock" RIGHT and yes, "okblocked" OK while blocked
+   (a note), "ben" Ben writes now: wait for his unread row and open it,
+   "back" hold OK, "shot" a picture, "quit" hold OK in the list.        */
+static std::vector<std::string> chPlan;
+static size_t   chPlanI = 0;
+static uint32_t chWait = 0, chNoteT = 0, chStepT = 0;
+static std::string chTyping;                                     // what the keyboard should end up with
+static bool     chBenSent = false;
+
+// one key toward chTyping; true = the last key (done / send) was pressed
+static bool chKbStep(uint32_t t) {
+  std::string cur = chKbText ? chKbText : "";
+  uint8_t ty = 5, tx = 3;
+  if (cur != chTyping) {
+    if (chTyping.compare(0, cur.size(), cur) != 0) tx = 2;      // delete
+    else {
+      size_t i = cur.size();
+      uint8_t l = chLen(chTyping.c_str() + i);
+      std::string c = chTyping.substr(i, l);
+      if (c == " ") tx = 1;
+      else {
+        bool found = false, up = chKbUp;
+        for (int pass = 0; pass < 2 && !found; pass++) {
+          bool u = pass ? !chKbUp : chKbUp;
+          for (uint8_t r = 0; r < 5 && !found; r++) {
+            const char *k = (u ? CH_KB_UP : CH_KB)[r];
+            for (uint8_t x = 0; x < 10 && !found; x++) {
+              uint8_t kl = chLen(k);
+              if (std::string(k, kl) == c) { found = true; ty = r; tx = x; up = u; }
+              k += kl;
+            }
+          }
+        }
+        if (!found) { printf("      the keyboard has no %s\n", c.c_str()); chTyping = cur; return false; }
+        if (up != chKbUp) { ty = 5; tx = 0; }
+      }
+    }
+  }
+  if (chKbY != ty) { int d = (ty - chKbY + 6) % 6; botPress(t, d <= 3 ? DN : UP, 40); return false; }
+  uint8_t w = ty == 5 ? 4 : 10;
+  if (chKbX != tx) { int d = (tx - chKbX + w) % w; botPress(t, d <= w / 2 ? RT : LT, 40); return false; }
+  botPress(t, OK, 60);
+  return ty == 5 && tx == 3;
+}
+
+static void chatDriver(uint32_t t) {
+  if (chPlanI >= chPlan.size()) {
+    if (pollHook == NULL && chWhere == CW_NONE && (!simEnd || simEnd > t + 800)) simEnd = t + 800;
+    return;
+  }
+  if (botBusy(t) || t < chWait) return;
+  if (mpNoting) {                                               // a note: read, then OK
+    if (!chNoteT) chNoteT = t;
+    if (t > chNoteT + 600) { botPress(t, OK, 80); chNoteT = 0; chWait = t + 300; }
+    return;
+  }
+  chNoteT = 0;
+  const std::string &st = chPlan[chPlanI];
+  size_t c = st.find(':');
+  std::string cmd = st.substr(0, c), arg = c == std::string::npos ? "" : st.substr(c + 1);
+  auto next = [&](uint32_t wait) { chPlanI++; chWait = t + wait; chStepT = t; };
+  if (cmd == "name" || cmd == "write") {
+    if (chWhere == CW_NAME) { if (!chStepT) captureMs.push_back(t); chStepT = t; botPress(t, OK, 80); return; }
+    if (chWhere == CW_TALK && cmd == "write") { chTyping = arg; botPress(t, OK, 80); chWait = t + 300; return; }
+    if (chWhere == CW_KEYS) {
+      chTyping = arg;
+      static bool half = false;                                 // a picture half typed
+      if (!half && cmd == "write" && chKbText && strlen(chKbText) == 10) { half = true; captureMs.push_back(t); }
+      if (chKbStep(t)) next(500);
+    }
+    return;
+  }
+  if (cmd == "see") { if (seen(arg.c_str())) next(800); return; }
+  if (cmd == "shot") { captureMs.push_back(t); next(200); return; }
+  if (cmd == "people") {
+    if (chWhere != CW_LIST) return;
+    if (chListSel) { botPress(t, UP, 40); return; }
+    botPress(t, OK, 80); next(600);
+    return;
+  }
+  if (cmd == "pick" || cmd == "ben") {
+    int want = -1;
+    if (cmd == "ben") {
+      if (!chBenSent) { chBenSent = true; csBenAt = simTvMs() + 300; }   // Ben writes now
+      if (chWhere != CW_LIST || !chS) return;
+      for (uint8_t i = 0; i < chS->nRows; i++) if (!strcmp(chS->rows[i].n, "Ben") && chS->rows[i].unread) want = i + 1;
+      if (want < 0) return;
+      if (chListSel != want) { botPress(t, chListSel < want ? DN : UP, 40); return; }
+    } else {
+      if (chWhere != CW_PEOPLE || !chS) return;
+      for (uint8_t i = 0; i < chS->nRows; i++) if (arg == chS->rows[i].n) want = i + 1;
+      if (want < 0) return;
+      if (chPeopleSel != want) { botPress(t, chPeopleSel < want ? DN : UP, 40); return; }
+    }
+    captureMs.push_back(t);
+    botPress(t, OK, 80); next(800);
+    return;
+  }
+  if (cmd == "block" || cmd == "unblock") {
+    if (chWhere == CW_ASK) { captureMs.push_back(t); botPress(t, OK, 80); next(800); return; }
+    if (chWhere == CW_TALK) { botPress(t, RT, 60); chWait = t + 400; }
+    return;
+  }
+  if (cmd == "set") {                                          // the pretend server changes
+    if (arg == "nobody") csNobody = true;
+    else if (arg == "somebody") csNobody = false;
+    else if (arg == "slow") csSlow = true;
+    else if (arg == "fast") csSlow = false;
+    else if (arg == "down") simTvDown = true;
+    else if (arg == "up") simTvDown = false;
+    next(100);
+    return;
+  }
+  if (cmd == "page" || cmd == "pageback") {                     // the people: on by a page, or back
+    if (chWhere != CW_PEOPLE || !chS) return;
+    int want = cmd == "pageback" ? 1 : 1 + (chPeopleOff ? 1 : 0) + chS->nRows;
+    if (chPeopleSel != want) { botPress(t, chPeopleSel < want ? DN : UP, 40); return; }
+    captureMs.push_back(t);
+    botPress(t, OK, 80); next(800);
+    return;
+  }
+  if (cmd == "up") {                                            // UP so often in a conversation
+    if (chWhere != CW_TALK) return;
+    static int left = -1;
+    if (left < 0) left = atoi(arg.c_str());
+    if (left-- > 0) { botPress(t, UP, 40); chWait = t + 150; return; }
+    left = -1;
+    next(300);
+    return;
+  }
+  if (cmd == "gone") {                                          // a chat in the list opened, its name deleted just then
+    if (chWhere != CW_LIST || !chS) return;
+    int want = -1;
+    for (uint8_t i = 0; i < chS->nRows; i++) if (arg == chS->rows[i].n) want = i + 1;
+    if (want < 0) return;
+    if (chListSel != want) { botPress(t, chListSel < want ? DN : UP, 40); return; }
+    csName.erase(csCidOf(arg));
+    botPress(t, OK, 80); next(800);
+    return;
+  }
+  if (cmd == "okblocked") { if (chWhere == CW_TALK) { botPress(t, OK, 80); next(300); } return; }
+  if (cmd == "back" || cmd == "quit") {
+    if (chWhere == CW_KEYS || chWhere == CW_ASK) return;
+    if (cmd == "quit" && chWhere != CW_LIST) return;
+    if (cmd == "quit") captureMs.push_back(t);
+    botPress(t + 20, OK, 1100); next(1500);
+    return;
+  }
+  next(0);
+}
+
+static void chatScenario(uint32_t t, const std::vector<std::string> &plan) {
+  csSetup();
+  chPlan = plan; chPlanI = 0; chBenSent = false;
+  simBot = chatDriver; botFrom = t;
+  simNvsBlob["url"] = std::string("https://arcade.example.de") + '\0';
+  simNvsBlob["tok"] = std::string(SIM_ME_TOK) + '\0';
+}
+
 /* The chess moves on the protocol: two consoles (LinkCore) on a radio that
    loses a third of the packets; a random game, each move as its two
    bytes. Every move must arrive whole and in order: the boards stay equal. */
@@ -4725,6 +4888,29 @@ int main(int argc, char **argv) {
     simNetNoRb = scenario == "inetponglock";
     inetScenario("Ic3q", t);
     captureMs = { t + 9000 };
+  } else if (scenario == "chat") {
+    // the chat the first time: a name (Anna's is taken), the people, Anna written to with
+    // capitals and German letters (she answers), blocked, OK refused, unblocked, back; Ben
+    // writes meanwhile: the list says so, his chat opened, back to the games
+    uint32_t t = openGameNamed("Chat", M); simEnd = t + 600000;
+    chatScenario(t, { "name:ab", "name:anna", "name:Max", "people", "pick:Anna", "write:Hi Anna, schön!", "see:Hallo Max! Wie geht's?",
+                      "shot", "block", "okblocked", "unblock", "back", "ben", "see:Grüße aus Köln!", "shot", "back", "quit" });
+  } else if (scenario == "chatmore") {
+    // the chat with a name already: nobody else there, then 25 more people (on by a page and back),
+    // a long conversation with Anna scrolled up (the older ones loaded), Anna blocked us, too fast,
+    // the server away while sending, Ben's name deleted just as his chat is opened
+    uint32_t t = openGameNamed("Chat", M); simEnd = t + 600000;
+    chatScenario(t, { "set:nobody", "people", "back", "set:somebody", "people", "page", "pageback", "pick:Anna", "up:24", "shot",
+                      "write:hallo?", "set:slow", "write:noch da?", "set:fast", "set:down", "write:test", "set:up", "back",
+                      "gone:Ben", "quit" });
+    csName["me"] = "Max";
+    for (int i = 1; i <= 25; i++) { char c[8], n[12]; snprintf(c, sizeof(c), "u%02d", i); snprintf(n, sizeof(n), "User%02d", i); csName[c] = n; }
+    for (int i = 0; i < 25; i++) csMsgs.push_back({ csNextId++, i % 2 ? "anna" : "me", i % 2 ? "me" : "anna",
+                                                   "old message " + std::to_string(i + 1), 0 });
+    csMsgs.push_back({ csNextId++, "ben", "me", "Hi Max", 0 });
+    csRead[{ "me", "anna" }] = csNextId;
+    csRead[{ "me", "ben" }] = csNextId;
+    csBlock.insert({ "anna", "me" });                           // Anna blocked us
   } else if (scenario == "inetfriend") {
     // internet, no token yet: one without the PIN, then the own code, BOB added by his code
     // (offline), a code nobody has, the own one, ANNA a friend with RIGHT, back
@@ -5038,6 +5224,38 @@ int main(int argc, char **argv) {
       check("lockstep (a server of before): a longer input delay, from the round trips", !inRb && simNetLead >= 10 && simNetLead <= 18);
     }
     check("smooth: nearly full speed, hardly ever waiting", tps > 44 && inStalled * 20 < inFrames);
+  }
+  if (scenario == "chat") {
+    bool wrote = false, blk = false, unblk = false;
+    for (auto &m : csMsgs) wrote = wrote || (m.frm == "me" && m.to == "anna" && m.x == "Hi Anna, schön!");
+    for (auto &l : simChatLog) {
+      blk = blk || (l.find("/api/chat/block") == 0 && l.find("\"on\":1") != std::string::npos);
+      unblk = unblk || (l.find("/api/chat/block") == 0 && l.find("\"on\":0") != std::string::npos);
+    }
+    printf("      chat requests %zu, messages %zu, steps %zu/%zu\n", simChatLog.size(), csMsgs.size(), chPlanI, chPlan.size());
+    check("a chat name: Anna's is taken, then Max, tied to this device", seen("this name is taken") && seen("you are Max") &&
+          csName["me"] == "Max" && csDev["me"] == "00112233aabbccdd");
+    check("written to Anna with capitals and German letters, her answer shown", wrote && seen("Hallo Max! Wie geht's?"));
+    check("blocked (OK refused then) and unblocked on the server", blk && unblk && seen("you blocked this one") &&
+          !csBlock.count({ "me", "anna" }));
+    check("Ben wrote meanwhile: the list said so, his message read", seen("1 new") && seen("Grüße aus Köln!") && csUnread("me") == 0);
+    check("all steps done, back in the menu", chPlanI == chPlan.size() && pollHook == NULL && chWhere == CW_NONE && !chS);
+  }
+  if (scenario == "chatmore") {
+    bool older = false;
+    for (auto &l : simChatLog) older = older || l.find("\"before\":") != std::string::npos;
+    printf("      chat requests %zu, steps %zu/%zu\n", simChatLog.size(), chPlanI, chPlan.size());
+    check("nobody else: said so; then 25 more: on by a page and back", seen("nobody else has a name yet") && seen("more >>") &&
+          seen("<< back") && seen("User18"));
+    check("a long conversation scrolled up: the older ones loaded", older && seen("old message 1") && seen("DOWN = newer"));
+    check("not sent: blocked by Anna, too fast, the server away", seen("not sent: blocked") && seen("not so fast") &&
+          seen("not sent") && seen("server unreachable"));
+    check("nothing of it stored", csMsgs.size() == 26);
+    check("a name deleted just then: said so", seen("this name is gone"));
+    check("all steps done, back in the menu", chPlanI == chPlan.size() && pollHook == NULL && chWhere == CW_NONE && !chS);
+  }
+  if (scenario == "chat") {
+    check("a name too short refused", seen("3 to 12 letters or digits"));
   }
   if (scenario == "inetfriend" || scenario == "inetfirst") {
     check("no token: one without the PIN, saved for internet play only", seen("connecting to the server ...") &&
