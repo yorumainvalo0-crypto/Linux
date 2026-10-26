@@ -7,6 +7,10 @@
 #     repository's "latest" release (that one belongs to the OLED console),
 #   - the release "color-latest" always carries the newest files; the colour
 #     boards look for updates there (releases/download/color-latest/).
+# To be quick: the tests and both firmware builds run side by side, and a
+# push to main whose files were already built and tested on a branch (the
+# squash merge of a pull request gives the same tree) publishes that run's
+# files instead of building them again.
 name: MiniArcade Color firmware
 
 on:
@@ -28,22 +32,98 @@ permissions:
   contents: read
 
 jobs:
+  # main only: a successful branch run of the very same tree, whose files can be published as they are
+  reuse:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Look for a branch run of this tree
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          R="repos/$GITHUB_REPOSITORY"
+          gh api "$R/actions/workflows/miniarcade-color.yml/runs?status=success&per_page=30" \
+            --jq '.workflow_runs[] | select(.head_branch != "main") | "\(.id) \(.head_sha)"' > runs.txt || true
+          while read -r id sha; do
+            [ "$(gh api "$R/git/commits/$sha" --jq .tree.sha 2>/dev/null)" = "$TREE" ] || continue
+            n="$(gh api "$R/actions/runs/$id/artifacts" --jq '[.artifacts[] | select(.name == "miniarcade-color-firmware" and .expired == false)] | length')"
+            if [ "$n" = "1" ]; then echo "run_id=$id" >> "$GITHUB_OUTPUT"; echo "same tree as run $id: its files are used"; exit 0; fi
+          done < runs.txt
+          echo "no branch run of this tree: build here"
+
   host-tests:
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.run_id == '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run the colour scenarios on the PC
         run: sh MiniArcadeColor/test/build.sh
 
+  # both displays at the same time, beside the tests
   firmware:
-    needs: host-tests
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.run_id == '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: ili9341
+            dir: build-c3
+            defaults: sdkconfig.defaults
+            file: miniarcade-color-c3
+          - name: st7789
+            dir: build-c3st
+            defaults: sdkconfig.defaults;sdkconfig.st7789
+            file: miniarcade-color-c3-st7789
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update source and version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          echo "CONFIG_ARCADE_GITHUB_REPO=\"$GITHUB_REPOSITORY\"" >> MiniArcadeColor/sdkconfig.defaults
+          if [ -n "$INPUT_VERSION" ]; then echo "${INPUT_VERSION#v}" > MiniArcadeColor/version.txt; fi   # a version by hand: the firmware says it too
+      - name: Build for the ESP32-C3 (${{ matrix.name }})
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32c3
+          path: MiniArcadeColor
+          command: >-
+            idf.py -B ${{ matrix.dir }} -DSDKCONFIG=${{ matrix.dir }}/sdkconfig -DSDKCONFIG_DEFAULTS="${{ matrix.defaults }}" build &&
+            idf.py -B ${{ matrix.dir }} -DSDKCONFIG=${{ matrix.dir }}/sdkconfig -DSDKCONFIG_DEFAULTS="${{ matrix.defaults }}" merge-bin -o full.bin
+      - name: Collect the files
+        run: |
+          mkdir out
+          cp MiniArcadeColor/${{ matrix.dir }}/miniarcade-color.bin out/${{ matrix.file }}.bin
+          cp MiniArcadeColor/${{ matrix.dir }}/full.bin             out/${{ matrix.file }}-full.bin
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fw-${{ matrix.name }}
+          path: out/
+
+  # the files of both builds in one artifact; on main with a new version.txt also the release
+  publish:
+    needs: [reuse, host-tests, firmware]
+    if: ${{ !cancelled() && (needs.reuse.outputs.run_id != '' || (needs.host-tests.result == 'success' && needs.firmware.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Version and update source
+      - name: Version
         id: ver
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -68,43 +148,38 @@ jobs:
             echo "::error::version must look like 0.2, got '$VER'"; exit 1
           fi
           if [ -n "$VER" ]; then
-            echo "$VER" > MiniArcadeColor/version.txt
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "version=$VER" >> "$GITHUB_OUTPUT"
           fi
-          echo "CONFIG_ARCADE_GITHUB_REPO=\"$GITHUB_REPOSITORY\"" >> MiniArcadeColor/sdkconfig.defaults
-          echo "version: $(cat MiniArcadeColor/version.txt)"
+          echo "version: ${VER:-$(cat MiniArcadeColor/version.txt)}"
 
-      - name: Build for the ESP32-C3
-        uses: espressif/esp-idf-ci-action@v1
+      - name: The files of the branch run
+        if: needs.reuse.outputs.run_id != ''
+        uses: actions/download-artifact@v4
         with:
-          esp_idf_version: v5.3.2
-          target: esp32c3
-          path: MiniArcadeColor
-          command: >-
-            idf.py -B build-c3 -DSDKCONFIG=build-c3/sdkconfig build &&
-            idf.py -B build-c3 -DSDKCONFIG=build-c3/sdkconfig merge-bin -o full.bin
+          name: miniarcade-color-firmware
+          path: out
+          run-id: ${{ needs.reuse.outputs.run_id }}
+          github-token: ${{ github.token }}
 
-      - name: Build for the ESP32-C3 with the ST7789 display
-        uses: espressif/esp-idf-ci-action@v1
+      - name: The files of this run
+        if: needs.reuse.outputs.run_id == ''
+        uses: actions/download-artifact@v4
         with:
-          esp_idf_version: v5.3.2
-          target: esp32c3
-          path: MiniArcadeColor
-          command: >-
-            idf.py -B build-c3st -DSDKCONFIG=build-c3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" build &&
-            idf.py -B build-c3st -DSDKCONFIG=build-c3st/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.st7789" merge-bin -o full.bin
+          pattern: fw-*
+          path: out
+          merge-multiple: true
 
-      - name: Collect the files
+      - name: Version file
+        env:
+          V: ${{ steps.ver.outputs.version }}
         run: |
-          mkdir out
-          B=MiniArcadeColor
-          cp $B/build-c3/miniarcade-color.bin out/miniarcade-color-c3.bin
-          cp $B/build-c3/full.bin             out/miniarcade-color-c3-full.bin
-          cp $B/build-c3st/miniarcade-color.bin out/miniarcade-color-c3-st7789.bin
-          cp $B/build-c3st/full.bin             out/miniarcade-color-c3-st7789-full.bin
-          cp $B/version.txt out/
+          if [ -n "$V" ]; then echo "$V" > out/version.txt
+          elif [ ! -f out/version.txt ]; then cp MiniArcadeColor/version.txt out/; fi
           ls -l out
+          for f in miniarcade-color-c3.bin miniarcade-color-c3-full.bin miniarcade-color-c3-st7789.bin miniarcade-color-c3-st7789-full.bin version.txt; do
+            [ -s "out/$f" ] || { echo "::error::$f is missing"; exit 1; }
+          done
 
       - uses: actions/upload-artifact@v4
         with:
