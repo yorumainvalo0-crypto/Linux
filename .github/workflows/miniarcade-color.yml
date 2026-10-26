@@ -8,9 +8,11 @@
 #   - the release "color-latest" always carries the newest files; the colour
 #     boards look for updates there (releases/download/color-latest/).
 # To be quick: the tests and both firmware builds run side by side, and a
-# push to main whose files were already built and tested on a branch (the
-# squash merge of a pull request gives the same tree) publishes that run's
-# files instead of building them again.
+# push to main whose build inputs were already built and tested on a branch
+# (the squash merge of a pull request gives the same files) publishes that
+# run's files instead of building them again. Only the build inputs are
+# compared, so a bot commit elsewhere on main (e.g. ai-models.txt) does not
+# spoil the match.
 name: MiniArcade Color firmware
 
 on:
@@ -19,6 +21,7 @@ on:
     paths:
       - "MiniArcadeColor/**"
       - "MiniArcade/main/**"            # net, link, phone and fonts are shared
+      - "MiniArcade/test/**"            # the colour scenarios use the shared test bench
       - "MiniArcadeServer/tests/golden.*"   # the TV decoder test reads the server's frames
       - ".github/workflows/miniarcade-color.yml"
   workflow_dispatch:
@@ -43,21 +46,30 @@ jobs:
       run_id: ${{ steps.find.outputs.run_id }}
     steps:
       - uses: actions/checkout@v4
-      - name: Look for a branch run of this tree
+      - name: Look for a branch run with the same build inputs
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TREE="$(git rev-parse 'HEAD^{tree}')"
+          # the paths that go into the firmware and the tests (see "paths" above)
+          INPUTS="MiniArcadeColor MiniArcade/main MiniArcade/test MiniArcadeServer/tests .github/workflows/miniarcade-color.yml"
           R="repos/$GITHUB_REPOSITORY"
+          here() { for p in $INPUTS; do git rev-parse "HEAD:$p"; done; }
+          there() {
+            for p in $INPUTS; do
+              d="${p%/*}"; [ "$d" = "$p" ] && d=""
+              gh api "$R/contents${d:+/$d}?ref=$1" --jq ".[] | select(.path == \"$p\") | .sha" </dev/null 2>/dev/null || echo "-"
+            done
+          }
+          WANT="$(here)"
           gh api "$R/actions/workflows/miniarcade-color.yml/runs?status=success&per_page=30" \
             --jq '.workflow_runs[] | select(.head_branch != "main") | "\(.id) \(.head_sha)"' > runs.txt || true
           while read -r id sha; do
-            [ "$(gh api "$R/git/commits/$sha" --jq .tree.sha 2>/dev/null)" = "$TREE" ] || continue
+            [ "$(there "$sha")" = "$WANT" ] || continue
             n="$(gh api "$R/actions/runs/$id/artifacts" --jq '[.artifacts[] | select(.name == "miniarcade-color-firmware" and .expired == false)] | length')"
-            if [ "$n" = "1" ]; then echo "run_id=$id" >> "$GITHUB_OUTPUT"; echo "same tree as run $id: its files are used"; exit 0; fi
+            if [ "$n" = "1" ]; then echo "run_id=$id" >> "$GITHUB_OUTPUT"; echo "same build inputs as run $id: its files are used"; exit 0; fi
           done < runs.txt
-          echo "no branch run of this tree: build here"
+          echo "no branch run with these build inputs: build here"
 
   host-tests:
     needs: reuse
